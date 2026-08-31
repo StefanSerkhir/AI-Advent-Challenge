@@ -11,9 +11,10 @@ data class CliArguments(
 fun parseCliArguments(
     args: Array<String>,
     defaultApiKey: String? = null,
+    defaultLlmKind: String? = null,
 ): CliArguments {
     var apiKey = defaultApiKey
-    var llmKind = LlmKind.DEEPSEEK
+    var llmKind = defaultLlmKind?.let(LlmKind::from) ?: LlmKind.DEEPSEEK
     val promptParts = mutableListOf<String>()
 
     var index = 0
