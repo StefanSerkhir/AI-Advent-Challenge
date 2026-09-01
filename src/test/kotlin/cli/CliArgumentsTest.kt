@@ -3,6 +3,7 @@ package org.example.cli
 import org.example.llm.LlmKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class CliArgumentsTest {
 
@@ -33,5 +34,22 @@ class CliArgumentsTest {
         )
 
         assertEquals(LlmKind.DEEPSEEK, arguments.llmKind)
+    }
+
+    @Test
+    fun `allows starting interactive mode without key or prompt`() {
+        val arguments = parseCliArguments(emptyArray())
+
+        assertNull(arguments.apiKey)
+        assertNull(arguments.prompt)
+    }
+
+    @Test
+    fun `uses positional arguments as initial prompt`() {
+        val arguments = parseCliArguments(
+            arrayOf("Объясни", "корутины"),
+        )
+
+        assertEquals("Объясни корутины", arguments.prompt)
     }
 }

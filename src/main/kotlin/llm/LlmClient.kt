@@ -2,10 +2,28 @@ package org.example.llm
 
 interface LlmClient {
     suspend fun complete(
-        prompt: String,
+        messages: List<LlmMessage>,
         options: CompletionOptions = CompletionOptions(),
     ): String
+
+    suspend fun complete(
+        prompt: String,
+        options: CompletionOptions = CompletionOptions(),
+    ): String = complete(
+        messages = listOf(LlmMessage(LlmRole.USER, prompt)),
+        options = options,
+    )
 }
+
+enum class LlmRole(val apiValue: String) {
+    USER("user"),
+    ASSISTANT("assistant"),
+}
+
+data class LlmMessage(
+    val role: LlmRole,
+    val content: String,
+)
 
 data class CompletionOptions(
     val maxTokens: Int? = null,

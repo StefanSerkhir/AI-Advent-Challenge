@@ -3,9 +3,10 @@ package org.example.cli
 import org.example.llm.LlmKind
 
 data class CliArguments(
-    val apiKey: String,
+    val apiKey: String?,
+    val apiKeyProvidedByCli: Boolean,
     val llmKind: LlmKind,
-    val prompt: String,
+    val prompt: String?,
 )
 
 fun parseCliArguments(
@@ -14,6 +15,7 @@ fun parseCliArguments(
     defaultLlmKind: String? = null,
 ): CliArguments {
     var apiKey = defaultApiKey
+    var apiKeyProvidedByCli = false
     var llmKind = defaultLlmKind?.let(LlmKind::from) ?: LlmKind.DEEPSEEK
     val promptParts = mutableListOf<String>()
 
@@ -25,12 +27,14 @@ fun parseCliArguments(
                 apiKey = args.getOrNull(++index)
                     ?.takeUnless { it.startsWith("--") }
                     ?: throw IllegalArgumentException("не задано значение --llm_api_key")
+                apiKeyProvidedByCli = true
             }
 
             argument.startsWith("--llm_api_key=") -> {
                 apiKey = argument.substringAfter("=").ifBlank {
                     throw IllegalArgumentException("не задано значение --llm_api_key")
                 }
+                apiKeyProvidedByCli = true
             }
 
             argument == "--llm_kind" -> {
@@ -54,12 +58,9 @@ fun parseCliArguments(
     }
 
     return CliArguments(
-        apiKey = apiKey ?: throw IllegalArgumentException(
-            "ключ LLM не найден: передайте --llm_api_key " +
-                "или заполните llm_api_key в .env",
-        ),
+        apiKey = apiKey,
+        apiKeyProvidedByCli = apiKeyProvidedByCli,
         llmKind = llmKind,
-        prompt = promptParts.joinToString(" ")
-            .ifBlank { "Объясни, как искусственный интеллект меняет образование." },
+        prompt = promptParts.joinToString(" ").ifBlank { null },
     )
 }

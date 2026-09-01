@@ -6,7 +6,7 @@ project_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 cd "$project_dir"
 
 if [ "$#" -eq 0 ]; then
-    exec ./gradlew run
+    exec ./gradlew --quiet --console=plain run
 fi
 
-exec ./gradlew run --args="$*"
+exec ./gradlew --quiet --console=plain run --args="$*"

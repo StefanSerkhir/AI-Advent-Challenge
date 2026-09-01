@@ -13,6 +13,7 @@ import io.ktor.http.isSuccess
 import org.example.llm.CompletionOptions
 import org.example.llm.LlmApiException
 import org.example.llm.LlmClient
+import org.example.llm.LlmMessage
 
 data class OpenAiCompatibleConfig(
     val chatCompletionsUrl: String,
@@ -28,7 +29,7 @@ class OpenAiCompatibleLlmClient(
 ) : LlmClient {
 
     override suspend fun complete(
-        prompt: String,
+        messages: List<LlmMessage>,
         options: CompletionOptions,
     ): String {
         val httpResponse = httpClient.post(config.chatCompletionsUrl) {
@@ -37,7 +38,9 @@ class OpenAiCompatibleLlmClient(
             setBody(
                 ChatCompletionRequest(
                     model = config.model,
-                    messages = listOf(ChatMessage("user", prompt)),
+                    messages = messages.map {
+                        ChatMessage(role = it.role.apiValue, content = it.content)
+                    },
                     maxTokens = options.maxTokens.takeUnless {
                         config.useMaxCompletionTokens
                     },
