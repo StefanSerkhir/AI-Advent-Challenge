@@ -5,4 +5,8 @@ set -eu
 project_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 cd "$project_dir"
 
+if [ "$#" -eq 0 ]; then
+    exec ./gradlew run
+fi
+
 exec ./gradlew run --args="$*"

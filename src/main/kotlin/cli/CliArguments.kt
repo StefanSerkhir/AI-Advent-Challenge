@@ -60,6 +60,6 @@ fun parseCliArguments(
         ),
         llmKind = llmKind,
         prompt = promptParts.joinToString(" ")
-            .ifBlank { "Привет! Расскажи короткую шутку." },
+            .ifBlank { "Объясни, как искусственный интеллект меняет образование." },
     )
 }

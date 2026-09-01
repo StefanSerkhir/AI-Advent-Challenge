@@ -12,5 +12,7 @@ class OpenAiLlmClient(
     config = OpenAiCompatibleConfig(
         chatCompletionsUrl = "https://api.openai.com/v1/chat/completions",
         model = "gpt-5.6-luna",
+        useMaxCompletionTokens = true,
+        supportsStopSequences = false,
     ),
 )
