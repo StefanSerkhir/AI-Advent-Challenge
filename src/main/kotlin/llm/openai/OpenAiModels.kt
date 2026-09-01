@@ -18,7 +18,24 @@ data class ChatCompletionRequest(
 )
 
 @Serializable
-data class ChatChoice(val message: ChatMessage)
+data class ChatChoice(
+    val message: ChatMessage,
+    @SerialName("finish_reason")
+    val finishReason: String? = null,
+)
 
 @Serializable
-data class ChatCompletionResponse(val choices: List<ChatChoice>)
+data class ChatCompletionResponse(
+    val choices: List<ChatChoice>,
+    val usage: ChatTokenUsage? = null,
+)
+
+@Serializable
+data class ChatTokenUsage(
+    @SerialName("prompt_tokens")
+    val promptTokens: Int,
+    @SerialName("completion_tokens")
+    val completionTokens: Int,
+    @SerialName("total_tokens")
+    val totalTokens: Int,
+)

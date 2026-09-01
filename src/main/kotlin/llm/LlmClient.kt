@@ -4,16 +4,28 @@ interface LlmClient {
     suspend fun complete(
         messages: List<LlmMessage>,
         options: CompletionOptions = CompletionOptions(),
-    ): String
+    ): CompletionResult
 
     suspend fun complete(
         prompt: String,
         options: CompletionOptions = CompletionOptions(),
-    ): String = complete(
+    ): CompletionResult = complete(
         messages = listOf(LlmMessage(LlmRole.USER, prompt)),
         options = options,
     )
 }
+
+data class CompletionResult(
+    val content: String,
+    val finishReason: String?,
+    val usage: TokenUsage?,
+)
+
+data class TokenUsage(
+    val promptTokens: Int,
+    val completionTokens: Int,
+    val totalTokens: Int,
+)
 
 enum class LlmRole(val apiValue: String) {
     USER("user"),

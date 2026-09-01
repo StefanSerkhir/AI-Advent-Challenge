@@ -5,6 +5,7 @@ import org.example.app.AppSettings
 import org.example.app.PromptRunner
 import org.example.app.ResponseMode
 import org.example.app.ResponseVariant
+import org.example.app.renderComparisonTable
 import org.example.llm.LlmApiException
 import org.example.llm.LlmClient
 import org.example.llm.LlmKind
@@ -108,11 +109,15 @@ class InteractiveCli(
 
     private suspend fun executePrompt(prompt: String) {
         try {
-            promptRunner.complete(prompt, settings).forEach { response ->
+            val responses = promptRunner.complete(prompt, settings)
+            responses.forEach { response ->
                 terminal.println()
                 terminal.println("=== ${response.variant.heading} ===")
                 terminal.println(response.content)
             }
+            terminal.println()
+            terminal.println("Результат сравнения")
+            terminal.println(renderComparisonTable(responses))
         } catch (error: LlmApiException) {
             terminal.println("Ошибка: ${error.message}")
         } catch (error: MissingApiKeyException) {

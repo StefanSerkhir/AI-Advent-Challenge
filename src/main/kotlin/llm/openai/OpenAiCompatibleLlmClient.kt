@@ -10,10 +10,12 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import org.example.llm.CompletionResult
 import org.example.llm.CompletionOptions
 import org.example.llm.LlmApiException
 import org.example.llm.LlmClient
 import org.example.llm.LlmMessage
+import org.example.llm.TokenUsage
 
 data class OpenAiCompatibleConfig(
     val chatCompletionsUrl: String,
@@ -31,7 +33,7 @@ class OpenAiCompatibleLlmClient(
     override suspend fun complete(
         messages: List<LlmMessage>,
         options: CompletionOptions,
-    ): String {
+    ): CompletionResult {
         val httpResponse = httpClient.post(config.chatCompletionsUrl) {
             header(HttpHeaders.Authorization, "Bearer $apiKey")
             contentType(ContentType.Application.Json)
@@ -62,8 +64,19 @@ class OpenAiCompatibleLlmClient(
             throw LlmApiException(message)
         }
 
-        return httpResponse.body<ChatCompletionResponse>()
-            .choices.firstOrNull()?.message?.content
+        val response = httpResponse.body<ChatCompletionResponse>()
+        val choice = response.choices.firstOrNull()
             ?: error("LLM returned an empty response")
+        return CompletionResult(
+            content = choice.message.content ?: error("LLM returned empty content"),
+            finishReason = choice.finishReason,
+            usage = response.usage?.let {
+                TokenUsage(
+                    promptTokens = it.promptTokens,
+                    completionTokens = it.completionTokens,
+                    totalTokens = it.totalTokens,
+                )
+            },
+        )
     }
 }

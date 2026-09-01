@@ -2,10 +2,12 @@ package org.example.app
 
 import kotlinx.coroutines.runBlocking
 import org.example.llm.CompletionOptions
+import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
 import org.example.llm.LlmKind
 import org.example.llm.LlmMessage
 import org.example.llm.LlmRole
+import org.example.llm.TokenUsage
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -60,9 +62,13 @@ class PromptRunnerTest {
         override suspend fun complete(
             messages: List<LlmMessage>,
             options: CompletionOptions,
-        ): String {
+        ): CompletionResult {
             calls += Call(messages, options)
-            return "answer-${calls.size}"
+            return CompletionResult(
+                content = "answer-${calls.size}",
+                finishReason = "stop",
+                usage = TokenUsage(10, calls.size, 10 + calls.size),
+            )
         }
     }
 

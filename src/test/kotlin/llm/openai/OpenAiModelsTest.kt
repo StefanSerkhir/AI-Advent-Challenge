@@ -1,6 +1,7 @@
 package org.example.llm.openai
 
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
@@ -52,5 +53,27 @@ class OpenAiModelsTest {
 
         assertFalse("\"max_tokens\"" in body)
         assertEquals(true, "\"max_completion_tokens\":120" in body)
+    }
+
+    @Test
+    fun `response deserializes usage and finish reason`() {
+        val response = json.decodeFromString<ChatCompletionResponse>(
+            """
+            {
+              "choices": [{
+                "message": {"role": "assistant", "content": "Готово"},
+                "finish_reason": "stop"
+              }],
+              "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 3,
+                "total_tokens": 14
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals("stop", response.choices.single().finishReason)
+        assertEquals(3, response.usage?.completionTokens)
     }
 }

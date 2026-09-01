@@ -16,9 +16,12 @@ enum class ResponseMode(val cliValue: String) {
     }
 }
 
-enum class ResponseVariant(val heading: String) {
-    UNRESTRICTED("БЕЗ ОГРАНИЧЕНИЙ"),
-    CONTROLLED("С ОГРАНИЧЕНИЯМИ"),
+enum class ResponseVariant(
+    val heading: String,
+    val tableLabel: String,
+) {
+    UNRESTRICTED("БЕЗ ОГРАНИЧЕНИЙ", "без ограничений"),
+    CONTROLLED("С ОГРАНИЧЕНИЯМИ", "с ограничениями"),
 }
 
 data class AppSettings(

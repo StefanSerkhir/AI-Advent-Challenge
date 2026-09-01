@@ -1,14 +1,18 @@
 package org.example.app
 
 import org.example.llm.CompletionOptions
+import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
 import org.example.llm.LlmMessage
 import org.example.llm.LlmRole
 
 data class LabeledResponse(
     val variant: ResponseVariant,
-    val content: String,
-)
+    val completion: CompletionResult,
+) {
+    val content: String
+        get() = completion.content
+}
 
 class PromptRunner(
     private val clientProvider: () -> LlmClient,
@@ -58,14 +62,14 @@ class PromptRunner(
                 stopSequences = settings.stopSequence?.let(::listOf).orEmpty(),
             )
         }
-        val response = client.complete(messages, options)
+        val completion = client.complete(messages, options)
 
         if (settings.historyEnabled) {
             histories.getValue(variant) += userMessage
-            histories.getValue(variant) += LlmMessage(LlmRole.ASSISTANT, response)
+            histories.getValue(variant) += LlmMessage(LlmRole.ASSISTANT, completion.content)
         }
 
-        return LabeledResponse(variant, response)
+        return LabeledResponse(variant, completion)
     }
 
     private fun ResponseMode.variants(): List<ResponseVariant> = when (this) {

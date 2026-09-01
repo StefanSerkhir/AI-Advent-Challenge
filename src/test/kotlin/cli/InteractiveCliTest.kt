@@ -4,9 +4,11 @@ import kotlinx.coroutines.runBlocking
 import org.example.app.AppSettings
 import org.example.app.ResponseMode
 import org.example.llm.CompletionOptions
+import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
 import org.example.llm.LlmKind
 import org.example.llm.LlmMessage
+import org.example.llm.TokenUsage
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -81,6 +83,28 @@ class InteractiveCliTest {
         )
     }
 
+    @Test
+    fun `successful request prints comparison table`() = runBlocking {
+        val terminal = RecordingTerminal()
+        val cli = InteractiveCli(
+            settings = AppSettings(
+                llmKind = LlmKind.OPENAI,
+                responseMode = ResponseMode.CONTROLLED,
+            ),
+            initialApiKeys = mapOf(LlmKind.OPENAI to "test-key"),
+            clientFactory = { _, _ -> StubLlmClient },
+            terminal = terminal,
+        )
+
+        cli.processLine("Тестовый запрос")
+
+        assertContains(terminal.output.toString(), "Результат сравнения")
+        assertContains(
+            terminal.output.toString(),
+            "│ с ограничениями │       13 │    2 │       7 │ stop          │",
+        )
+    }
+
     private class RecordingTerminal(
         private val input: ArrayDeque<String> = ArrayDeque(),
     ) : Terminal {
@@ -106,13 +130,17 @@ class InteractiveCliTest {
         override suspend fun complete(
             messages: List<LlmMessage>,
             options: CompletionOptions,
-        ): String = "test response"
+        ): CompletionResult = CompletionResult(
+            content = "test response",
+            finishReason = "stop",
+            usage = TokenUsage(promptTokens = 5, completionTokens = 7, totalTokens = 12),
+        )
     }
 
     private object FailingLlmClient : LlmClient {
         override suspend fun complete(
             messages: List<LlmMessage>,
             options: CompletionOptions,
-        ): String = error("test failure")
+        ): CompletionResult = error("test failure")
     }
 }
