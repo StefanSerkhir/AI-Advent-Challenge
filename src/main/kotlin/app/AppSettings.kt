@@ -7,7 +7,8 @@ const val DEFAULT_STOP_SEQUENCE = "<END_OF_RESPONSE>"
 enum class ResponseMode(val cliValue: String) {
     COMPARE("compare"),
     CONTROLLED("controlled"),
-    UNRESTRICTED("unrestricted");
+    UNRESTRICTED("unrestricted"),
+    REASONING("reasoning");
 
     companion object {
         fun from(value: String): ResponseMode? = entries.firstOrNull {

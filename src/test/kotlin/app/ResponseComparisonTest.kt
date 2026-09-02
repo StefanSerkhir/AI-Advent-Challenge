@@ -52,4 +52,20 @@ class ResponseComparisonTest {
             table,
         )
     }
+
+    @Test
+    fun `reasoning table contains all four strategies`() {
+        val solutions = ReasoningVariant.entries.map { variant ->
+            ReasoningSolution(
+                variant = variant,
+                completion = CompletionResult("Ответ", "stop", null),
+            )
+        }
+
+        val table = renderReasoningComparisonTable(solutions)
+
+        ReasoningVariant.entries.forEach { variant ->
+            kotlin.test.assertContains(table, variant.tableLabel)
+        }
+    }
 }

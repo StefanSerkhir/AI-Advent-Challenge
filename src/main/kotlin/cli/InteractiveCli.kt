@@ -1,11 +1,7 @@
 package org.example.cli
 
 import kotlinx.coroutines.CancellationException
-import org.example.app.AppSettings
-import org.example.app.PromptRunner
-import org.example.app.ResponseMode
-import org.example.app.ResponseVariant
-import org.example.app.renderComparisonTable
+import org.example.app.*
 import org.example.llm.LlmApiException
 import org.example.llm.LlmClient
 import org.example.llm.LlmKind
@@ -43,16 +39,26 @@ object SystemTerminal : Terminal {
 class InteractiveCli(
     val settings: AppSettings,
     initialApiKeys: Map<LlmKind, String>,
-    clientFactory: (LlmKind, String) -> LlmClient,
+    private val clientFactory: (LlmKind, String) -> LlmClient,
     private val terminal: Terminal = SystemTerminal,
 ) {
     private val apiKeys = initialApiKeys.toMutableMap()
     private val promptRunner = PromptRunner {
+        currentClient()
+    }
+    private val reasoningRunner = ReasoningRunner(
+        clientProvider = { currentClient() },
+        onProgress = { progress ->
+            terminal.println("[${progress.current}/${progress.total}] ${progress.label}…")
+        },
+    )
+
+    private fun currentClient(): LlmClient {
         val apiKey = apiKeys[settings.llmKind] ?: throw MissingApiKeyException(
             "API-ключ для ${settings.llmKind.displayName()} не задан. " +
                 "Используйте /api-key <ключ>.",
         )
-        clientFactory(settings.llmKind, apiKey)
+        return clientFactory(settings.llmKind, apiKey)
     }
 
     suspend fun run(initialPrompt: String? = null) {
@@ -88,6 +94,7 @@ class InteractiveCli(
             "/help" -> showHelp().let { true }
             "/settings" -> showSettings().let { true }
             "/reset" -> resetHistory().let { true }
+            "/reason-demo" -> executeReasoningDemo().let { true }
             "/provider" -> changeProvider(arguments).let { true }
             "/api-key", "/key" -> changeApiKey(arguments).let { true }
             "/mode" -> changeMode(arguments).let { true }
@@ -109,6 +116,11 @@ class InteractiveCli(
 
     private suspend fun executePrompt(prompt: String) {
         try {
+            if (settings.responseMode == ResponseMode.REASONING) {
+                executeReasoning(prompt)
+                return
+            }
+
             val responses = promptRunner.complete(prompt, settings)
             responses.forEach { response ->
                 terminal.println()
@@ -126,6 +138,49 @@ class InteractiveCli(
             if (error is CancellationException) throw error
             terminal.println("Ошибка выполнения запроса: ${error.message ?: error::class.simpleName}")
         }
+    }
+
+    private suspend fun executeReasoningDemo() {
+        try {
+            executeReasoning(
+                task = DEMO_REASONING_TASK.trimIndent(),
+                referenceAnswer = DEMO_REASONING_REFERENCE.trimIndent(),
+            )
+        } catch (error: LlmApiException) {
+            terminal.println("Ошибка: ${error.message}")
+        } catch (error: MissingApiKeyException) {
+            terminal.println("Ошибка: ${error.message}")
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            terminal.println("Ошибка выполнения запроса: ${error.message ?: error::class.simpleName}")
+        }
+    }
+
+    private suspend fun executeReasoning(
+        task: String,
+        referenceAnswer: String? = null,
+    ) {
+        val report = reasoningRunner.compare(task, referenceAnswer)
+
+        terminal.println()
+        terminal.println("Задача")
+        terminal.println(report.task)
+        report.solutions.forEach { solution ->
+            terminal.println()
+            terminal.println("=== ${solution.variant.heading} ===")
+            if (solution.variant == ReasoningVariant.GENERATED_PROMPT) {
+                terminal.println("Сначала модель составила промпт:")
+                terminal.println(report.generatedPrompt)
+                terminal.println("\nРешение по этому промпту:")
+            }
+            terminal.println(solution.content)
+        }
+        terminal.println()
+        terminal.println("Метрики четырёх решений")
+        terminal.println(renderReasoningComparisonTable(report.solutions))
+        terminal.println()
+        terminal.println("=== СРАВНЕНИЕ И ОЦЕНКА ТОЧНОСТИ ===")
+        terminal.println(report.evaluation.content)
     }
 
     private fun changeProvider(value: String) {
@@ -164,7 +219,7 @@ class InteractiveCli(
     private fun changeMode(value: String) {
         val mode = ResponseMode.from(value)
         if (mode == null) {
-            terminal.println("Использование: /mode compare|controlled|unrestricted")
+            terminal.println("Использование: /mode compare|controlled|unrestricted|reasoning")
             return
         }
 
@@ -253,7 +308,8 @@ class InteractiveCli(
             Команды:
               /provider OpenAI|Deepseek          сменить провайдера
               /api-key <ключ>                    задать ключ текущего провайдера
-              /mode compare|controlled|unrestricted
+              /mode compare|controlled|unrestricted|reasoning
+              /reason-demo                       сравнить 4 способа на задаче о шкафчиках
               /max-tokens <число>                задать API-лимит токенов
               /max-words <число>                 задать лимит слов в инструкции
               /format bullets <число>            задать количество пунктов

@@ -3,17 +3,8 @@ package org.example.cli
 import kotlinx.coroutines.runBlocking
 import org.example.app.AppSettings
 import org.example.app.ResponseMode
-import org.example.llm.CompletionOptions
-import org.example.llm.CompletionResult
-import org.example.llm.LlmClient
-import org.example.llm.LlmKind
-import org.example.llm.LlmMessage
-import org.example.llm.TokenUsage
-import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import org.example.llm.*
+import kotlin.test.*
 
 class InteractiveCliTest {
 
@@ -103,6 +94,45 @@ class InteractiveCliTest {
             terminal.output.toString(),
             "│ с ограничениями │       13 │    2 │       7 │ stop          │",
         )
+    }
+
+    @Test
+    fun `reasoning mode prints four solutions generated prompt and evaluation`() = runBlocking {
+        val terminal = RecordingTerminal()
+        val settings = AppSettings(
+            llmKind = LlmKind.OPENAI,
+            responseMode = ResponseMode.REASONING,
+        )
+        var call = 0
+        val cli = InteractiveCli(
+            settings = settings,
+            initialApiKeys = mapOf(LlmKind.OPENAI to "test-key"),
+            clientFactory = { _, _ ->
+                object : LlmClient {
+                    override suspend fun complete(
+                        messages: List<LlmMessage>,
+                        options: CompletionOptions,
+                    ): CompletionResult {
+                        call++
+                        val content = if (call == 3) "готовый тестовый промпт" else "ответ-$call"
+                        return CompletionResult(content, "stop", null)
+                    }
+                }
+            },
+            terminal = terminal,
+        )
+
+        cli.processLine("Тестовая логическая задача")
+
+        val output = terminal.output.toString()
+        assertEquals(6, call)
+        assertContains(output, "1. ПРЯМОЙ ОТВЕТ")
+        assertContains(output, "[1/6] Прямой ответ…")
+        assertContains(output, "[6/6] Сравнение и оценка точности…")
+        assertContains(output, "2. РЕШЕНИЕ ПОШАГОВО")
+        assertContains(output, "готовый тестовый промпт")
+        assertContains(output, "4. ГРУППА ЭКСПЕРТОВ")
+        assertContains(output, "СРАВНЕНИЕ И ОЦЕНКА ТОЧНОСТИ")
     }
 
     private class RecordingTerminal(

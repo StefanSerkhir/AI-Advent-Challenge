@@ -16,9 +16,25 @@ fun LabeledResponse.metrics(): ResponseMetrics = ResponseMetrics(
     finishReason = completion.finishReason,
 )
 
+fun ReasoningSolution.metrics(): ResponseMetrics = ResponseMetrics(
+    run = variant.tableLabel,
+    characterCount = content.codePointCount(0, content.length),
+    wordCount = Regex("\\S+").findAll(content).count(),
+    completionTokens = completion.usage?.completionTokens,
+    finishReason = completion.finishReason,
+)
+
 fun renderComparisonTable(responses: List<LabeledResponse>): String {
+    return renderMetricsTable(responses.map(LabeledResponse::metrics))
+}
+
+fun renderReasoningComparisonTable(solutions: List<ReasoningSolution>): String {
+    return renderMetricsTable(solutions.map(ReasoningSolution::metrics))
+}
+
+private fun renderMetricsTable(metricsRows: List<ResponseMetrics>): String {
     val headers = listOf("прогон", "символов", "слов", "токенов", "finish_reason")
-    val rows = responses.map(LabeledResponse::metrics).map { metrics ->
+    val rows = metricsRows.map { metrics ->
         listOf(
             metrics.run,
             metrics.characterCount.toString(),

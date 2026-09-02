@@ -1,10 +1,6 @@
 package org.example.app
 
-import org.example.llm.CompletionOptions
-import org.example.llm.CompletionResult
-import org.example.llm.LlmClient
-import org.example.llm.LlmMessage
-import org.example.llm.LlmRole
+import org.example.llm.*
 
 data class LabeledResponse(
     val variant: ResponseVariant,
@@ -76,5 +72,6 @@ class PromptRunner(
         ResponseMode.COMPARE -> ResponseVariant.entries
         ResponseMode.CONTROLLED -> listOf(ResponseVariant.CONTROLLED)
         ResponseMode.UNRESTRICTED -> listOf(ResponseVariant.UNRESTRICTED)
+        ResponseMode.REASONING -> error("Reasoning mode must be handled by ReasoningRunner")
     }
 }
