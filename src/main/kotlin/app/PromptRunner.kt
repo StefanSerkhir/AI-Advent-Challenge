@@ -73,5 +73,6 @@ class PromptRunner(
         ResponseMode.CONTROLLED -> listOf(ResponseVariant.CONTROLLED)
         ResponseMode.UNRESTRICTED -> listOf(ResponseVariant.UNRESTRICTED)
         ResponseMode.REASONING -> error("Reasoning mode must be handled by ReasoningRunner")
+        ResponseMode.TEMPERATURE -> error("Temperature mode must be handled by TemperatureRunner")
     }
 }

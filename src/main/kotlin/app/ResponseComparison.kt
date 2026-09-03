@@ -24,12 +24,24 @@ fun ReasoningSolution.metrics(): ResponseMetrics = ResponseMetrics(
     finishReason = completion.finishReason,
 )
 
+fun TemperatureSample.metrics(): ResponseMetrics = ResponseMetrics(
+    run = "temperature=${temperature.label()}",
+    characterCount = content.codePointCount(0, content.length),
+    wordCount = Regex("\\S+").findAll(content).count(),
+    completionTokens = completion.usage?.completionTokens,
+    finishReason = completion.finishReason,
+)
+
 fun renderComparisonTable(responses: List<LabeledResponse>): String {
     return renderMetricsTable(responses.map(LabeledResponse::metrics))
 }
 
 fun renderReasoningComparisonTable(solutions: List<ReasoningSolution>): String {
     return renderMetricsTable(solutions.map(ReasoningSolution::metrics))
+}
+
+fun renderTemperatureComparisonTable(samples: List<TemperatureSample>): String {
+    return renderMetricsTable(samples.map(TemperatureSample::metrics))
 }
 
 private fun renderMetricsTable(metricsRows: List<ResponseMetrics>): String {

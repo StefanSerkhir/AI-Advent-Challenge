@@ -52,6 +52,12 @@ class InteractiveCli(
             terminal.println("[${progress.current}/${progress.total}] ${progress.label}…")
         },
     )
+    private val temperatureRunner = TemperatureRunner(
+        clientProvider = { currentClient() },
+        onProgress = { progress ->
+            terminal.println("[${progress.current}/${progress.total}] ${progress.label}…")
+        },
+    )
 
     private fun currentClient(): LlmClient {
         val apiKey = apiKeys[settings.llmKind] ?: throw MissingApiKeyException(
@@ -95,6 +101,7 @@ class InteractiveCli(
             "/settings" -> showSettings().let { true }
             "/reset" -> resetHistory().let { true }
             "/reason-demo" -> executeReasoningDemo().let { true }
+            "/temperature-demo" -> executeTemperatureDemo().let { true }
             "/provider" -> changeProvider(arguments).let { true }
             "/api-key", "/key" -> changeApiKey(arguments).let { true }
             "/mode" -> changeMode(arguments).let { true }
@@ -118,6 +125,10 @@ class InteractiveCli(
         try {
             if (settings.responseMode == ResponseMode.REASONING) {
                 executeReasoning(prompt)
+                return
+            }
+            if (settings.responseMode == ResponseMode.TEMPERATURE) {
+                executeTemperature(prompt)
                 return
             }
 
@@ -156,6 +167,19 @@ class InteractiveCli(
         }
     }
 
+    private suspend fun executeTemperatureDemo() {
+        try {
+            executeTemperature(DEMO_TEMPERATURE_PROMPT.trimIndent())
+        } catch (error: LlmApiException) {
+            terminal.println("Ошибка: ${error.message}")
+        } catch (error: MissingApiKeyException) {
+            terminal.println("Ошибка: ${error.message}")
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            terminal.println("Ошибка выполнения запроса: ${error.message ?: error::class.simpleName}")
+        }
+    }
+
     private suspend fun executeReasoning(
         task: String,
         referenceAnswer: String? = null,
@@ -180,6 +204,29 @@ class InteractiveCli(
         terminal.println(renderReasoningComparisonTable(report.solutions))
         terminal.println()
         terminal.println("=== СРАВНЕНИЕ И ОЦЕНКА ТОЧНОСТИ ===")
+        terminal.println(report.evaluation.content)
+    }
+
+    private suspend fun executeTemperature(prompt: String) {
+        val report = temperatureRunner.compare(prompt)
+
+        terminal.println()
+        terminal.println("Исходный запрос")
+        terminal.println(report.prompt)
+        val models = report.samples.mapNotNull { it.completion.model }.distinct()
+        if (models.isNotEmpty()) {
+            terminal.println("\nМодель: ${models.joinToString()}")
+        }
+        report.samples.forEach { sample ->
+            terminal.println()
+            terminal.println("=== TEMPERATURE = ${sample.temperature.label()} ===")
+            terminal.println(sample.content)
+        }
+        terminal.println()
+        terminal.println("Метрики ответов")
+        terminal.println(renderTemperatureComparisonTable(report.samples))
+        terminal.println()
+        terminal.println("=== ВЫВОДЫ ПО ИСПОЛЬЗОВАНИЮ ===")
         terminal.println(report.evaluation.content)
     }
 
@@ -219,7 +266,7 @@ class InteractiveCli(
     private fun changeMode(value: String) {
         val mode = ResponseMode.from(value)
         if (mode == null) {
-            terminal.println("Использование: /mode compare|controlled|unrestricted|reasoning")
+            terminal.println("Использование: /mode compare|controlled|unrestricted|reasoning|temperature")
             return
         }
 
@@ -308,8 +355,9 @@ class InteractiveCli(
             Команды:
               /provider OpenAI|Deepseek          сменить провайдера
               /api-key <ключ>                    задать ключ текущего провайдера
-              /mode compare|controlled|unrestricted|reasoning
+              /mode compare|controlled|unrestricted|reasoning|temperature
               /reason-demo                       сравнить 4 способа на задаче о шкафчиках
+              /temperature-demo                  запустить готовый тест температуры
               /max-tokens <число>                задать API-лимит токенов
               /max-words <число>                 задать лимит слов в инструкции
               /format bullets <число>            задать количество пунктов

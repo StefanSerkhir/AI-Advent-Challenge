@@ -135,6 +135,41 @@ class InteractiveCliTest {
         assertContains(output, "СРАВНЕНИЕ И ОЦЕНКА ТОЧНОСТИ")
     }
 
+    @Test
+    fun `temperature mode runs three values and prints evaluation`() = runBlocking {
+        val terminal = RecordingTerminal()
+        val settings = AppSettings(
+            llmKind = LlmKind.DEEPSEEK,
+            responseMode = ResponseMode.TEMPERATURE,
+        )
+        val temperatures = mutableListOf<Double?>()
+        val cli = InteractiveCli(
+            settings = settings,
+            initialApiKeys = mapOf(LlmKind.DEEPSEEK to "test-key"),
+            clientFactory = { _, _ ->
+                object : LlmClient {
+                    override suspend fun complete(
+                        messages: List<LlmMessage>,
+                        options: CompletionOptions,
+                    ): CompletionResult {
+                        temperatures += options.temperature
+                        return CompletionResult("ответ-${temperatures.size}", "stop", null)
+                    }
+                }
+            },
+            terminal = terminal,
+        )
+
+        cli.processLine("Придумай слоган")
+
+        assertEquals(listOf<Double?>(0.0, 0.7, 1.2, 0.0), temperatures)
+        val output = terminal.output.toString()
+        assertContains(output, "TEMPERATURE = 0")
+        assertContains(output, "TEMPERATURE = 0.7")
+        assertContains(output, "TEMPERATURE = 1.2")
+        assertContains(output, "ВЫВОДЫ ПО ИСПОЛЬЗОВАНИЮ")
+    }
+
     private class RecordingTerminal(
         private val input: ArrayDeque<String> = ArrayDeque(),
     ) : Terminal {

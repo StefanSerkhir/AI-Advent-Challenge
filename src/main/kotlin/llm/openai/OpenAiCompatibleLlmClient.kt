@@ -20,6 +20,7 @@ import org.example.llm.TokenUsage
 data class OpenAiCompatibleConfig(
     val chatCompletionsUrl: String,
     val model: String,
+    val temperatureModel: String? = null,
     val useMaxCompletionTokens: Boolean = false,
     val supportsStopSequences: Boolean = true,
 )
@@ -39,7 +40,11 @@ class OpenAiCompatibleLlmClient(
             contentType(ContentType.Application.Json)
             setBody(
                 ChatCompletionRequest(
-                    model = config.model,
+                    model = if (options.temperature == null) {
+                        config.model
+                    } else {
+                        config.temperatureModel ?: config.model
+                    },
                     messages = messages.map {
                         ChatMessage(role = it.role.apiValue, content = it.content)
                     },
@@ -51,6 +56,7 @@ class OpenAiCompatibleLlmClient(
                     },
                     stop = options.stopSequences
                         .takeIf { config.supportsStopSequences && it.isNotEmpty() },
+                    temperature = options.temperature,
                 ),
             )
         }
@@ -77,6 +83,7 @@ class OpenAiCompatibleLlmClient(
                     totalTokens = it.totalTokens,
                 )
             },
+            model = response.model,
         )
     }
 }

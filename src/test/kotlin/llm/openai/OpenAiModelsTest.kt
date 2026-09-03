@@ -42,6 +42,19 @@ class OpenAiModelsTest {
     }
 
     @Test
+    fun `temperature request serializes sampling value`() {
+        val request = ChatCompletionRequest(
+            model = "test-model",
+            messages = listOf(ChatMessage("user", "test prompt")),
+            temperature = 0.7,
+        )
+
+        val body = Json.parseToJsonElement(json.encodeToString(request)).jsonObject
+
+        assertEquals("0.7", body.getValue("temperature").toString())
+    }
+
+    @Test
     fun `OpenAI request can serialize completion token limit`() {
         val request = ChatCompletionRequest(
             model = "test-model",
@@ -68,12 +81,14 @@ class OpenAiModelsTest {
                 "prompt_tokens": 11,
                 "completion_tokens": 3,
                 "total_tokens": 14
-              }
+              },
+              "model": "gpt-4.1-mini-2025-04-14"
             }
             """.trimIndent(),
         )
 
         assertEquals("stop", response.choices.single().finishReason)
         assertEquals(3, response.usage?.completionTokens)
+        assertEquals("gpt-4.1-mini-2025-04-14", response.model)
     }
 }

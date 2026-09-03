@@ -8,7 +8,8 @@ enum class ResponseMode(val cliValue: String) {
     COMPARE("compare"),
     CONTROLLED("controlled"),
     UNRESTRICTED("unrestricted"),
-    REASONING("reasoning");
+    REASONING("reasoning"),
+    TEMPERATURE("temperature");
 
     companion object {
         fun from(value: String): ResponseMode? = entries.firstOrNull {

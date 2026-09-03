@@ -19,6 +19,7 @@ data class CompletionResult(
     val content: String,
     val finishReason: String?,
     val usage: TokenUsage?,
+    val model: String? = null,
 )
 
 data class TokenUsage(
@@ -40,6 +41,7 @@ data class LlmMessage(
 data class CompletionOptions(
     val maxTokens: Int? = null,
     val stopSequences: List<String> = emptyList(),
+    val temperature: Double? = null,
 ) {
     init {
         require(maxTokens == null || maxTokens > 0) {
@@ -47,6 +49,9 @@ data class CompletionOptions(
         }
         require(stopSequences.none(String::isBlank)) {
             "stop sequence не может быть пустой"
+        }
+        require(temperature == null || temperature.isFinite() && temperature in 0.0..2.0) {
+            "temperature должна быть числом от 0 до 2"
         }
     }
 }
