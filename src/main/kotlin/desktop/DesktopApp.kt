@@ -13,8 +13,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.example.app.*
@@ -394,7 +398,12 @@ private fun TemperatureView(report: TemperatureReport) {
     Spacer(Modifier.height(10.dp))
     MetricsTable(report.samples.map { it.metrics() })
     Spacer(Modifier.height(10.dp))
-    ResponseCard("ВЫВОДЫ ПО ИСПОЛЬЗОВАНИЮ", report.evaluation.content, accent = true)
+    ResponseCard(
+        "ВЫВОДЫ ПО ИСПОЛЬЗОВАНИЮ",
+        report.evaluation.content,
+        accent = true,
+        renderMarkdownTables = true,
+    )
 }
 
 @Composable
@@ -418,7 +427,13 @@ private fun <T> ResponsiveCards(items: List<T>, content: @Composable (T) -> Unit
 }
 
 @Composable
-private fun ResponseCard(title: String, body: String, subtle: Boolean = false, accent: Boolean = false) {
+private fun ResponseCard(
+    title: String,
+    body: String,
+    subtle: Boolean = false,
+    accent: Boolean = false,
+    renderMarkdownTables: Boolean = false,
+) {
     val background = when {
         accent -> Color(0xFFF0F8F4)
         subtle -> Color(0xFFF8F9FC)
@@ -434,10 +449,96 @@ private fun ResponseCard(title: String, body: String, subtle: Boolean = false, a
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, color = if (accent) Success else Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            SelectionContainer { Text(body, lineHeight = 21.sp) }
+            SelectionContainer {
+                if (renderMarkdownTables) {
+                    MarkdownBody(body)
+                } else {
+                    Text(body, lineHeight = 21.sp)
+                }
+            }
         }
     }
 }
+
+@Composable
+private fun MarkdownBody(body: String) {
+    val blocks = remember(body) { parseMarkdownBlocks(body) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is MarkdownBlock.Text -> Text(markdownAnnotatedString(block.value), lineHeight = 21.sp)
+                is MarkdownBlock.Table -> MarkdownTable(block)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTable(table: MarkdownBlock.Table) {
+    val horizontal = rememberScrollState()
+    val columnWidths = remember(table) { markdownColumnWidths(table) }
+    val tableWidth = columnWidths.fold(0.dp) { total, width -> total + width }
+
+    Box(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.horizontalScroll(horizontal).width(tableWidth).padding(bottom = 10.dp),
+        ) {
+            MarkdownTableRow(table.headers, columnWidths, header = true)
+            table.rows.forEach { row -> MarkdownTableRow(row, columnWidths) }
+        }
+        HorizontalScrollbar(
+            adapter = rememberScrollbarAdapter(horizontal),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun MarkdownTableRow(cells: List<String>, columnWidths: List<androidx.compose.ui.unit.Dp>, header: Boolean = false) {
+    Row(Modifier.height(IntrinsicSize.Min)) {
+        cells.forEachIndexed { index, cell ->
+            Box(
+                Modifier.width(columnWidths[index]).fillMaxHeight()
+                    .background(if (header) Color(0xFFE4F2EB) else Color.White)
+                    .border(.5.dp, Color(0xFFCDD8D2))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    markdownAnnotatedString(cell),
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
+
+private fun markdownColumnWidths(table: MarkdownBlock.Table): List<androidx.compose.ui.unit.Dp> =
+    table.headers.indices.map { column ->
+        val longestLine = (listOf(table.headers[column]) + table.rows.map { it[column] })
+            .flatMap { it.lines() }
+            .maxOfOrNull(String::length)
+            ?: 0
+        (longestLine * 7 + 24).coerceIn(96, 520).dp
+    }
+
+private fun markdownAnnotatedString(value: String): AnnotatedString {
+    val normalized = normalizeMarkdownText(value)
+    return buildAnnotatedString {
+        var cursor = 0
+        BOLD_MARKDOWN.findAll(normalized).forEach { match ->
+            append(normalized.substring(cursor, match.range.first))
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                append(match.groupValues[1])
+            }
+            cursor = match.range.last + 1
+        }
+        append(normalized.substring(cursor))
+    }
+}
+
+private val BOLD_MARKDOWN = Regex("\\*\\*(.+?)\\*\\*")
 
 @Composable
 private fun MetricsTable(rows: List<ResponseMetrics>) {
