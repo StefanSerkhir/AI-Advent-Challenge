@@ -10,7 +10,14 @@ data class LabeledResponse(
         get() = completion.content
 }
 
+data class PromptProgress(
+    val current: Int,
+    val total: Int,
+    val label: String,
+)
+
 class PromptRunner(
+    private val onProgress: (PromptProgress) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
     private val histories = ResponseVariant.entries.associateWith {
@@ -22,7 +29,18 @@ class PromptRunner(
         settings: AppSettings,
     ): List<LabeledResponse> {
         val client = clientProvider()
-        return settings.responseMode.variants().map { variant ->
+        val variants = settings.responseMode.variants()
+        return variants.mapIndexed { index, variant ->
+            onProgress(
+                PromptProgress(
+                    current = index + 1,
+                    total = variants.size,
+                    label = when (variant) {
+                        ResponseVariant.UNRESTRICTED -> "Ответ без ограничений"
+                        ResponseVariant.CONTROLLED -> "Ответ с ограничениями"
+                    },
+                ),
+            )
             completeVariant(client, variant, prompt, settings)
         }
     }

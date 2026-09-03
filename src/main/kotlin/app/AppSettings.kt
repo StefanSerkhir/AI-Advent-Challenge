@@ -1,6 +1,7 @@
 package org.example.app
 
 import org.example.llm.LlmKind
+import org.example.llm.LlmModels
 
 const val DEFAULT_STOP_SEQUENCE = "<END_OF_RESPONSE>"
 
@@ -28,6 +29,7 @@ enum class ResponseVariant(
 
 data class AppSettings(
     var llmKind: LlmKind,
+    var model: String = LlmModels.defaultFor(llmKind),
     var responseMode: ResponseMode = ResponseMode.COMPARE,
     var maxTokens: Int = 300,
     var maxWords: Int = 60,
@@ -39,6 +41,7 @@ data class AppSettings(
         require(maxTokens > 0)
         require(maxWords > 0)
         require(bulletCount > 0)
+        require(model.isNotBlank())
     }
 }
 

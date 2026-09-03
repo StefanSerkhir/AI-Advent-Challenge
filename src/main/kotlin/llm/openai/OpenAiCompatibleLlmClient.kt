@@ -1,21 +1,10 @@
 package org.example.llm.openai
 
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.header
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
-import org.example.llm.CompletionResult
-import org.example.llm.CompletionOptions
-import org.example.llm.LlmApiException
-import org.example.llm.LlmClient
-import org.example.llm.LlmMessage
-import org.example.llm.TokenUsage
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.request.*
+import io.ktor.http.*
+import org.example.llm.*
 
 data class OpenAiCompatibleConfig(
     val chatCompletionsUrl: String,
@@ -65,16 +54,22 @@ class OpenAiCompatibleLlmClient(
             val message = when (httpResponse.status.value) {
                 401 -> "неверный API-ключ"
                 402 -> "недостаточно средств на балансе LLM-провайдера"
-                else -> "LLM API error ${httpResponse.status}: ${httpResponse.bodyAsText()}"
+                403 -> "доступ к выбранной модели запрещён для этого API-ключа"
+                404 -> "выбранная модель или API endpoint не найдены"
+                408 -> "провайдер не успел обработать запрос"
+                409 -> "провайдер сообщил о конфликте запроса; попробуйте ещё раз"
+                429 -> "превышен лимит запросов; подождите и повторите попытку"
+                in 500..599 -> "сервис LLM временно недоступен (${httpResponse.status.value})"
+                else -> "LLM API вернул ошибку ${httpResponse.status.value}"
             }
             throw LlmApiException(message)
         }
 
         val response = httpResponse.body<ChatCompletionResponse>()
         val choice = response.choices.firstOrNull()
-            ?: error("LLM returned an empty response")
+            ?: throw LlmApiException("провайдер вернул пустой ответ")
         return CompletionResult(
-            content = choice.message.content ?: error("LLM returned empty content"),
+            content = choice.message.content ?: throw LlmApiException("провайдер вернул ответ без текста"),
             finishReason = choice.finishReason,
             usage = response.usage?.let {
                 TokenUsage(

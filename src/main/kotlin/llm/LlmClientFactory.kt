@@ -1,6 +1,6 @@
 package org.example.llm
 
-import io.ktor.client.HttpClient
+import io.ktor.client.*
 import org.example.llm.deepseek.DeepSeekLlmClient
 import org.example.llm.openai.OpenAiLlmClient
 
@@ -25,7 +25,8 @@ fun createLlmClient(
     kind: LlmKind,
     apiKey: String,
     httpClient: HttpClient,
+    model: String = LlmModels.defaultFor(kind),
 ): LlmClient = when (kind) {
-    LlmKind.DEEPSEEK -> DeepSeekLlmClient(apiKey, httpClient)
-    LlmKind.OPENAI -> OpenAiLlmClient(apiKey, httpClient)
+    LlmKind.DEEPSEEK -> DeepSeekLlmClient(apiKey, httpClient, model)
+    LlmKind.OPENAI -> OpenAiLlmClient(apiKey, httpClient, model)
 }

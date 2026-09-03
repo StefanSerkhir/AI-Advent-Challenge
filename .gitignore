@@ -1,6 +1,8 @@
 .gradle
 build/
 .env
+.env.local
+.env.*.local
 /video/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
