@@ -12,12 +12,17 @@ class AppBootstrap private constructor(
     companion object {
         fun from(config: LocalConfig): AppBootstrap {
             val warnings = mutableListOf<String>()
-            val llmKind = parseOrDefault("провайдер", LlmKind.DEEPSEEK, warnings) {
+            val configuredLlmKind = parseOrDefault("провайдер", LlmKind.DEEPSEEK, warnings) {
                 config.llmKind?.let(LlmKind::from) ?: LlmKind.DEEPSEEK
             }
             val responseMode = parseOrDefault("режим", ResponseMode.COMPARE, warnings) {
                 config.responseMode?.let(ResponseMode::from)
                     ?: if (config.responseMode == null) ResponseMode.COMPARE else error("unknown mode")
+            }
+            val llmKind = if (responseMode == ResponseMode.MODEL_COMPARISON) {
+                LlmKind.OPENAI
+            } else {
+                configuredLlmKind
             }
 
             fun positiveInt(name: String, raw: String?, default: Int): Int {
@@ -39,7 +44,11 @@ class AppBootstrap private constructor(
             }
             val settings = AppSettings(
                 llmKind = llmKind,
-                model = LlmModels.normalize(llmKind, config.model),
+                model = if (responseMode == ResponseMode.MODEL_COMPARISON && configuredLlmKind != LlmKind.OPENAI) {
+                    LlmModels.defaultFor(LlmKind.OPENAI)
+                } else {
+                    LlmModels.normalize(llmKind, config.model)
+                },
                 responseMode = responseMode,
                 maxTokens = positiveInt("max_tokens", config.maxTokens, 300),
                 maxWords = positiveInt("max_words", config.maxWords, 60),
@@ -52,7 +61,7 @@ class AppBootstrap private constructor(
                 historyEnabled = historyEnabled,
             )
             val apiKeys = buildMap {
-                config.apiKey?.let { put(llmKind, it) }
+                config.apiKey?.let { put(configuredLlmKind, it) }
                 config.deepSeekApiKey?.let { put(LlmKind.DEEPSEEK, it) }
                 config.openAiApiKey?.let { put(LlmKind.OPENAI, it) }
             }

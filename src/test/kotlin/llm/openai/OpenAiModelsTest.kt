@@ -1,7 +1,5 @@
 package org.example.llm.openai
 
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
@@ -69,6 +67,19 @@ class OpenAiModelsTest {
     }
 
     @Test
+    fun `reasoning request serializes effort`() {
+        val request = ChatCompletionRequest(
+            model = "test-model",
+            messages = listOf(ChatMessage("user", "test prompt")),
+            reasoningEffort = "medium",
+        )
+
+        val body = json.encodeToString(request)
+
+        assertEquals(true, "\"reasoning_effort\":\"medium\"" in body)
+    }
+
+    @Test
     fun `response deserializes usage and finish reason`() {
         val response = json.decodeFromString<ChatCompletionResponse>(
             """
@@ -80,7 +91,14 @@ class OpenAiModelsTest {
               "usage": {
                 "prompt_tokens": 11,
                 "completion_tokens": 3,
-                "total_tokens": 14
+                "total_tokens": 14,
+                "prompt_tokens_details": {
+                  "cached_tokens": 4,
+                  "cache_write_tokens": 2
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 1
+                }
               },
               "model": "gpt-4.1-mini-2025-04-14"
             }
@@ -89,6 +107,9 @@ class OpenAiModelsTest {
 
         assertEquals("stop", response.choices.single().finishReason)
         assertEquals(3, response.usage?.completionTokens)
+        assertEquals(4, response.usage?.promptTokensDetails?.cachedTokens)
+        assertEquals(2, response.usage?.promptTokensDetails?.cacheWriteTokens)
+        assertEquals(1, response.usage?.completionTokensDetails?.reasoningTokens)
         assertEquals("gpt-4.1-mini-2025-04-14", response.model)
     }
 }

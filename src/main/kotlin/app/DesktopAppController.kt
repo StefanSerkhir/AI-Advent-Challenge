@@ -33,6 +33,7 @@ sealed interface RequestResult {
     data class Responses(val responses: List<LabeledResponse>) : RequestResult
     data class Reasoning(val report: ReasoningReport) : RequestResult
     data class Temperature(val report: TemperatureReport) : RequestResult
+    data class ModelComparison(val report: ModelComparisonReport) : RequestResult
 }
 
 sealed interface ExchangeOutcome {
@@ -125,7 +126,12 @@ class DesktopAppController(
             }
             return false
         }
-        val kind = _state.value.settings.llmKind
+        val settings = _state.value.settings
+        val kind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
+            LlmKind.OPENAI
+        } else {
+            settings.llmKind
+        }
         apiKeys[kind] = normalized
         _state.update {
             it.copy(
@@ -201,12 +207,17 @@ class DesktopAppController(
         }
         val baseSettings = _state.value.settings
         val settings = baseSettings.copy(responseMode = forcedMode ?: baseSettings.responseMode)
-        val apiKey = apiKeys[settings.llmKind]
+        val requestKind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
+            LlmKind.OPENAI
+        } else {
+            settings.llmKind
+        }
+        val apiKey = apiKeys[requestKind]
         if (apiKey == null) {
             _state.update {
                 it.copy(
                     notice = UiNotice(
-                        "API-ключ для ${settings.llmKind.displayName()} не задан. Сохраните его в настройках.",
+                        "API-ключ для ${requestKind.displayName()} не задан. Сохраните его в настройках.",
                         NoticeKind.ERROR,
                     ),
                 )
@@ -220,6 +231,7 @@ class DesktopAppController(
             ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED -> 1
             ResponseMode.REASONING -> TOTAL_REASONING_API_CALLS
             ResponseMode.TEMPERATURE -> TOTAL_TEMPERATURE_API_CALLS
+            ResponseMode.MODEL_COMPARISON -> TOTAL_MODEL_COMPARISON_API_CALLS
         }
         val exchange = ConversationExchange(
             id = exchangeId,
@@ -237,7 +249,9 @@ class DesktopAppController(
 
         currentJob = workerScope.launch {
             try {
-                requestClient.set(clientFactory(settings.llmKind, apiKey, settings.model))
+                if (settings.responseMode != ResponseMode.MODEL_COMPARISON) {
+                    requestClient.set(clientFactory(requestKind, apiKey, settings.model))
+                }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
                         RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))
@@ -254,6 +268,14 @@ class DesktopAppController(
                             onProgress = { reportProgress(it.current, it.total, it.label) },
                             clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
                         ).compare(normalizedPrompt),
+                    )
+
+                    ResponseMode.MODEL_COMPARISON -> RequestResult.ModelComparison(
+                        ModelComparisonRunner(
+                            onProgress = { reportProgress(it.current, it.total, it.label) },
+                            clientProvider = { model -> clientFactory(LlmKind.OPENAI, apiKey, model) },
+                            errorMessage = { userFacingError(it, apiKeys.values) },
+                        ).compare(normalizedPrompt, settings.maxTokens),
                     )
                 }
                 updateExchange(exchangeId, ExchangeOutcome.Completed(result))

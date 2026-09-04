@@ -129,4 +129,55 @@ class DesktopAppControllerTest {
             controller.close()
         }
     }
+
+    @Test
+    fun `model comparison uses OpenAI key and all target models regardless of selected model`(): Unit = runBlocking {
+        val factoryCalls = mutableListOf<Pair<LlmKind, String>>()
+        val controller = DesktopAppController(
+            initialSettings = AppSettings(
+                llmKind = LlmKind.DEEPSEEK,
+                model = "deepseek-v4-flash",
+                responseMode = ResponseMode.MODEL_COMPARISON,
+                maxTokens = 800,
+            ),
+            initialApiKeys = mapOf(LlmKind.OPENAI to "openai-dummy-key"),
+            clientFactory = { kind, _, model ->
+                factoryCalls += kind to model
+                object : LlmClient {
+                    override suspend fun complete(
+                        messages: List<LlmMessage>,
+                        options: CompletionOptions,
+                    ): CompletionResult = CompletionResult(
+                        content = "Ответ $model",
+                        finishReason = "stop",
+                        usage = TokenUsage(12, 8, 20),
+                        model = model,
+                    )
+                }
+            },
+        )
+
+        try {
+            assertTrue(controller.submit("Сравни этот запрос"))
+            controller.awaitCurrentRequest()
+
+            assertEquals(
+                listOf(
+                    LlmKind.OPENAI to "gpt-5.6-luna",
+                    LlmKind.OPENAI to "gpt-5.6-terra",
+                    LlmKind.OPENAI to "gpt-5.6-sol",
+                    LlmKind.OPENAI to "gpt-5.6-sol",
+                ),
+                factoryCalls,
+            )
+            val completed = assertIs<ExchangeOutcome.Completed>(
+                controller.state.value.exchanges.single().outcome,
+            )
+            val report = assertIs<RequestResult.ModelComparison>(completed.result).report
+            assertEquals(3, report.runs.size)
+            assertNotNull(report.evaluation)
+        } finally {
+            controller.close()
+        }
+    }
 }

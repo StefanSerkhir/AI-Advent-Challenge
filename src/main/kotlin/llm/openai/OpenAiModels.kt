@@ -1,7 +1,7 @@
 package org.example.llm.openai
 
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChatMessage(val role: String, val content: String? = null)
@@ -16,6 +16,8 @@ data class ChatCompletionRequest(
     val maxCompletionTokens: Int? = null,
     val stop: List<String>? = null,
     val temperature: Double? = null,
+    @SerialName("reasoning_effort")
+    val reasoningEffort: String? = null,
 )
 
 @Serializable
@@ -40,4 +42,22 @@ data class ChatTokenUsage(
     val completionTokens: Int,
     @SerialName("total_tokens")
     val totalTokens: Int,
+    @SerialName("prompt_tokens_details")
+    val promptTokensDetails: ChatPromptTokenDetails? = null,
+    @SerialName("completion_tokens_details")
+    val completionTokensDetails: ChatCompletionTokenDetails? = null,
+)
+
+@Serializable
+data class ChatPromptTokenDetails(
+    @SerialName("cached_tokens")
+    val cachedTokens: Int = 0,
+    @SerialName("cache_write_tokens")
+    val cacheWriteTokens: Int = 0,
+)
+
+@Serializable
+data class ChatCompletionTokenDetails(
+    @SerialName("reasoning_tokens")
+    val reasoningTokens: Int = 0,
 )

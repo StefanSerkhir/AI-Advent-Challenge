@@ -99,4 +99,21 @@ class LocalConfigStoreTest {
             directory.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `model comparison mode always bootstraps with OpenAI selected`() {
+        val bootstrap = AppBootstrap.from(
+            LocalConfig(
+                llmKind = "Deepseek",
+                model = "deepseek-v4-flash",
+                responseMode = "models",
+                openAiApiKey = "openai-dummy-key",
+            ),
+        )
+
+        assertEquals(ResponseMode.MODEL_COMPARISON, bootstrap.settings.responseMode)
+        assertEquals(LlmKind.OPENAI, bootstrap.settings.llmKind)
+        assertEquals("gpt-5.6-luna", bootstrap.settings.model)
+        assertEquals("openai-dummy-key", bootstrap.apiKeys[LlmKind.OPENAI])
+    }
 }

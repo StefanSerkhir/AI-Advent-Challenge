@@ -12,6 +12,7 @@ data class OpenAiCompatibleConfig(
     val temperatureModel: String? = null,
     val useMaxCompletionTokens: Boolean = false,
     val supportsStopSequences: Boolean = true,
+    val supportsReasoningEffort: Boolean = false,
 )
 
 class OpenAiCompatibleLlmClient(
@@ -46,6 +47,9 @@ class OpenAiCompatibleLlmClient(
                     stop = options.stopSequences
                         .takeIf { config.supportsStopSequences && it.isNotEmpty() },
                     temperature = options.temperature,
+                    reasoningEffort = options.reasoningEffort
+                        ?.apiValue
+                        .takeIf { config.supportsReasoningEffort },
                 ),
             )
         }
@@ -76,6 +80,9 @@ class OpenAiCompatibleLlmClient(
                     promptTokens = it.promptTokens,
                     completionTokens = it.completionTokens,
                     totalTokens = it.totalTokens,
+                    cachedPromptTokens = it.promptTokensDetails?.cachedTokens ?: 0,
+                    cacheWritePromptTokens = it.promptTokensDetails?.cacheWriteTokens ?: 0,
+                    reasoningTokens = it.completionTokensDetails?.reasoningTokens ?: 0,
                 )
             },
             model = response.model,

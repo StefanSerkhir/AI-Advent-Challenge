@@ -11,6 +11,8 @@ object LlmModels {
     )
     private val openAiModels = listOf(
         LlmModel("gpt-5.6-luna", "GPT-5.6 Luna"),
+        LlmModel("gpt-5.6-terra", "GPT-5.6 Terra"),
+        LlmModel("gpt-5.6-sol", "GPT-5.6 Sol"),
         LlmModel("gpt-4.1-mini", "GPT-4.1 mini"),
     )
 

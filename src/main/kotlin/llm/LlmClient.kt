@@ -26,6 +26,9 @@ data class TokenUsage(
     val promptTokens: Int,
     val completionTokens: Int,
     val totalTokens: Int,
+    val cachedPromptTokens: Int = 0,
+    val cacheWritePromptTokens: Int = 0,
+    val reasoningTokens: Int = 0,
 )
 
 enum class LlmRole(val apiValue: String) {
@@ -42,6 +45,7 @@ data class CompletionOptions(
     val maxTokens: Int? = null,
     val stopSequences: List<String> = emptyList(),
     val temperature: Double? = null,
+    val reasoningEffort: ReasoningEffort? = null,
 ) {
     init {
         require(maxTokens == null || maxTokens > 0) {
@@ -54,6 +58,10 @@ data class CompletionOptions(
             "temperature должна быть числом от 0 до 2"
         }
     }
+}
+
+enum class ReasoningEffort(val apiValue: String) {
+    MEDIUM("medium"),
 }
 
 class LlmApiException(message: String) : RuntimeException(message)

@@ -6,7 +6,14 @@ internal sealed interface MarkdownBlock {
     data class Table(
         val headers: List<String>,
         val rows: List<List<String>>,
+        val alignments: List<MarkdownColumnAlignment>,
     ) : MarkdownBlock
+}
+
+internal enum class MarkdownColumnAlignment {
+    LEFT,
+    CENTER,
+    RIGHT,
 }
 
 /**
@@ -55,6 +62,7 @@ internal fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
         blocks += MarkdownBlock.Table(
             headers = headers.map(::normalizeMarkdownText),
             rows = rows,
+            alignments = separators.map(::parseColumnAlignment),
         )
     }
 
@@ -102,3 +110,9 @@ private fun parseMarkdownRow(line: String): List<String>? {
 
 private val MARKDOWN_TABLE_SEPARATOR = Regex("^:?-{3,}:?$")
 private val MARKDOWN_LINE_BREAK = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+
+private fun parseColumnAlignment(separator: String): MarkdownColumnAlignment = when {
+    separator.startsWith(':') && separator.endsWith(':') -> MarkdownColumnAlignment.CENTER
+    separator.endsWith(':') -> MarkdownColumnAlignment.RIGHT
+    else -> MarkdownColumnAlignment.LEFT
+}

@@ -23,6 +23,7 @@ class MarkdownBlocksTest {
         assertEquals("**Оценка ответов**", assertIs<MarkdownBlock.Text>(blocks[0]).value)
         val table = assertIs<MarkdownBlock.Table>(blocks[1])
         assertEquals(listOf("Темп.", "Точность", "Обоснование точности"), table.headers)
+        assertEquals(List(3) { MarkdownColumnAlignment.LEFT }, table.alignments)
         assertEquals(
             listOf(
                 listOf("0", "3", "Ошибка\n- Формат соблюдён"),
@@ -50,5 +51,26 @@ class MarkdownBlocksTest {
         val markdown = "Текст | с разделителем\n| но без | строки-разделителя |"
 
         assertEquals(listOf(MarkdownBlock.Text(markdown)), parseMarkdownBlocks(markdown))
+    }
+
+    @Test
+    fun `reads left center and right alignment from separator row`() {
+        val markdown = """
+            | Склад | Москва | Казань | Пермь |
+            | ----- | -----: | :----: | ----: |
+            | A     |      4 |   6    |     9 |
+        """.trimIndent()
+
+        val table = assertIs<MarkdownBlock.Table>(parseMarkdownBlocks(markdown).single())
+
+        assertEquals(
+            listOf(
+                MarkdownColumnAlignment.LEFT,
+                MarkdownColumnAlignment.RIGHT,
+                MarkdownColumnAlignment.CENTER,
+                MarkdownColumnAlignment.RIGHT,
+            ),
+            table.alignments,
+        )
     }
 }

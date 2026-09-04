@@ -92,5 +92,6 @@ class PromptRunner(
         ResponseMode.UNRESTRICTED -> listOf(ResponseVariant.UNRESTRICTED)
         ResponseMode.REASONING -> error("Reasoning mode must be handled by ReasoningRunner")
         ResponseMode.TEMPERATURE -> error("Temperature mode must be handled by TemperatureRunner")
+        ResponseMode.MODEL_COMPARISON -> error("Model comparison mode must be handled by ModelComparisonRunner")
     }
 }

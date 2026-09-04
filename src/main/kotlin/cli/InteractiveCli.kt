@@ -131,6 +131,10 @@ class InteractiveCli(
                 executeTemperature(prompt)
                 return
             }
+            if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
+                terminal.println("Режим сравнения моделей доступен в desktop-приложении.")
+                return
+            }
 
             val responses = promptRunner.complete(prompt, settings)
             responses.forEach { response ->
@@ -267,6 +271,10 @@ class InteractiveCli(
         val mode = ResponseMode.from(value)
         if (mode == null) {
             terminal.println("Использование: /mode compare|controlled|unrestricted|reasoning|temperature")
+            return
+        }
+        if (mode == ResponseMode.MODEL_COMPARISON) {
+            terminal.println("Режим сравнения моделей доступен в desktop-приложении.")
             return
         }
 

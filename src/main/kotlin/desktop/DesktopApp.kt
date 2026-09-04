@@ -18,6 +18,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -105,7 +106,14 @@ private fun AppHeader(settings: AppSettings, isRunning: Boolean) {
                 color = Muted,
                 fontSize = 13.sp,
             )
-            Text("${settings.llmKind.displayName()} · ${settings.model}", fontWeight = FontWeight.Medium)
+            Text(
+                if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
+                    "OpenAI · Luna / Terra / Sol"
+                } else {
+                    "${settings.llmKind.displayName()} · ${settings.model}"
+                },
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }
@@ -124,6 +132,7 @@ private fun SettingsPanel(
     val settings = state.settings
     var apiKeyDraft by remember(settings.llmKind) { mutableStateOf("") }
     val scrollState = rememberScrollState()
+    val connectionSelectionEnabled = enabled && settings.responseMode != ResponseMode.MODEL_COMPARISON
 
     Column(
         Modifier.width(320.dp).fillMaxHeight().background(SidebarBackground)
@@ -135,7 +144,7 @@ private fun SettingsPanel(
             label = "Провайдер",
             selected = settings.llmKind.displayName(),
             options = LlmKind.entries.map { it to it.displayName() },
-            enabled = enabled,
+            enabled = connectionSelectionEnabled,
             onSelected = { kind -> onUpdateSettings { it.copy(llmKind = kind) } },
         )
         val configuredModel = LlmModel(settings.model, settings.model)
@@ -144,7 +153,7 @@ private fun SettingsPanel(
             label = "Модель",
             selected = models.first { it.id == settings.model }.displayName,
             options = models.map { it.id to it.displayName },
-            enabled = enabled,
+            enabled = connectionSelectionEnabled,
             onSelected = onUpdateModel,
         )
         OutlinedTextField(
@@ -184,52 +193,83 @@ private fun SettingsPanel(
             selected = settings.responseMode.title(),
             options = ResponseMode.entries.map { it to it.title() },
             enabled = enabled,
-            onSelected = { mode -> onUpdateSettings { it.copy(responseMode = mode) } },
+            onSelected = { mode ->
+                onUpdateSettings {
+                    if (mode == ResponseMode.MODEL_COMPARISON) {
+                        it.copy(
+                            responseMode = mode,
+                            llmKind = LlmKind.OPENAI,
+                            maxTokens = maxOf(it.maxTokens, 1_000),
+                        )
+                    } else {
+                        it.copy(responseMode = mode)
+                    }
+                }
+            },
         )
+        if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
+            Text(
+                "Один промпт будет последовательно отправлен GPT-5.6 Luna, Terra и Sol. " +
+                    "Нужен ключ OpenAI; выбранная одиночная модель не используется.",
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+        }
         NumericSetting("Максимум токенов", settings.maxTokens, enabled) { value ->
             onUpdateSettings { it.copy(maxTokens = value) }
         }
-        NumericSetting("Максимум слов", settings.maxWords, enabled) { value ->
-            onUpdateSettings { it.copy(maxWords = value) }
-        }
-        NumericSetting("Пунктов в списке", settings.bulletCount, enabled) { value ->
-            onUpdateSettings { it.copy(bulletCount = value) }
-        }
-
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("История диалога", fontWeight = FontWeight.Medium)
-                val turns = state.historyTurnCounts.values.sum()
-                Text("Сохранено ходов: $turns", color = Muted, fontSize = 12.sp)
+        if (settings.responseMode != ResponseMode.MODEL_COMPARISON) {
+            NumericSetting("Максимум слов", settings.maxWords, enabled) { value ->
+                onUpdateSettings { it.copy(maxWords = value) }
             }
-            Switch(
-                checked = settings.historyEnabled,
-                onCheckedChange = { enabledValue ->
-                    onUpdateSettings { it.copy(historyEnabled = enabledValue) }
-                },
-                enabled = enabled,
-            )
-        }
-        OutlinedButton(onClick = onClearHistory, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
-            Text("Очистить историю")
-        }
-
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = settings.stopSequence != null,
-                onCheckedChange = { checked ->
-                    onUpdateSettings {
-                        it.copy(stopSequence = if (checked) org.example.app.DEFAULT_STOP_SEQUENCE else null)
-                    }
-                },
-                enabled = enabled,
-            )
-            Text("Использовать stop sequence", fontSize = 13.sp)
-        }
-        if (settings.stopSequence != null) {
-            StopSequenceSetting(settings.stopSequence.orEmpty(), enabled) { value ->
-                onUpdateSettings { it.copy(stopSequence = value) }
+            NumericSetting("Пунктов в списке", settings.bulletCount, enabled) { value ->
+                onUpdateSettings { it.copy(bulletCount = value) }
             }
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("История диалога", fontWeight = FontWeight.Medium)
+                    val turns = state.historyTurnCounts.values.sum()
+                    Text("Сохранено ходов: $turns", color = Muted, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = settings.historyEnabled,
+                    onCheckedChange = { enabledValue ->
+                        onUpdateSettings { it.copy(historyEnabled = enabledValue) }
+                    },
+                    enabled = enabled,
+                )
+            }
+            OutlinedButton(onClick = onClearHistory, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+                Text("Очистить историю")
+            }
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = settings.stopSequence != null,
+                    onCheckedChange = { checked ->
+                        onUpdateSettings {
+                            it.copy(stopSequence = if (checked) org.example.app.DEFAULT_STOP_SEQUENCE else null)
+                        }
+                    },
+                    enabled = enabled,
+                )
+                Text("Использовать stop sequence", fontSize = 13.sp)
+            }
+            if (settings.stopSequence != null) {
+                StopSequenceSetting(settings.stopSequence.orEmpty(), enabled) { value ->
+                    onUpdateSettings { it.copy(stopSequence = value) }
+                }
+            }
+        } else {
+            Text(
+                "Запросы независимы и не используют историю. После трёх ответов Sol " +
+                    "выполнит слепую автооценку качества. Тарифы учтены на $MODEL_PRICE_DATE.",
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
         }
 
         Divider()
@@ -338,7 +378,9 @@ private fun ExchangeView(exchange: ConversationExchange) {
         }
         Card(backgroundColor = Color(0xFFEEF1FF), elevation = 0.dp, shape = RoundedCornerShape(12.dp)) {
             SelectionContainer {
-                Text(exchange.prompt, Modifier.padding(16.dp), lineHeight = 21.sp)
+                Box(Modifier.padding(16.dp)) {
+                    MarkdownBody(exchange.prompt)
+                }
             }
         }
         when (val outcome = exchange.outcome) {
@@ -368,8 +410,144 @@ private fun ResultView(result: RequestResult) {
 
         is RequestResult.Reasoning -> ReasoningView(result.report)
         is RequestResult.Temperature -> TemperatureView(result.report)
+        is RequestResult.ModelComparison -> ModelComparisonView(result.report)
     }
 }
+
+@Composable
+private fun ModelComparisonView(report: ModelComparisonReport) {
+    Text("Сравнение моделей GPT-5.6", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    Text(
+        "A/B/C — обозначения, переданные слепому оценщику; запросы выполнены последовательно.",
+        color = Muted,
+        fontSize = 12.sp,
+    )
+    Spacer(Modifier.height(8.dp))
+    ResponsiveCards(report.runs) { run ->
+        when (val outcome = run.outcome) {
+            is ModelCallOutcome.Success -> ResponseCard(
+                "${run.target.answerLabel} · ${run.target.displayName.uppercase()} · ${run.target.tierLabel.uppercase()}",
+                outcome.completion.content,
+            )
+
+            is ModelCallOutcome.Failure -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "${run.target.answerLabel} · ${run.target.displayName.uppercase()}",
+                    color = Primary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                StatusCard("Ошибка модели: ${outcome.message}", Danger)
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    ModelComparisonMetricsTable(report)
+    Spacer(Modifier.height(10.dp))
+    when (val evaluation = report.evaluation?.outcome) {
+        is ModelCallOutcome.Success -> ResponseCard(
+            "СЛЕПАЯ АВТООЦЕНКА КАЧЕСТВА · GPT-5.6 SOL",
+            evaluation.completion.content,
+            accent = true,
+            renderMarkdownTables = true,
+        )
+
+        is ModelCallOutcome.Failure -> StatusCard("Автооценка не выполнена: ${evaluation.message}", Danger)
+        null -> StatusCard("Для автооценки нужны как минимум два успешных ответа.", Muted)
+    }
+    Text(
+        "Автооценка помогает сравнить ответы, но не заменяет эталон или экспертную проверку.",
+        color = Muted,
+        fontSize = 12.sp,
+    )
+}
+
+@Composable
+private fun ModelComparisonMetricsTable(report: ModelComparisonReport) {
+    val horizontal = rememberScrollState()
+    val rows = report.runs + listOfNotNull(report.evaluation)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Скорость, токены и стоимость", fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.horizontalScroll(horizontal).width(960.dp)
+                    .background(Color.White, RoundedCornerShape(10.dp)),
+            ) {
+                ModelMetricsRow(
+                    "Прогон",
+                    "Время",
+                    "Input",
+                    "Completion",
+                    "Reasoning",
+                    "Всего",
+                    "Стоимость",
+                    header = true,
+                )
+                Divider()
+                rows.forEachIndexed { index, run ->
+                    val usage = run.completion?.usage
+                    ModelMetricsRow(
+                        run = if (index < report.runs.size) {
+                            "${run.target.answerLabel} · ${run.target.displayName}"
+                        } else {
+                            "Автооценка · ${run.target.displayName}"
+                        },
+                        elapsed = formatElapsed(run.elapsedMillis),
+                        input = usage?.promptTokens?.toString() ?: "н/д",
+                        completion = usage?.completionTokens?.toString() ?: "н/д",
+                        reasoning = usage?.reasoningTokens?.toString() ?: "н/д",
+                        total = usage?.totalTokens?.toString() ?: "н/д",
+                        cost = run.estimatedCostUsd?.let(::formatUsd) ?: "н/д",
+                    )
+                    Divider(color = Color(0xFFF0F1F5))
+                }
+            }
+            HorizontalScrollbar(
+                adapter = rememberScrollbarAdapter(horizontal),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            )
+        }
+        Text(
+            "Расчётная стоимость всего эксперимента: " +
+                "${report.estimatedTotalCostUsd?.let(::formatUsd) ?: "н/д"} " +
+                "· тарифы на $MODEL_PRICE_DATE",
+            color = Muted,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+@Composable
+private fun ModelMetricsRow(
+    run: String,
+    elapsed: String,
+    input: String,
+    completion: String,
+    reasoning: String,
+    total: String,
+    cost: String,
+    header: Boolean = false,
+) {
+    Row(Modifier.width(960.dp).padding(horizontal = 12.dp, vertical = 10.dp)) {
+        val weight = if (header) FontWeight.Bold else FontWeight.Normal
+        Text(run, Modifier.weight(2.4f), fontSize = 12.sp, fontWeight = weight)
+        Text(elapsed, Modifier.weight(1f), fontSize = 12.sp, fontWeight = weight)
+        Text(input, Modifier.weight(.8f), fontSize = 12.sp, fontWeight = weight)
+        Text(completion, Modifier.weight(1f), fontSize = 12.sp, fontWeight = weight)
+        Text(reasoning, Modifier.weight(1f), fontSize = 12.sp, fontWeight = weight)
+        Text(total, Modifier.weight(.8f), fontSize = 12.sp, fontWeight = weight)
+        Text(cost, Modifier.weight(1.2f), fontSize = 12.sp, fontWeight = weight)
+    }
+}
+
+private fun formatElapsed(elapsedMillis: Long): String = if (elapsedMillis < 1_000) {
+    "$elapsedMillis мс"
+} else {
+    "%.3f с".format(java.util.Locale.ROOT, elapsedMillis / 1_000.0).replace('.', ',')
+}
+
+private fun formatUsd(value: Double): String = "$" +
+    "%.6f".format(java.util.Locale.ROOT, value).replace('.', ',')
 
 @Composable
 private fun ReasoningView(report: ReasoningReport) {
@@ -432,7 +610,6 @@ private fun ResponseCard(
     body: String,
     subtle: Boolean = false,
     accent: Boolean = false,
-    renderMarkdownTables: Boolean = false,
 ) {
     val background = when {
         accent -> Color(0xFFF0F8F4)
@@ -450,11 +627,7 @@ private fun ResponseCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, color = if (accent) Success else Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             SelectionContainer {
-                if (renderMarkdownTables) {
-                    MarkdownBody(body)
-                } else {
-                    Text(body, lineHeight = 21.sp)
-                }
+                MarkdownBody(body)
             }
         }
     }
@@ -762,4 +935,5 @@ private fun ResponseMode.title(): String = when (this) {
     ResponseMode.UNRESTRICTED -> "Без ограничений"
     ResponseMode.REASONING -> "4 способа рассуждения"
     ResponseMode.TEMPERATURE -> "Сравнение температуры"
+    ResponseMode.MODEL_COMPARISON -> "Сравнение моделей GPT-5.6"
 }

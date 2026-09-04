@@ -10,7 +10,8 @@ enum class ResponseMode(val cliValue: String) {
     CONTROLLED("controlled"),
     UNRESTRICTED("unrestricted"),
     REASONING("reasoning"),
-    TEMPERATURE("temperature");
+    TEMPERATURE("temperature"),
+    MODEL_COMPARISON("models");
 
     companion object {
         fun from(value: String): ResponseMode? = entries.firstOrNull {

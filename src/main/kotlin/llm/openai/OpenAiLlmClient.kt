@@ -16,5 +16,6 @@ class OpenAiLlmClient(
         temperatureModel = if (model == "gpt-5.6-luna") "gpt-4.1-mini" else model,
         useMaxCompletionTokens = true,
         supportsStopSequences = false,
+        supportsReasoningEffort = true,
     ),
 )
