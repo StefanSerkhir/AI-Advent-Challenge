@@ -16,6 +16,8 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -449,7 +451,6 @@ private fun ModelComparisonView(report: ModelComparisonReport) {
             "СЛЕПАЯ АВТООЦЕНКА КАЧЕСТВА · GPT-5.6 SOL",
             evaluation.completion.content,
             accent = true,
-            renderMarkdownTables = true,
         )
 
         is ModelCallOutcome.Failure -> StatusCard("Автооценка не выполнена: ${evaluation.message}", Danger)
@@ -580,7 +581,6 @@ private fun TemperatureView(report: TemperatureReport) {
         "ВЫВОДЫ ПО ИСПОЛЬЗОВАНИЮ",
         report.evaluation.content,
         accent = true,
-        renderMarkdownTables = true,
     )
 }
 
@@ -640,9 +640,49 @@ private fun MarkdownBody(body: String) {
         blocks.forEach { block ->
             when (block) {
                 is MarkdownBlock.Text -> Text(markdownAnnotatedString(block.value), lineHeight = 21.sp)
+                is MarkdownBlock.Heading -> MarkdownHeading(block)
+                is MarkdownBlock.Formula -> MarkdownFormula(block)
                 is MarkdownBlock.Table -> MarkdownTable(block)
             }
         }
+    }
+}
+
+@Composable
+private fun MarkdownHeading(heading: MarkdownBlock.Heading) {
+    val fontSize = when (heading.level) {
+        1 -> 24.sp
+        2 -> 21.sp
+        3 -> 18.sp
+        4 -> 16.sp
+        else -> 14.sp
+    }
+    Text(
+        markdownAnnotatedString(heading.value),
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.3f,
+        fontWeight = if (heading.level <= 2) FontWeight.Bold else FontWeight.SemiBold,
+    )
+}
+
+@Composable
+private fun MarkdownFormula(formula: MarkdownBlock.Formula) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFFF8F9FC),
+        elevation = 0.dp,
+        border = BorderStroke(1.dp, Color(0xFFE2E6F0)),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(
+            formula.value,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            fontFamily = FontFamily.Serif,
+            fontStyle = FontStyle.Italic,
+            fontSize = 17.sp,
+            lineHeight = 24.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -656,8 +696,8 @@ private fun MarkdownTable(table: MarkdownBlock.Table) {
         Column(
             Modifier.horizontalScroll(horizontal).width(tableWidth).padding(bottom = 10.dp),
         ) {
-            MarkdownTableRow(table.headers, columnWidths, header = true)
-            table.rows.forEach { row -> MarkdownTableRow(row, columnWidths) }
+            MarkdownTableRow(table.headers, columnWidths, table.alignments, header = true)
+            table.rows.forEach { row -> MarkdownTableRow(row, columnWidths, table.alignments) }
         }
         HorizontalScrollbar(
             adapter = rememberScrollbarAdapter(horizontal),
@@ -667,7 +707,12 @@ private fun MarkdownTable(table: MarkdownBlock.Table) {
 }
 
 @Composable
-private fun MarkdownTableRow(cells: List<String>, columnWidths: List<androidx.compose.ui.unit.Dp>, header: Boolean = false) {
+private fun MarkdownTableRow(
+    cells: List<String>,
+    columnWidths: List<androidx.compose.ui.unit.Dp>,
+    alignments: List<MarkdownColumnAlignment>,
+    header: Boolean = false,
+) {
     Row(Modifier.height(IntrinsicSize.Min)) {
         cells.forEachIndexed { index, cell ->
             Box(
@@ -678,13 +723,21 @@ private fun MarkdownTableRow(cells: List<String>, columnWidths: List<androidx.co
             ) {
                 Text(
                     markdownAnnotatedString(cell),
+                    modifier = Modifier.fillMaxWidth(),
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                     fontWeight = if (header) FontWeight.Bold else FontWeight.Normal,
+                    textAlign = alignments[index].textAlign(),
                 )
             }
         }
     }
+}
+
+private fun MarkdownColumnAlignment.textAlign(): TextAlign = when (this) {
+    MarkdownColumnAlignment.LEFT -> TextAlign.Start
+    MarkdownColumnAlignment.CENTER -> TextAlign.Center
+    MarkdownColumnAlignment.RIGHT -> TextAlign.End
 }
 
 private fun markdownColumnWidths(table: MarkdownBlock.Table): List<androidx.compose.ui.unit.Dp> =

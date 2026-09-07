@@ -73,4 +73,48 @@ class MarkdownBlocksTest {
             table.alignments,
         )
     }
+
+    @Test
+    fun `parses heading without hash markers`() {
+        val block = parseMarkdownBlocks(
+            "## 1–5. Оптимальный план при ограничении B→Пермь ≤ 30",
+        ).single()
+
+        assertEquals(
+            MarkdownBlock.Heading(
+                level = 2,
+                value = "1–5. Оптимальный план при ограничении B→Пермь ≤ 30",
+            ),
+            block,
+        )
+    }
+
+    @Test
+    fun `parses and normalizes bracketed and dollar formulas`() {
+        val markdown = """
+            До формулы.
+
+            \[
+            620-x+2y+6z=540+3y+7z.
+            \]
+
+            ${'$'}${'$'} a \le b \times 2 ${'$'}${'$'}
+        """.trimIndent()
+
+        val blocks = parseMarkdownBlocks(markdown)
+
+        assertEquals("До формулы.", assertIs<MarkdownBlock.Text>(blocks[0]).value)
+        assertEquals(
+            "620−x+2y+6z=540+3y+7z.",
+            assertIs<MarkdownBlock.Formula>(blocks[1]).value,
+        )
+        assertEquals("a ≤ b × 2", assertIs<MarkdownBlock.Formula>(blocks[2]).value)
+    }
+
+    @Test
+    fun `preserves an unclosed formula fence as text`() {
+        val markdown = "Текст\n\\[\nформула без конца"
+
+        assertEquals(listOf(MarkdownBlock.Text(markdown)), parseMarkdownBlocks(markdown))
+    }
 }

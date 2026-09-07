@@ -3,6 +3,13 @@ package org.example.desktop
 internal sealed interface MarkdownBlock {
     data class Text(val value: String) : MarkdownBlock
 
+    data class Heading(
+        val level: Int,
+        val value: String,
+    ) : MarkdownBlock
+
+    data class Formula(val value: String) : MarkdownBlock
+
     data class Table(
         val headers: List<String>,
         val rows: List<List<String>>,
@@ -17,11 +24,10 @@ internal enum class MarkdownColumnAlignment {
 }
 
 /**
- * Splits model output into plain text and GitHub-style Markdown tables.
+ * Splits user prompts and model output into plain text and GitHub-style Markdown tables.
  *
- * This is intentionally a small parser: the desktop UI only needs to turn the
- * tabular evaluation returned by the temperature experiment into native Compose
- * cells. Everything outside a valid table is preserved as text.
+ * This is intentionally a small parser: the desktop UI turns tables into native
+ * Compose cells while preserving everything outside a valid table as text.
  */
 internal fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
     val lines = markdown.replace("\r\n", "\n").replace('\r', '\n').lines()
@@ -36,6 +42,44 @@ internal fun parseMarkdownBlocks(markdown: String): List<MarkdownBlock> {
 
     var index = 0
     while (index < lines.size) {
+        val trimmedLine = lines[index].trim()
+        val heading = MARKDOWN_HEADING.matchEntire(trimmedLine)
+        if (heading != null) {
+            flushText()
+            blocks += MarkdownBlock.Heading(
+                level = heading.groupValues[1].length,
+                value = normalizeMarkdownText(heading.groupValues[2].trim()),
+            )
+            index++
+            continue
+        }
+
+        val inlineFormula = parseInlineFormula(trimmedLine)
+        if (inlineFormula != null) {
+            flushText()
+            blocks += MarkdownBlock.Formula(normalizeLatexFormula(inlineFormula))
+            index++
+            continue
+        }
+
+        val formulaClosingFence = when (trimmedLine) {
+            "\\[" -> "\\]"
+            "$$" -> "$$"
+            else -> null
+        }
+        if (formulaClosingFence != null) {
+            val closingIndex = (index + 1 until lines.size).firstOrNull {
+                lines[it].trim() == formulaClosingFence
+            }
+            if (closingIndex != null) {
+                flushText()
+                val formula = lines.subList(index + 1, closingIndex).joinToString("\n")
+                blocks += MarkdownBlock.Formula(normalizeLatexFormula(formula))
+                index = closingIndex + 1
+                continue
+            }
+        }
+
         val headers = parseMarkdownRow(lines[index])
         val separators = lines.getOrNull(index + 1)?.let(::parseMarkdownRow)
         val startsTable = headers != null &&
@@ -74,6 +118,46 @@ internal fun normalizeMarkdownText(value: String): String = value
     .replace(MARKDOWN_LINE_BREAK, "\n")
     .replace("\\_", "_")
 
+internal fun normalizeLatexFormula(value: String): String {
+    var normalized = value
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .lines()
+        .joinToString(" ") { it.trim() }
+        .replace(Regex("""\\(?:begin|end)\{(?:aligned|align\*?|equation\*?)}"""), "")
+        .replace("\\left", "")
+        .replace("\\right", "")
+        .replace("\\times", "×")
+        .replace("\\cdot", "·")
+        .replace("\\leq", "≤")
+        .replace("\\le", "≤")
+        .replace("\\geq", "≥")
+        .replace("\\ge", "≥")
+        .replace("\\neq", "≠")
+        .replace("\\approx", "≈")
+        .replace("\\rightarrow", "→")
+        .replace("\\to", "→")
+        .replace("\\pm", "±")
+        .replace("\\infty", "∞")
+        .replace("\\quad", " ")
+        .replace("\\;", " ")
+        .replace("\\,", " ")
+        .replace("&", "")
+
+    normalized = LATEX_TEXT.replace(normalized) { it.groupValues[1] }
+    while (LATEX_FRACTION.containsMatchIn(normalized)) {
+        normalized = LATEX_FRACTION.replace(normalized) {
+            "(${it.groupValues[1]})/(${it.groupValues[2]})"
+        }
+    }
+    normalized = LATEX_SQUARE_ROOT.replace(normalized) { "√(${it.groupValues[1]})" }
+
+    return normalized
+        .replace('-', '−')
+        .replace(Regex("[ \\t]+"), " ")
+        .trim()
+}
+
 private fun parseMarkdownRow(line: String): List<String>? {
     val trimmed = line.trim()
     if ('|' !in trimmed) return null
@@ -110,6 +194,16 @@ private fun parseMarkdownRow(line: String): List<String>? {
 
 private val MARKDOWN_TABLE_SEPARATOR = Regex("^:?-{3,}:?$")
 private val MARKDOWN_LINE_BREAK = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+private val MARKDOWN_HEADING = Regex("^(#{1,6})\\s+(.+?)\\s*#*$")
+private val LATEX_TEXT = Regex("""\\(?:text|mathrm|mathbf)\{([^{}]*)}""")
+private val LATEX_FRACTION = Regex("""\\frac\{([^{}]+)}\{([^{}]+)}""")
+private val LATEX_SQUARE_ROOT = Regex("""\\sqrt\{([^{}]+)}""")
+
+private fun parseInlineFormula(line: String): String? = when {
+    line.length > 4 && line.startsWith("\\[") && line.endsWith("\\]") -> line.substring(2, line.length - 2)
+    line.length > 4 && line.startsWith("$$") && line.endsWith("$$") -> line.substring(2, line.length - 2)
+    else -> null
+}
 
 private fun parseColumnAlignment(separator: String): MarkdownColumnAlignment = when {
     separator.startsWith(':') && separator.endsWith(':') -> MarkdownColumnAlignment.CENTER
