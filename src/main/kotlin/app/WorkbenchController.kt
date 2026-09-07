@@ -7,11 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerializationException
-import org.example.llm.LlmApiException
-import org.example.llm.LlmClient
-import org.example.llm.LlmKind
-import org.example.llm.LlmModels
-import org.example.llm.LlmMessage
+import org.example.llm.*
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -92,7 +88,7 @@ class WorkbenchController(
     private val promptRunner: PromptRunner = PromptRunner(
         onProgress = { reportProgress(it.current, it.total, it.label) },
         onResponse = {
-            addOutput(ExperimentOutput(it.variant.name, it.variant.heading, it.completion))
+            addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts()) }
         },
         clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },

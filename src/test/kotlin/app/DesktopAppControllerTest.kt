@@ -41,7 +41,7 @@ class DesktopAppControllerTest {
                     (it.operation as? OperationState.Running)?.progress?.current == 1
                 }
             }
-            assertEquals("Ответ без ограничений", (running.operation as OperationState.Running).progress.label)
+            assertEquals("Агент формирует ответ", (running.operation as OperationState.Running).progress.label)
 
             release.complete(Unit)
             controller.awaitCurrentRequest()

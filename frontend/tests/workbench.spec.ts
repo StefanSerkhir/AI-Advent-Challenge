@@ -105,6 +105,28 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
+test("prompt focus uses one clean highlight around the composer", async ({
+  page,
+}) => {
+  const prompt = page.getByRole("textbox", {
+    name: "Новый запрос",
+    exact: true,
+  });
+  const composer = page.locator(".composer");
+
+  await prompt.focus();
+
+  await expect(prompt).toBeFocused();
+  expect(await prompt.evaluate((node) => getComputedStyle(node).outlineStyle)).toBe(
+    "none",
+  );
+  await expect
+    .poll(() =>
+      composer.evaluate((node) => getComputedStyle(node).borderColor),
+    )
+    .toBe("rgb(133, 139, 217)");
+});
+
 test("all six modes, demos, history, settings, keys and keyboard shortcuts", async ({
   page,
 }) => {
@@ -190,11 +212,33 @@ test("all six modes, demos, history, settings, keys and keyboard shortcuts", asy
     await expect(
       page.getByTestId("exchange").last().getByTestId("response-card"),
     ).toHaveCount(cards);
+    if (mode === "unrestricted") {
+      const exchange = page.getByTestId("exchange").last();
+      await expect(
+        exchange
+          .getByTestId("response-card")
+          .getByText("ОТВЕТ АГЕНТА", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        exchange.getByRole("region", { name: "Метрики ответа агента" }),
+      ).toBeVisible();
+      await expect(exchange.locator(".metrics summary")).toHaveText(
+        "Метрики ответа",
+      );
+      await expect(exchange.locator(".metrics thead th").first()).toHaveText(
+        "Ответ",
+      );
+    }
     await expect(
       page
         .getByTestId("exchange")
         .last()
-        .getByRole("region", { name: "Таблица метрик" }),
+        .getByRole("region", {
+          name:
+            mode === "unrestricted"
+              ? "Метрики ответа агента"
+              : "Таблица метрик",
+        }),
     ).toBeVisible();
   }
   await setMode(page, "compare");

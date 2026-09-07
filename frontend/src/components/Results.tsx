@@ -1,26 +1,25 @@
-import { useState } from "react";
-import {
-  ActionIcon,
-  Alert,
-  Badge,
-  Button,
-  Loader,
-  Tooltip,
-} from "@mantine/core";
-import {
-  IconCheck,
-  IconCopy,
-  IconChevronDown,
-  IconChevronUp,
-  IconAlertCircle,
-  IconSparkles,
-} from "@tabler/icons-react";
-import type { Exchange, ModeInfo, Output } from "../api/types";
-import { Markdown } from "./Markdown";
+import {useState} from "react";
+import {ActionIcon, Alert, Badge, Button, Loader, Tooltip,} from "@mantine/core";
+import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
+import type {Exchange, ModeInfo, Output} from "../api/types";
+import {Markdown} from "./Markdown";
 
 const number = (n: number | null) =>
   n === null ? "—" : n.toLocaleString("ru-RU");
 const cost = (n: number | null) => (n === null ? "н/д" : `$${n.toFixed(6)}`);
+const counted = (count: number, one: string, few: string, many: string) => {
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  const word =
+    mod100 >= 11 && mod100 <= 14
+      ? many
+      : mod10 === 1
+        ? one
+        : mod10 >= 2 && mod10 <= 4
+          ? few
+          : many;
+  return `${count} ${word}`;
+};
 function ResponseCard({ output }: { output: Output }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -101,28 +100,38 @@ function ResponseCard({ output }: { output: Output }) {
 function MetricsTable({
   outputs,
   models,
+  agent,
 }: {
   outputs: Output[];
   models: boolean;
+  agent: boolean;
 }) {
   return (
     <details className="metrics" open>
       <summary>
-        Метрики{" "}
-        <span>
-          {outputs.length} {models ? "вызова" : "варианта"}
-        </span>
+        {agent ? (
+          "Метрики ответа"
+        ) : (
+          <>
+            Метрики{" "}
+            <span>
+              {models
+                ? counted(outputs.length, "вызов", "вызова", "вызовов")
+                : counted(outputs.length, "вариант", "варианта", "вариантов")}
+            </span>
+          </>
+        )}
       </summary>
       <div
         className="table-scroll"
         tabIndex={0}
         role="region"
-        aria-label="Таблица метрик"
+        aria-label={agent ? "Метрики ответа агента" : "Таблица метрик"}
       >
         <table>
           <thead>
             <tr>
-              <th>Вариант</th>
+              <th>{agent ? "Ответ" : "Вариант"}</th>
               <th>Символы</th>
               <th>Слова</th>
               {models && <th>Время, с</th>}
@@ -246,6 +255,7 @@ export function ExchangeView({
             e.mode === "models" ? [...responses, ...evaluation] : responses
           }
           models={e.mode === "models"}
+          agent={e.mode === "unrestricted"}
         />
       )}
       {evaluation.map((o) => (

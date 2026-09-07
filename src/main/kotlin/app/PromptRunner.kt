@@ -10,6 +10,7 @@ import org.example.llm.LlmMessage
 data class LabeledResponse(
     val variant: ResponseVariant,
     val completion: CompletionResult,
+    val heading: String = variant.heading,
 ) {
     val content: String
         get() = completion.content
@@ -40,9 +41,11 @@ class PromptRunner(
                 PromptProgress(
                     current = index + 1,
                     total = variants.size,
-                    label = when (variant) {
-                        ResponseVariant.UNRESTRICTED -> "Ответ без ограничений"
-                        ResponseVariant.CONTROLLED -> "Ответ с ограничениями"
+                    label = when {
+                        settings.responseMode == ResponseMode.UNRESTRICTED -> "Агент формирует ответ"
+                        variant == ResponseVariant.UNRESTRICTED -> "Ответ без ограничений"
+                        variant == ResponseVariant.CONTROLLED -> "Ответ с ограничениями"
+                        else -> error("Неизвестный вариант ответа")
                     },
                 ),
             )
@@ -83,7 +86,11 @@ class PromptRunner(
             ),
         ).completion
 
-        return LabeledResponse(variant, completion)
+        return LabeledResponse(
+            variant = variant,
+            completion = completion,
+            heading = if (settings.responseMode == ResponseMode.UNRESTRICTED) "ОТВЕТ АГЕНТА" else variant.heading,
+        )
     }
 
     private fun ResponseMode.variants(): List<ResponseVariant> = when (this) {
