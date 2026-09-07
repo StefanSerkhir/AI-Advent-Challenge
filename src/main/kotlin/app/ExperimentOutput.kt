@@ -11,6 +11,22 @@ data class ExperimentOutput(
     val kind: String = "response",
     val elapsedMillis: Long? = null,
     val estimatedCostUsd: Double? = null,
+    val streaming: Boolean = false,
+)
+
+data class ExperimentOutputDelta(
+    val id: String,
+    val title: String,
+    val content: String,
+    val kind: String = "response",
+)
+
+fun ExperimentOutputDelta.asOutput() = ExperimentOutput(
+    id = id,
+    title = title,
+    completion = CompletionResult(content, finishReason = null, usage = null),
+    kind = kind,
+    streaming = true,
 )
 
 fun ModelComparisonRun.asOutput(evaluation: Boolean = false) = ExperimentOutput(

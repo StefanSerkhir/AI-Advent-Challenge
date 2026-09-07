@@ -12,8 +12,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.sse.*
 import io.ktor.sse.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.IOException
@@ -82,7 +81,7 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             sse("/events") {
                 heartbeat { period = 15.seconds }
                 // Every new connection immediately receives a complete snapshot. Slow clients may
-                // skip intermediate snapshots; the latest one contains all completed stages.
+                // skip intermediate snapshots; the latest one contains all accumulated text.
                 api.controller.state.collect { state ->
                     send(ServerSentEvent(data = api.snapshot(state.toDto()), event = "state", id = state.revision.toString(), retry = 1500))
                 }

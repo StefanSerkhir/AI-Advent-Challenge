@@ -3,8 +3,11 @@ package org.example.web
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
-import org.example.app.*
+import org.example.app.AppSettings
+import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.llm.*
 import java.io.IOException
@@ -30,12 +33,27 @@ fun main() {
 }
 
 private class FixtureLlmClient(private val model: String) : LlmClient {
+    override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
+        val completion = complete(messages, options)
+        val chunks = if ("[[stream]]" in messages.last().content) {
+            completion.content.chunked(7)
+        } else {
+            completion.content.chunked((completion.content.length / 6).coerceAtLeast(1))
+        }
+        chunks.forEach { chunk ->
+            emit(TextDelta(chunk))
+            delay(if ("[[stream]]" in messages.last().content) 120 else 5)
+        }
+        emit(CompletionFinished(completion.finishReason, completion.usage, completion.model))
+    }
+
     override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
         val prompt = messages.last().content
         delay(if ("[[slow]]" in prompt) 2500 else 180)
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         val content = when {
+            "[[stream]]" in prompt -> "# Потоковый заголовок\n\n**Жирный текст**\n\n```kotlin\nval answer = 42\n```"
             "Составь эффективный промпт" in prompt -> "Реши задачу о 100 шкафчиках, проверь число делителей и укажи все полные квадраты."
             "независимый оценщик" in prompt -> """
                 ## Итоговая оценка

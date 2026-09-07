@@ -97,6 +97,7 @@ data class ModelComparisonProgress(
 
 class ModelComparisonRunner(
     private val onProgress: (ModelComparisonProgress) -> Unit = {},
+    private val onDelta: (ExperimentOutputDelta) -> Unit = {},
     private val onRun: (ModelComparisonRun) -> Unit = {},
     private val clientProvider: (modelId: String) -> LlmClient,
     private val errorMessage: (Throwable) -> String = { error ->
@@ -116,12 +117,21 @@ class ModelComparisonRunner(
                 ),
             )
             call(target) {
-                clientProvider(target.modelId).complete(
+                clientProvider(target.modelId).streamToCompletion(
                     prompt,
                     CompletionOptions(
                         maxTokens = maxTokens,
                         reasoningEffort = ReasoningEffort.MEDIUM,
                     ),
+                    onDelta = { content ->
+                        onDelta(
+                            ExperimentOutputDelta(
+                                target.answerLabel,
+                                "${target.answerLabel} · ${target.displayName} · ${target.tierLabel}",
+                                content,
+                            ),
+                        )
+                    },
                 )
             }.also(onRun)
         }
@@ -136,12 +146,22 @@ class ModelComparisonRunner(
                 ),
             )
             call(evaluator) {
-                clientProvider(evaluator.modelId).complete(
+                clientProvider(evaluator.modelId).streamToCompletion(
                     modelComparisonEvaluationRequest(prompt, successfulRuns),
                     CompletionOptions(
                         maxTokens = maxTokens,
                         reasoningEffort = ReasoningEffort.MEDIUM,
                     ),
+                    onDelta = { content ->
+                        onDelta(
+                            ExperimentOutputDelta(
+                                "evaluation",
+                                "Слепая автооценка · GPT-5.6 Sol",
+                                content,
+                                "evaluation",
+                            ),
+                        )
+                    },
                 )
             }
         } else {

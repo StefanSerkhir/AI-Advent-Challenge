@@ -52,6 +52,7 @@ export interface Output {
   error: string | null;
   model: string | null;
   metrics: Metrics;
+  streaming: boolean;
 }
 export interface Exchange {
   id: number;

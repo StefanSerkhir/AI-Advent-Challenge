@@ -300,6 +300,40 @@ test("refresh during request, second tab, reconnect and cancellation do not dupl
   await tab.close();
 });
 
+test("streaming response grows through SSE, survives refresh and reveals metrics only when complete", async ({
+  page,
+}) => {
+  await setMode(page, "unrestricted");
+  await send(page, "[[stream]] Проверка настоящего потока");
+
+  const exchange = page.getByTestId("exchange").last();
+  const card = exchange.getByTestId("response-card");
+  await expect(card.getByRole("status", { name: "Ответ генерируется" })).toBeVisible();
+  const partial = await card.locator(".response-body").innerText();
+  expect(partial.length).toBeGreaterThan(0);
+  await expect
+    .poll(() => card.locator(".response-body").innerText())
+    .not.toHaveLength(partial.length);
+  await expect(exchange.locator(".metrics")).toHaveCount(0);
+
+  await page.reload();
+  const restored = page.getByTestId("exchange").last();
+  await expect(restored.getByTestId("response-card")).toContainText("Поток");
+  await expect(
+    restored.getByRole("status", { name: "Ответ генерируется" }),
+  ).toBeVisible();
+  await expect(restored.locator(".metrics")).toHaveCount(0);
+
+  await done(page);
+  const completed = page.getByTestId("exchange").last();
+  await expect(
+    completed.getByRole("status", { name: "Ответ генерируется" }),
+  ).toHaveCount(0);
+  await expect(completed.locator("strong")).toContainText("Жирный текст");
+  await expect(completed.locator("pre")).toContainText("val answer = 42");
+  await expect(completed.locator(".metrics")).toBeVisible();
+});
+
 test("lost POST reply safely retries the same operation; network and individual model errors recover", async ({
   page,
 }) => {

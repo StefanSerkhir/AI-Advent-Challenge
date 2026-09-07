@@ -24,6 +24,7 @@ data class PromptProgress(
 
 class PromptRunner(
     private val onProgress: (PromptProgress) -> Unit = {},
+    private val onDelta: (ExperimentOutputDelta) -> Unit = {},
     private val onResponse: (LabeledResponse) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
@@ -78,18 +79,20 @@ class PromptRunner(
                 stopSequences = settings.stopSequence?.let(::listOf).orEmpty(),
             )
         }
+        val heading = if (settings.responseMode == ResponseMode.UNRESTRICTED) "ОТВЕТ АГЕНТА" else variant.heading
         val completion = agents.getValue(variant).respond(
             AgentRequest(
                 prompt = requestPrompt,
                 options = options,
                 historyEnabled = settings.historyEnabled,
             ),
+            onDelta = { content -> onDelta(ExperimentOutputDelta(variant.name, heading, content)) },
         ).completion
 
         return LabeledResponse(
             variant = variant,
             completion = completion,
-            heading = if (settings.responseMode == ResponseMode.UNRESTRICTED) "ОТВЕТ АГЕНТА" else variant.heading,
+            heading = heading,
         )
     }
 

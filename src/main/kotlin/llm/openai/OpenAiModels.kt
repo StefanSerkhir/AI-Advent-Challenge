@@ -18,6 +18,15 @@ data class ChatCompletionRequest(
     val temperature: Double? = null,
     @SerialName("reasoning_effort")
     val reasoningEffort: String? = null,
+    val stream: Boolean? = null,
+    @SerialName("stream_options")
+    val streamOptions: ChatCompletionStreamOptions? = null,
+)
+
+@Serializable
+data class ChatCompletionStreamOptions(
+    @SerialName("include_usage")
+    val includeUsage: Boolean = true,
 )
 
 @Serializable
@@ -32,6 +41,25 @@ data class ChatCompletionResponse(
     val choices: List<ChatChoice>,
     val usage: ChatTokenUsage? = null,
     val model: String? = null,
+)
+
+@Serializable
+data class ChatCompletionChunk(
+    val choices: List<ChatChunkChoice> = emptyList(),
+    val usage: ChatTokenUsage? = null,
+    val model: String? = null,
+)
+
+@Serializable
+data class ChatChunkChoice(
+    val delta: ChatMessageDelta = ChatMessageDelta(),
+    @SerialName("finish_reason")
+    val finishReason: String? = null,
+)
+
+@Serializable
+data class ChatMessageDelta(
+    val content: String? = null,
 )
 
 @Serializable

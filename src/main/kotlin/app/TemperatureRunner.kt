@@ -3,6 +3,7 @@ package org.example.app
 import org.example.llm.CompletionOptions
 import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
+import org.example.llm.streamToCompletion
 
 val TEMPERATURE_VALUES = listOf(0.0, 0.7, 1.2)
 const val TOTAL_TEMPERATURE_API_CALLS = 4
@@ -36,6 +37,7 @@ data class TemperatureProgress(
 
 class TemperatureRunner(
     private val onProgress: (TemperatureProgress) -> Unit = {},
+    private val onDelta: (ExperimentOutputDelta) -> Unit = {},
     private val onSample: (TemperatureSample) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
@@ -51,9 +53,18 @@ class TemperatureRunner(
             )
             TemperatureSample(
                 temperature = temperature,
-                completion = client.complete(
+                completion = client.streamToCompletion(
                     prompt,
                     CompletionOptions(temperature = temperature),
+                    onDelta = { content ->
+                        onDelta(
+                            ExperimentOutputDelta(
+                                "t$temperature",
+                                "Temperature = ${temperature.label()}",
+                                content,
+                            ),
+                        )
+                    },
                 ),
             ).also(onSample)
         }
@@ -64,9 +75,12 @@ class TemperatureRunner(
                 label = "Оценка точности, креативности и разнообразия",
             ),
         )
-        val evaluation = client.complete(
+        val evaluation = client.streamToCompletion(
             temperatureEvaluationRequest(prompt, samples),
             CompletionOptions(temperature = 0.0),
+            onDelta = { content ->
+                onDelta(ExperimentOutputDelta("evaluation", "Выводы по использованию", content, "evaluation"))
+            },
         )
 
         return TemperatureReport(prompt, samples, evaluation)

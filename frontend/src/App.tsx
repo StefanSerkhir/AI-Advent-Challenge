@@ -1,32 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import {useEffect, useRef, useState} from "react";
+import {ActionIcon, Alert, Badge, Button, Drawer, Group, Loader, Progress, Textarea, Tooltip,} from "@mantine/core";
 import {
-  ActionIcon,
-  Alert,
-  Badge,
-  Button,
-  Drawer,
-  Group,
-  Loader,
-  Progress,
-  Textarea,
-  Tooltip,
-} from "@mantine/core";
-import {
-  IconArrowDown,
-  IconArrowUp,
-  IconBolt,
-  IconLayoutColumns,
-  IconMenu2,
-  IconMessage,
-  IconPlayerStop,
-  IconRefresh,
-  IconSparkles,
-  IconTrash,
-  IconWifiOff,
+    IconArrowDown,
+    IconArrowUp,
+    IconBolt,
+    IconLayoutColumns,
+    IconMenu2,
+    IconMessage,
+    IconPlayerStop,
+    IconRefresh,
+    IconSparkles,
+    IconTrash,
+    IconWifiOff,
 } from "@tabler/icons-react";
-import { useWorkbench } from "./state/useWorkbench";
-import { Sidebar } from "./components/Sidebar";
-import { ExchangeView } from "./components/Results";
+import {useWorkbench} from "./state/useWorkbench";
+import {Sidebar} from "./components/Sidebar";
+import {ExchangeView} from "./components/Results";
 
 export default function App() {
   const w = useWorkbench();
@@ -43,9 +32,10 @@ export default function App() {
     });
   const lastId = s?.exchanges.at(-1)?.id;
   const count = s?.exchanges.at(-1)?.outputs.length;
+  const streamedLength = s?.exchanges.at(-1)?.outputs.at(-1)?.content?.length;
   useEffect(() => {
     if (atBottom) scrollDown();
-  }, [lastId, count, s?.operation?.progress.current]); // Keep position when reading previous answers.
+  }, [lastId, count, streamedLength, s?.operation?.progress.current]); // Keep position when reading previous answers.
   const locked = !!s?.operation || w.working || !w.connected || w.uncertain;
   const send = async () => {
     if (locked || !prompt.trim()) return;

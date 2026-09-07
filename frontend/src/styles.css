@@ -603,6 +603,26 @@ button {
   overflow: hidden;
   mask-image: linear-gradient(to bottom, black 80%, transparent);
 }
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 3px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: -0.18em;
+  animation: streaming-cursor-blink 0.9s steps(1, end) infinite;
+}
+@keyframes streaming-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .streaming-cursor {
+    animation: none;
+  }
+}
 .generated-prompt {
   font-size: 11px;
   color: #6f7590;

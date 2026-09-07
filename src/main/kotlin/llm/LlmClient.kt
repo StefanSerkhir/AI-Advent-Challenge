@@ -1,5 +1,8 @@
 package org.example.llm
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+
 interface LlmClient {
     suspend fun complete(
         messages: List<LlmMessage>,
@@ -13,7 +16,82 @@ interface LlmClient {
         messages = listOf(LlmMessage(LlmRole.USER, prompt)),
         options = options,
     )
+
+    /**
+     * Streams a completion as it is produced by the provider.
+     *
+     * The default keeps simple adapters source-compatible. Production clients should override
+     * this method so [TextDelta] values arrive before the complete response is available.
+     */
+    fun stream(
+        messages: List<LlmMessage>,
+        options: CompletionOptions = CompletionOptions(),
+    ): Flow<CompletionEvent> = flow {
+        val completion = complete(messages, options)
+        if (completion.content.isNotEmpty()) emit(TextDelta(completion.content))
+        emit(
+            CompletionFinished(
+                finishReason = completion.finishReason,
+                usage = completion.usage,
+                model = completion.model,
+            ),
+        )
+    }
+
+    fun stream(
+        prompt: String,
+        options: CompletionOptions = CompletionOptions(),
+    ): Flow<CompletionEvent> = stream(
+        messages = listOf(LlmMessage(LlmRole.USER, prompt)),
+        options = options,
+    )
 }
+
+sealed interface CompletionEvent
+
+data class TextDelta(val text: String) : CompletionEvent
+
+data class CompletionFinished(
+    val finishReason: String?,
+    val usage: TokenUsage?,
+    val model: String? = null,
+) : CompletionEvent
+
+suspend fun LlmClient.streamToCompletion(
+    messages: List<LlmMessage>,
+    options: CompletionOptions = CompletionOptions(),
+    onDelta: (accumulatedText: String) -> Unit = {},
+): CompletionResult {
+    val answer = StringBuilder()
+    var finished: CompletionFinished? = null
+    stream(messages, options).collect { event ->
+        when (event) {
+            is TextDelta -> {
+                answer.append(event.text)
+                onDelta(answer.toString())
+            }
+            is CompletionFinished -> finished = event
+        }
+    }
+    val metadata = finished
+        ?: throw LlmApiException("провайдер завершил поток без финального события")
+    return CompletionResult(
+        content = answer.toString(),
+        finishReason = metadata.finishReason,
+        usage = metadata.usage,
+        model = metadata.model,
+    )
+}
+
+suspend fun LlmClient.streamToCompletion(
+    prompt: String,
+    options: CompletionOptions = CompletionOptions(),
+    onDelta: (accumulatedText: String) -> Unit = {},
+): CompletionResult = streamToCompletion(
+    messages = listOf(LlmMessage(LlmRole.USER, prompt)),
+    options = options,
+    onDelta = onDelta,
+)
 
 data class CompletionResult(
     val content: String,

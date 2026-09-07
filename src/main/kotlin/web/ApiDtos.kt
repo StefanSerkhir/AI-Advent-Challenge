@@ -49,7 +49,7 @@ data class MetricsDto(
 @Serializable
 data class OutputDto(
     val id: String, val title: String, val kind: String, val content: String?,
-    val error: String?, val model: String?, val metrics: MetricsDto,
+    val error: String?, val model: String?, val metrics: MetricsDto, val streaming: Boolean,
 )
 @Serializable
 data class ExchangeDto(
@@ -106,11 +106,11 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                 val completion = output.completion
                 val text = completion?.content
                 val usage = completion?.usage
-                val metrics = completion?.metrics(output.title)
+                val metrics = completion?.takeUnless { output.streaming }?.metrics(output.title)
                 OutputDto(output.id, output.title, output.kind, text, output.error, completion?.model,
                     MetricsDto(metrics?.characterCount, metrics?.wordCount,
                         metrics?.completionTokens, metrics?.finishReason, usage?.promptTokens, usage?.reasoningTokens,
-                        usage?.totalTokens, output.elapsedMillis, output.estimatedCostUsd))
+                        usage?.totalTokens, output.elapsedMillis, output.estimatedCostUsd), output.streaming)
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null)
     },

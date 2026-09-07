@@ -24,7 +24,7 @@ function ResponseCard({ output }: { output: Output }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const long = (output.content?.length ?? 0) > 1800;
+  const long = !output.streaming && (output.content?.length ?? 0) > 1800;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(output.content ?? "");
@@ -68,9 +68,16 @@ function ResponseCard({ output }: { output: Output }) {
         </Alert>
       ) : (
         <div
-          className={`response-body ${long && !expanded ? "collapsed" : ""}`}
+          className={`response-body ${long && !expanded ? "collapsed" : ""} ${output.streaming ? "streaming" : ""}`}
         >
           <Markdown>{output.content ?? ""}</Markdown>
+          {output.streaming && (
+            <span
+              className="streaming-cursor"
+              aria-label="Ответ генерируется"
+              role="status"
+            />
+          )}
         </div>
       )}
       {long && (
@@ -249,7 +256,7 @@ export function ExchangeView({
           <ResponseCard output={o} key={o.id} />
         ))}
       </div>
-      {responses.length > 0 && (
+      {responses.length > 0 && e.status !== "pending" && (
         <MetricsTable
           outputs={
             e.mode === "models" ? [...responses, ...evaluation] : responses

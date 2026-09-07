@@ -6,6 +6,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.example.llm.*
@@ -13,6 +14,62 @@ import org.example.llm.deepseek.DeepSeekLlmClient
 import kotlin.test.*
 
 class OpenAiCompatibleLlmClientTest {
+    @Test
+    fun `stream sends streaming options and emits text deltas before final metadata`() = runBlocking {
+        lateinit var request: JsonObject
+        val http = HttpClient(MockEngine { captured ->
+            request = Json.parseToJsonElement((captured.body as TextContent).text).jsonObject
+            respond(
+                content = """
+                    data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"# Заг"},"finish_reason":null}]}
+
+                    data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"content":"оловок"},"finish_reason":null}]}
+
+                    data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+                    data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"gpt-test","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":1}}}
+
+                    data: [DONE]
+
+                """.trimIndent(),
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
+            )
+        }) { install(ContentNegotiation) { json() } }
+        try {
+            val events = OpenAiLlmClient("fake-key", http, "gpt-test")
+                .stream("Привет")
+                .toList()
+
+            assertEquals(true, request["stream"]?.jsonPrimitive?.boolean)
+            assertEquals(true, request["stream_options"]?.jsonObject?.get("include_usage")?.jsonPrimitive?.boolean)
+            assertEquals(listOf("# Заг", "оловок"), events.filterIsInstance<TextDelta>().map { it.text })
+            val finished = assertIs<CompletionFinished>(events.last())
+            assertEquals("stop", finished.finishReason)
+            assertEquals("gpt-test", finished.model)
+            assertEquals(TokenUsage(7, 3, 10, cachedPromptTokens = 2, reasoningTokens = 1), finished.usage)
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
+    fun `stream rejects an SSE response that ends without done`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                content = "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"часть\"}}]}\n\n",
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
+            )
+        }) { install(ContentNegotiation) { json() } }
+        try {
+            val error = assertFailsWith<LlmApiException> {
+                OpenAiLlmClient("fake-key", http).stream("Привет").toList()
+            }
+            assertContains(error.message.orEmpty(), "оборвался")
+        } finally {
+            http.close()
+        }
+    }
+
     @Test
     fun `real provider adapters preserve fallback stop and reasoning request parameters`() = runBlocking {
         val requests = mutableListOf<JsonObject>()

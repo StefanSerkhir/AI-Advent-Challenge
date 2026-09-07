@@ -23,7 +23,10 @@ data class AgentResponse(
  * The UI and use cases depend on this contract instead of invoking an LLM API client directly.
  */
 interface Agent {
-    suspend fun respond(request: AgentRequest): AgentResponse
+    suspend fun respond(
+        request: AgentRequest,
+        onDelta: (accumulatedText: String) -> Unit = {},
+    ): AgentResponse
 }
 
 /**
@@ -38,13 +41,16 @@ class LlmAgent(
 ) : Agent {
     private val history = mutableListOf<LlmMessage>()
 
-    override suspend fun respond(request: AgentRequest): AgentResponse {
+    override suspend fun respond(
+        request: AgentRequest,
+        onDelta: (accumulatedText: String) -> Unit,
+    ): AgentResponse {
         val prompt = request.prompt.trim()
         require(prompt.isNotEmpty()) { "Запрос агенту не может быть пустым." }
 
         val userMessage = LlmMessage(LlmRole.USER, prompt)
         val messages = if (request.historyEnabled) history.toList() + userMessage else listOf(userMessage)
-        val completion = clientProvider().complete(messages, request.options)
+        val completion = clientProvider().streamToCompletion(messages, request.options, onDelta)
 
         if (request.historyEnabled) {
             history += userMessage

@@ -2,6 +2,7 @@ package org.example.app
 
 import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
+import org.example.llm.streamToCompletion
 
 const val DEMO_REASONING_TASK = """
 Есть 100 закрытых шкафчиков. Сначала человек №1 меняет состояние каждого
@@ -52,6 +53,7 @@ const val TOTAL_REASONING_API_CALLS = 6
 
 class ReasoningRunner(
     private val onProgress: (ReasoningProgress) -> Unit = {},
+    private val onDelta: (ExperimentOutputDelta) -> Unit = {},
     private val onSolution: (ReasoningSolution) -> Unit = {},
     private val onGeneratedPrompt: (CompletionResult) -> Unit = {},
     private val clientProvider: () -> LlmClient,
@@ -64,15 +66,28 @@ class ReasoningRunner(
         val client = clientProvider()
 
         // У каждого способа независимый контекст. Прямой прогон получает ровно текст задачи.
-        val direct = completeStage(client, 1, "Прямой ответ", task).also { onSolution(ReasoningSolution(ReasoningVariant.DIRECT, it)) }
-        val stepByStep = completeStage(client, 2, "Пошаговое решение", withStepByStepInstruction(task)).also { onSolution(ReasoningSolution(ReasoningVariant.STEP_BY_STEP, it)) }
+        val direct = completeStage(client, 1, "Прямой ответ", task, ReasoningVariant.DIRECT.name, ReasoningVariant.DIRECT.heading)
+            .also { onSolution(ReasoningSolution(ReasoningVariant.DIRECT, it)) }
+        val stepByStep = completeStage(
+            client, 2, "Пошаговое решение", withStepByStepInstruction(task),
+            ReasoningVariant.STEP_BY_STEP.name, ReasoningVariant.STEP_BY_STEP.heading,
+        ).also { onSolution(ReasoningSolution(ReasoningVariant.STEP_BY_STEP, it)) }
 
-        val promptDraft = completeStage(client, 3, "Создание промпта", promptGenerationRequest(task))
+        val promptDraft = completeStage(
+            client, 3, "Создание промпта", promptGenerationRequest(task),
+            "prompt", "Сгенерированный промпт", "prompt",
+        )
         onGeneratedPrompt(promptDraft)
         val generatedPrompt = promptDraft.content.trim()
-        val generatedPromptSolution = completeStage(client, 4, "Решение по созданному промпту", generatedPrompt).also { onSolution(ReasoningSolution(ReasoningVariant.GENERATED_PROMPT, it)) }
+        val generatedPromptSolution = completeStage(
+            client, 4, "Решение по созданному промпту", generatedPrompt,
+            ReasoningVariant.GENERATED_PROMPT.name, ReasoningVariant.GENERATED_PROMPT.heading,
+        ).also { onSolution(ReasoningSolution(ReasoningVariant.GENERATED_PROMPT, it)) }
 
-        val expertPanel = completeStage(client, 5, "Группа экспертов", expertPanelRequest(task)).also { onSolution(ReasoningSolution(ReasoningVariant.EXPERT_PANEL, it)) }
+        val expertPanel = completeStage(
+            client, 5, "Группа экспертов", expertPanelRequest(task),
+            ReasoningVariant.EXPERT_PANEL.name, ReasoningVariant.EXPERT_PANEL.heading,
+        ).also { onSolution(ReasoningSolution(ReasoningVariant.EXPERT_PANEL, it)) }
 
         val solutions = listOf(
             ReasoningSolution(ReasoningVariant.DIRECT, direct),
@@ -85,6 +100,9 @@ class ReasoningRunner(
             6,
             "Сравнение и оценка точности",
             evaluationRequest(task, referenceAnswer, solutions),
+            "evaluation",
+            "Сравнение и оценка точности",
+            "evaluation",
         )
 
         return ReasoningReport(
@@ -100,9 +118,14 @@ class ReasoningRunner(
         current: Int,
         label: String,
         prompt: String,
+        outputId: String,
+        outputTitle: String,
+        outputKind: String = "response",
     ): CompletionResult {
         onProgress(ReasoningProgress(current = current, label = label))
-        return client.complete(prompt)
+        return client.streamToCompletion(prompt) { content ->
+            onDelta(ExperimentOutputDelta(outputId, outputTitle, content, outputKind))
+        }
     }
 }
 

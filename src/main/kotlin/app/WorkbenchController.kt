@@ -85,8 +85,11 @@ class WorkbenchController(
     }.toMutableMap()
     private val requestClient = AtomicReference<LlmClient?>()
     private val nextExchangeId = AtomicLong(1)
+    private val lastStreamPublishNanos = mutableMapOf<String, Long>()
+    private val latestStreamingOutputs = mutableMapOf<String, ExperimentOutput>()
     private val promptRunner: PromptRunner = PromptRunner(
         onProgress = { reportProgress(it.current, it.total, it.label) },
+        onDelta = { publishStreamingOutput(it.asOutput()) },
         onResponse = {
             addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts()) }
@@ -273,6 +276,7 @@ class WorkbenchController(
 
                     ResponseMode.REASONING -> RequestResult.Reasoning(
                         ReasoningRunner(
+                            onDelta = { publishStreamingOutput(it.asOutput()) },
                             onSolution = { addOutput(ExperimentOutput(it.variant.name, it.variant.heading, it.completion)) },
                             onGeneratedPrompt = { addOutput(ExperimentOutput("prompt", "Сгенерированный промпт", it, kind = "prompt")) },
                             onProgress = { reportProgress(it.current, it.total, it.label) },
@@ -282,6 +286,7 @@ class WorkbenchController(
 
                     ResponseMode.TEMPERATURE -> RequestResult.Temperature(
                         TemperatureRunner(
+                            onDelta = { publishStreamingOutput(it.asOutput()) },
                             onSample = { addOutput(ExperimentOutput("t${it.temperature}", "Temperature = ${it.temperature.label()}", it.completion)) },
                             onProgress = { reportProgress(it.current, it.total, it.label) },
                             clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
@@ -290,6 +295,7 @@ class WorkbenchController(
 
                     ResponseMode.MODEL_COMPARISON -> RequestResult.ModelComparison(
                         ModelComparisonRunner(
+                            onDelta = { publishStreamingOutput(it.asOutput()) },
                             onRun = { addOutput(it.asOutput()) },
                             onProgress = { reportProgress(it.current, it.total, it.label) },
                             clientProvider = { model -> clientFactory(LlmKind.OPENAI, apiKey, model) },
@@ -331,11 +337,24 @@ class WorkbenchController(
         }
     }
 
+    @Synchronized
     private fun updateExchange(id: Long, outcome: ExchangeOutcome) {
+        val latestOutputs = latestStreamingOutputs.toMap()
+        lastStreamPublishNanos.clear()
+        latestStreamingOutputs.clear()
         publish { current ->
             current.copy(
                 exchanges = current.exchanges.map { exchange ->
-                    if (exchange.id == id) exchange.copy(outcome = outcome) else exchange
+                    if (exchange.id == id) {
+                        exchange.copy(
+                            outcome = outcome,
+                            outputs = exchange.outputs.map { output ->
+                                (latestOutputs[output.id] ?: output).copy(streaming = false)
+                            },
+                        )
+                    } else {
+                        exchange
+                    }
                 },
             )
         }
@@ -343,8 +362,44 @@ class WorkbenchController(
 
     @Synchronized
     private fun addOutput(output: ExperimentOutput) {
+        lastStreamPublishNanos.remove(output.id)
+        latestStreamingOutputs.remove(output.id)
         publish { current -> current.copy(exchanges = current.exchanges.map { exchange ->
-            if (exchange.outcome == ExchangeOutcome.Pending) exchange.copy(outputs = exchange.outputs + output) else exchange
+            if (exchange.outcome == ExchangeOutcome.Pending) {
+                val index = exchange.outputs.indexOfFirst { it.id == output.id }
+                exchange.copy(
+                    outputs = if (index < 0) {
+                        exchange.outputs + output
+                    } else {
+                        exchange.outputs.toMutableList().also { it[index] = output }
+                    },
+                )
+            } else {
+                exchange
+            }
+        }) }
+    }
+
+    @Synchronized
+    private fun publishStreamingOutput(output: ExperimentOutput) {
+        latestStreamingOutputs[output.id] = output
+        val now = System.nanoTime()
+        val previous = lastStreamPublishNanos[output.id]
+        if (previous != null && now - previous < STREAM_PUBLISH_INTERVAL_NANOS) return
+        lastStreamPublishNanos[output.id] = now
+        publish { current -> current.copy(exchanges = current.exchanges.map { exchange ->
+            if (exchange.outcome == ExchangeOutcome.Pending) {
+                val index = exchange.outputs.indexOfFirst { it.id == output.id }
+                exchange.copy(
+                    outputs = if (index < 0) {
+                        exchange.outputs + output
+                    } else {
+                        exchange.outputs.toMutableList().also { it[index] = output }
+                    },
+                )
+            } else {
+                exchange
+            }
         }) }
     }
 
@@ -353,6 +408,8 @@ class WorkbenchController(
         _state.update { transform(it).copy(revision = it.revision + 1) }
     }
 }
+
+private const val STREAM_PUBLISH_INTERVAL_NANOS = 50_000_000L
 
 internal fun userFacingError(error: Throwable, secrets: Collection<String> = emptyList()): String {
     val message = when (error) {
