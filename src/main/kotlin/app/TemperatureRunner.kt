@@ -36,6 +36,7 @@ data class TemperatureProgress(
 
 class TemperatureRunner(
     private val onProgress: (TemperatureProgress) -> Unit = {},
+    private val onSample: (TemperatureSample) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
     suspend fun compare(prompt: String): TemperatureReport {
@@ -54,7 +55,7 @@ class TemperatureRunner(
                     prompt,
                     CompletionOptions(temperature = temperature),
                 ),
-            )
+            ).also(onSample)
         }
 
         onProgress(

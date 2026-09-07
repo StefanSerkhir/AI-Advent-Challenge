@@ -52,6 +52,8 @@ const val TOTAL_REASONING_API_CALLS = 6
 
 class ReasoningRunner(
     private val onProgress: (ReasoningProgress) -> Unit = {},
+    private val onSolution: (ReasoningSolution) -> Unit = {},
+    private val onGeneratedPrompt: (CompletionResult) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
     suspend fun compare(
@@ -62,14 +64,15 @@ class ReasoningRunner(
         val client = clientProvider()
 
         // У каждого способа независимый контекст. Прямой прогон получает ровно текст задачи.
-        val direct = completeStage(client, 1, "Прямой ответ", task)
-        val stepByStep = completeStage(client, 2, "Пошаговое решение", withStepByStepInstruction(task))
+        val direct = completeStage(client, 1, "Прямой ответ", task).also { onSolution(ReasoningSolution(ReasoningVariant.DIRECT, it)) }
+        val stepByStep = completeStage(client, 2, "Пошаговое решение", withStepByStepInstruction(task)).also { onSolution(ReasoningSolution(ReasoningVariant.STEP_BY_STEP, it)) }
 
         val promptDraft = completeStage(client, 3, "Создание промпта", promptGenerationRequest(task))
+        onGeneratedPrompt(promptDraft)
         val generatedPrompt = promptDraft.content.trim()
-        val generatedPromptSolution = completeStage(client, 4, "Решение по созданному промпту", generatedPrompt)
+        val generatedPromptSolution = completeStage(client, 4, "Решение по созданному промпту", generatedPrompt).also { onSolution(ReasoningSolution(ReasoningVariant.GENERATED_PROMPT, it)) }
 
-        val expertPanel = completeStage(client, 5, "Группа экспертов", expertPanelRequest(task))
+        val expertPanel = completeStage(client, 5, "Группа экспертов", expertPanelRequest(task)).also { onSolution(ReasoningSolution(ReasoningVariant.EXPERT_PANEL, it)) }
 
         val solutions = listOf(
             ReasoningSolution(ReasoningVariant.DIRECT, direct),

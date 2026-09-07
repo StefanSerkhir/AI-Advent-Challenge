@@ -1,0 +1,310 @@
+import { test, expect, type Page } from "@playwright/test";
+import type { Mode, State } from "../src/api/types";
+
+const headers = {
+  "X-Workbench-Request": "1",
+  "Content-Type": "application/json",
+};
+async function ready(page: Page) {
+  await expect(page.getByLabel("Режим ответа")).toBeEnabled();
+}
+async function setMode(page: Page, mode: Mode) {
+  await ready(page);
+  await page.getByLabel("Режим ответа").selectOption(mode);
+  await expect
+    .poll(
+      async () =>
+        ((await (await page.request.get("/api/state")).json()) as State)
+          .settings.mode,
+    )
+    .toBe(mode);
+  await ready(page);
+}
+async function send(page: Page, prompt: string, shortcut?: string) {
+  const oldCount = await page.getByTestId("exchange").count();
+  await page
+    .getByRole("textbox", { name: "Новый запрос", exact: true })
+    .fill(prompt);
+  if (shortcut)
+    await page
+      .getByRole("textbox", { name: "Новый запрос", exact: true })
+      .press(shortcut);
+  else
+    await page.getByRole("button", { name: "Отправить", exact: true }).click();
+  await expect(page.getByTestId("exchange")).toHaveCount(oldCount + 1);
+}
+async function done(page: Page) {
+  await expect(
+    page.getByTestId("exchange").last().getByText("Завершено", { exact: true }),
+  ).toBeVisible();
+  await ready(page);
+}
+
+test.beforeEach(async ({ page }) => {
+  const state: State = await (await page.request.get("/api/state")).json();
+  if (state.operation) {
+    await page.request.post(`/api/operations/${state.operation.id}/cancel`, {
+      headers,
+      data: {},
+    });
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get("/api/state")).json()).operation,
+      )
+      .toBeNull();
+  }
+  await page.request.put("/api/settings", {
+    headers,
+    data: {
+      expectedSettingsVersion: state.settingsVersion,
+      settings: {
+        ...state.settings,
+        mode: "compare",
+        provider: "OPENAI",
+        maxTokens: 300,
+        maxWords: 60,
+        bulletCount: 3,
+        historyEnabled: true,
+      },
+    },
+  });
+  await page.request.delete("/api/results", { headers, data: {} });
+  await page.request.delete("/api/history", { headers, data: {} });
+  await page.request.delete("/api/notice", { headers, data: {} });
+  await page.goto("/");
+  await ready(page);
+});
+
+test("all six modes, demos, history, settings, keys and keyboard shortcuts", async ({
+  page,
+}) => {
+  const consoleErrors: string[] = [];
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await expect(page.getByText("Хорошие ответы начинаются")).toBeVisible();
+  await page.getByLabel("Провайдер", { exact: true }).selectOption("DEEPSEEK");
+  await ready(page);
+  await expect(page.getByLabel("Модель", { exact: true })).toHaveValue(
+    "deepseek-v4-flash",
+  );
+  await page
+    .getByLabel("API-ключ", { exact: true })
+    .fill("browser-test-secret-key");
+  await page
+    .getByRole("button", { name: "Заменить ключ", exact: true })
+    .click();
+  await expect(page.getByLabel("API-ключ", { exact: true })).toHaveValue("");
+  expect(await (await page.request.get("/api/state")).text()).not.toContain(
+    "browser-test-secret-key",
+  );
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ ...localStorage, ...sessionStorage }),
+    ),
+  ).not.toContain("browser-test-secret-key");
+  await setMode(page, "compare");
+  await page.getByLabel("Максимум слов").fill("42");
+  await page.getByLabel("Максимум слов").press("Tab");
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get("/api/state")).json()).settings.maxWords,
+    )
+    .toBe(42);
+  await ready(page);
+  await send(page, "Расскажи о квантовом компьютере", "Control+Enter");
+  await done(page);
+  await expect(
+    page.getByTestId("exchange").last().getByTestId("response-card"),
+  ).toHaveCount(2);
+  expect((await (await page.request.get("/api/state")).json()).history).toEqual(
+    { unrestricted: 1, controlled: 1 },
+  );
+  await page
+    .getByRole("button", { name: "Очистить экран", exact: true })
+    .click();
+  await expect(page.getByTestId("exchange")).toHaveCount(0);
+  expect((await (await page.request.get("/api/state")).json()).history).toEqual(
+    { unrestricted: 1, controlled: 1 },
+  );
+  await ready(page);
+  for (const [mode, cards] of [
+    ["controlled", 1],
+    ["unrestricted", 1],
+    ["reasoning", 6],
+    ["temperature", 4],
+    ["models", 4],
+  ] as const) {
+    await setMode(page, mode);
+    if (mode === "models") {
+      await expect(page.getByLabel("Провайдер", { exact: true })).toHaveValue(
+        "OPENAI",
+      );
+      await expect(
+        page.getByLabel("Провайдер", { exact: true }),
+      ).toBeDisabled();
+      await expect(page.getByLabel("Максимум токенов")).toHaveValue("1000");
+    }
+    await send(
+      page,
+      `Проверка ${mode}`,
+      mode === "unrestricted" ? "Meta+Enter" : undefined,
+    );
+    await done(page);
+    if (mode === "reasoning")
+      await page
+        .getByTestId("exchange")
+        .last()
+        .locator("summary")
+        .filter({ hasText: "Сгенерированный промпт" })
+        .click();
+    await expect(
+      page.getByTestId("exchange").last().getByTestId("response-card"),
+    ).toHaveCount(cards);
+    await expect(
+      page
+        .getByTestId("exchange")
+        .last()
+        .getByRole("region", { name: "Таблица метрик" }),
+    ).toBeVisible();
+  }
+  await page
+    .getByRole("button", { name: "Очистить историю", exact: true })
+    .click();
+  await ready(page);
+  expect((await (await page.request.get("/api/state")).json()).history).toEqual(
+    { unrestricted: 0, controlled: 0 },
+  );
+  await expect(page.getByTestId("exchange")).toHaveCount(5);
+  for (const name of ["Демо: 4 способа рассуждения", "Демо: температура"]) {
+    await page.getByRole("button", { name, exact: true }).click();
+    await done(page);
+  }
+  await expect(page.getByTestId("exchange")).toHaveCount(7);
+  expect(consoleErrors).toEqual([]);
+});
+
+test("refresh during request, second tab, reconnect and cancellation do not duplicate generation", async ({
+  page,
+  context,
+}) => {
+  await setMode(page, "reasoning");
+  await send(page, "[[slow]] Проверка восстановления");
+  await expect(
+    page.getByRole("button", { name: "Отменить", exact: true }),
+  ).toBeEnabled();
+  const current: State = await (await page.request.get("/api/state")).json();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Отменить", exact: true }),
+  ).toBeEnabled();
+  expect(
+    (await (await page.request.get("/api/state")).json()).operation.id,
+  ).toBe(current.operation!.id);
+  const tab = await context.newPage();
+  await tab.goto("/");
+  await expect(tab.getByTestId("exchange")).toHaveCount(1);
+  await expect(tab.getByLabel("Режим ответа")).toBeDisabled();
+  await context.setOffline(true);
+  await expect(page.getByText("Связь с сервером потеряна")).toBeVisible();
+  await context.setOffline(false);
+  await expect(
+    page.getByRole("button", { name: "Отменить", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Отменить", exact: true }).click();
+  await expect(
+    page.getByTestId("exchange").getByText("Отменено", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    tab.getByTestId("exchange").getByText("Отменено", { exact: true }),
+  ).toBeVisible();
+  await ready(page);
+  await setMode(page, "unrestricted");
+  await send(page, "Новый запрос после отмены");
+  await done(page);
+  await expect(tab.getByTestId("exchange")).toHaveCount(2);
+  await tab.close();
+});
+
+test("lost POST reply safely retries the same operation; network and individual model errors recover", async ({
+  page,
+}) => {
+  await setMode(page, "unrestricted");
+  let intercepted = false;
+  await page.route("**/api/operations", async (route) => {
+    if (intercepted) return route.continue();
+    intercepted = true;
+    await route.fetch(); // The real server accepted it, but the browser does not get the reply.
+    await route.abort("connectionfailed");
+  });
+  await send(page, "Потерянный ответ команды");
+  await expect(
+    page.getByRole("button", { name: "Проверить отправку", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Проверить отправку", exact: true })
+    .click();
+  await done(page);
+  await expect(page.getByTestId("exchange")).toHaveCount(1);
+  await page.unroute("**/api/operations");
+  await send(page, "[[network]]");
+  await expect(
+    page.getByTestId("exchange").last().getByText("Ошибка", { exact: true }),
+  ).toBeVisible();
+  await ready(page);
+  await setMode(page, "models");
+  await send(page, "[[partial]]");
+  await done(page);
+  await expect(
+    page
+      .getByTestId("exchange")
+      .last()
+      .getByText("Ошибка модели", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("exchange").last().getByTestId("response-card"),
+  ).toHaveCount(4);
+});
+
+test("long markdown, math, safe HTML and narrow layout", async ({ page }) => {
+  await setMode(page, "unrestricted");
+  await send(page, "[[long]]");
+  await done(page);
+  await page
+    .getByRole("button", { name: "Развернуть ответ", exact: true })
+    .click();
+  await expect(
+    page.locator(".response-card .katex-display").first(),
+  ).toBeVisible();
+  await expect(page.locator("pre").first()).toContainText("fun square");
+  await expect(page.locator(".response-card table td br").first()).toBeAttached();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as Record<string, unknown>).injected,
+    ),
+  ).toBeUndefined();
+  expect(await page.locator(".markdown script, .markdown img").count()).toBe(0);
+  await page.screenshot({
+    path: "test-results/desktop-long.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 430, height: 900 });
+  await expect(
+    page.getByRole("button", { name: "Открыть настройки" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "test-results/narrow-long.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Открыть настройки" }).click();
+  await expect(
+    page.getByRole("dialog").getByLabel("Режим ответа"),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});

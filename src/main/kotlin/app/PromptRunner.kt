@@ -18,6 +18,7 @@ data class PromptProgress(
 
 class PromptRunner(
     private val onProgress: (PromptProgress) -> Unit = {},
+    private val onResponse: (LabeledResponse) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
     private val histories = ResponseVariant.entries.associateWith {
@@ -41,9 +42,12 @@ class PromptRunner(
                     },
                 ),
             )
-            completeVariant(client, variant, prompt, settings)
+            completeVariant(client, variant, prompt, settings).also(onResponse)
         }
     }
+
+    /** Call from the owning worker, or while no request is running. */
+    fun historySnapshot(): Map<ResponseVariant, List<LlmMessage>> = histories.mapValues { it.value.toList() }
 
     fun clearHistory() {
         histories.values.forEach(MutableList<LlmMessage>::clear)

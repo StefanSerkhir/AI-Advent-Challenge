@@ -1,0 +1,274 @@
+import { useEffect, useState } from "react";
+import {
+  Badge,
+  Button,
+  Divider,
+  NativeSelect,
+  PasswordInput,
+  Switch,
+  TextInput,
+  Tooltip,
+} from "@mantine/core";
+import {
+  IconKey,
+  IconPlugConnected,
+  IconAdjustments,
+  IconFlask,
+  IconHistory,
+  IconArrowRight,
+  IconTrash,
+} from "@tabler/icons-react";
+import type { Workbench } from "../state/useWorkbench";
+import type { Mode, Provider } from "../api/types";
+
+function NumberSetting({
+  label,
+  value,
+  disabled,
+  onSave,
+}: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onSave: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const valid =
+    /^\d+$/.test(draft) && Number(draft) > 0 && Number(draft) <= 2147483647;
+  return (
+    <TextInput
+      label={label}
+      value={draft}
+      type="text"
+      inputMode="numeric"
+      disabled={disabled}
+      onChange={(e) => setDraft(e.currentTarget.value)}
+      error={!valid ? "Целое число больше нуля" : undefined}
+      onBlur={() => {
+        if (valid && Number(draft) !== value) onSave(Number(draft));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+    />
+  );
+}
+export function Sidebar({ workbench: w }: { workbench: Workbench }) {
+  const s = w.state!;
+  const mode = s.modes.find((m) => m.id === s.settings.mode)!;
+  const provider = s.providers.find((p) => p.id === s.settings.provider)!;
+  const locked = !!s.operation || w.working || !w.connected || w.uncertain;
+  const [key, setKey] = useState("");
+  const [stop, setStop] = useState(s.settings.stopSequence ?? "");
+  useEffect(() => setKey(""), [s.settings.provider]);
+  useEffect(
+    () => setStop(s.settings.stopSequence ?? ""),
+    [s.settings.stopSequence],
+  );
+  return (
+    <aside className="sidebar" aria-label="Настройки эксперимента">
+      <section>
+        <div className="section-label">
+          <IconPlugConnected size={16} /> Подключение{" "}
+          <Badge
+            size="xs"
+            color={provider.hasKey ? "teal" : "gray"}
+            variant="dot"
+          >
+            {provider.hasKey ? "Ключ настроен" : "Нет ключа"}
+          </Badge>
+        </div>
+        <NativeSelect
+          label="Провайдер"
+          value={s.settings.provider}
+          disabled={locked || mode.connectionLocked}
+          data={s.providers.map((p) => ({ value: p.id, label: p.title }))}
+          onChange={(e) =>
+            void w.settings({ provider: e.currentTarget.value as Provider })
+          }
+        />
+        <NativeSelect
+          label="Модель"
+          value={s.settings.model}
+          disabled={locked || mode.connectionLocked}
+          data={provider.models.map((m) => ({ value: m.id, label: m.title }))}
+          onChange={(e) => void w.settings({ model: e.currentTarget.value })}
+        />
+        <PasswordInput
+          label="API-ключ"
+          placeholder={
+            provider.hasKey
+              ? "Сохранён · введите для замены"
+              : "Введите ключ провайдера"
+          }
+          value={key}
+          onChange={(e) => setKey(e.currentTarget.value)}
+          disabled={locked}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <Button
+          fullWidth
+          variant="light"
+          leftSection={<IconKey size={15} />}
+          disabled={locked || !key.trim()}
+          onClick={async () => {
+            if (await w.saveKey(provider.id, key)) setKey("");
+          }}
+        >
+          {provider.hasKey ? "Заменить ключ" : "Сохранить ключ"}
+        </Button>
+        <p className="micro">Ключ хранится только в локальном .env</p>
+      </section>
+      <Divider />
+      <section>
+        <div className="section-label">
+          <IconAdjustments size={16} /> Эксперимент
+        </div>
+        <NativeSelect
+          label="Режим ответа"
+          value={s.settings.mode}
+          disabled={locked}
+          data={s.modes.map((m) => ({ value: m.id, label: m.title }))}
+          onChange={(e) =>
+            void w.settings({ mode: e.currentTarget.value as Mode })
+          }
+        />
+        <p className="mode-description">{mode.description}</p>
+        <NumberSetting
+          label="Максимум токенов"
+          value={s.settings.maxTokens}
+          disabled={locked}
+          onSave={(value) => void w.settings({ maxTokens: value })}
+        />
+        {!mode.usesTokenLimit && (
+          <p className="micro">
+            Этот режим использует параметры модели по умолчанию.
+          </p>
+        )}
+        {!mode.connectionLocked && (
+          <>
+            <div className="settings-pair">
+              <NumberSetting
+                label="Максимум слов"
+                value={s.settings.maxWords}
+                disabled={locked}
+                onSave={(value) => void w.settings({ maxWords: value })}
+              />
+              <NumberSetting
+                label="Пунктов"
+                value={s.settings.bulletCount}
+                disabled={locked}
+                onSave={(value) => void w.settings({ bulletCount: value })}
+              />
+            </div>
+            <Switch
+              label="Stop sequence"
+              checked={s.settings.stopSequence !== null}
+              disabled={locked}
+              onChange={(e) =>
+                void w.settings({
+                  stopSequence: e.currentTarget.checked
+                    ? "<END_OF_RESPONSE>"
+                    : null,
+                })
+              }
+            />
+            {s.settings.stopSequence !== null && (
+              <TextInput
+                aria-label="Stop sequence"
+                value={stop}
+                disabled={locked}
+                onChange={(e) => setStop(e.currentTarget.value)}
+                error={!stop.trim() ? "Введите stop sequence" : undefined}
+                onBlur={() => {
+                  if (stop.trim() && stop !== s.settings.stopSequence)
+                    void w.settings({ stopSequence: stop });
+                }}
+              />
+            )}
+            {!mode.usesTextConstraints && (
+              <p className="micro">
+                Слова, пункты и stop sequence применяются к ответу с
+                ограничениями.
+              </p>
+            )}
+          </>
+        )}
+      </section>
+      <Divider />
+      <section>
+        <div className="section-label">
+          <IconHistory size={16} /> Контекст
+        </div>
+        <Switch
+          label="История диалога"
+          checked={s.settings.historyEnabled}
+          disabled={locked}
+          onChange={(e) =>
+            void w.settings({ historyEnabled: e.currentTarget.checked })
+          }
+        />
+        {mode.independentContext && (
+          <p className="micro">
+            В этом режиме запросы независимы. Сохранённая история не
+            используется.
+          </p>
+        )}
+        <div className="history-counts">
+          <span>
+            Без ограничений <b>{s.history.unrestricted}</b>
+          </span>
+          <span>
+            С ограничениями <b>{s.history.controlled}</b>
+          </span>
+        </div>
+        <Tooltip label="Удаляет контекст обеих веток. Ответы останутся на экране.">
+          <Button
+            fullWidth
+            variant="subtle"
+            color="gray"
+            size="xs"
+            leftSection={<IconTrash size={14} />}
+            disabled={locked}
+            onClick={() => void w.clear("history")}
+          >
+            Очистить историю
+          </Button>
+        </Tooltip>
+      </section>
+      <Divider />
+      <section>
+        <div className="section-label">
+          <IconFlask size={16} /> Готовые эксперименты
+        </div>
+        <Button
+          justify="space-between"
+          fullWidth
+          variant="default"
+          size="sm"
+          rightSection={<IconArrowRight size={15} />}
+          disabled={locked}
+          onClick={() => void w.start("", "reasoning")}
+        >
+          Демо: 4 способа рассуждения
+        </Button>
+        <Button
+          justify="space-between"
+          fullWidth
+          variant="default"
+          size="sm"
+          rightSection={<IconArrowRight size={15} />}
+          disabled={locked}
+          onClick={() => void w.start("", "temperature")}
+        >
+          Демо: температура
+        </Button>
+      </section>
+      <div className="sidebar-footer">
+        <span className="status-dot" /> Локальное рабочее пространство
+      </div>
+    </aside>
+  );
+}

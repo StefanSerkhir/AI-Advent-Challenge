@@ -1,5 +1,7 @@
 package org.example.app
 
+import org.example.llm.CompletionResult
+
 data class ResponseMetrics(
     val run: String,
     val characterCount: Int,
@@ -8,29 +10,19 @@ data class ResponseMetrics(
     val finishReason: String?,
 )
 
-fun LabeledResponse.metrics(): ResponseMetrics = ResponseMetrics(
-    run = variant.tableLabel,
+fun CompletionResult.metrics(run: String): ResponseMetrics = ResponseMetrics(
+    run = run,
     characterCount = content.codePointCount(0, content.length),
     wordCount = Regex("\\S+").findAll(content).count(),
-    completionTokens = completion.usage?.completionTokens,
-    finishReason = completion.finishReason,
+    completionTokens = usage?.completionTokens,
+    finishReason = finishReason,
 )
 
-fun ReasoningSolution.metrics(): ResponseMetrics = ResponseMetrics(
-    run = variant.tableLabel,
-    characterCount = content.codePointCount(0, content.length),
-    wordCount = Regex("\\S+").findAll(content).count(),
-    completionTokens = completion.usage?.completionTokens,
-    finishReason = completion.finishReason,
-)
+fun LabeledResponse.metrics(): ResponseMetrics = completion.metrics(variant.tableLabel)
 
-fun TemperatureSample.metrics(): ResponseMetrics = ResponseMetrics(
-    run = "temperature=${temperature.label()}",
-    characterCount = content.codePointCount(0, content.length),
-    wordCount = Regex("\\S+").findAll(content).count(),
-    completionTokens = completion.usage?.completionTokens,
-    finishReason = completion.finishReason,
-)
+fun ReasoningSolution.metrics(): ResponseMetrics = completion.metrics(variant.tableLabel)
+
+fun TemperatureSample.metrics(): ResponseMetrics = completion.metrics("temperature=${temperature.label()}")
 
 fun renderComparisonTable(responses: List<LabeledResponse>): String {
     return renderMetricsTable(responses.map(LabeledResponse::metrics))

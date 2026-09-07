@@ -97,6 +97,7 @@ data class ModelComparisonProgress(
 
 class ModelComparisonRunner(
     private val onProgress: (ModelComparisonProgress) -> Unit = {},
+    private val onRun: (ModelComparisonRun) -> Unit = {},
     private val clientProvider: (modelId: String) -> LlmClient,
     private val errorMessage: (Throwable) -> String = { error ->
         error.message ?: error::class.simpleName ?: "неизвестная ошибка"
@@ -122,7 +123,7 @@ class ModelComparisonRunner(
                         reasoningEffort = ReasoningEffort.MEDIUM,
                     ),
                 )
-            }
+            }.also(onRun)
         }
 
         val successfulRuns = runs.filter { it.completion != null }
