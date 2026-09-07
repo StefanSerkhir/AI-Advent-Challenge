@@ -1,6 +1,11 @@
 package org.example.app
 
-import org.example.llm.*
+import org.example.agent.AgentRequest
+import org.example.agent.LlmAgent
+import org.example.llm.CompletionOptions
+import org.example.llm.CompletionResult
+import org.example.llm.LlmClient
+import org.example.llm.LlmMessage
 
 data class LabeledResponse(
     val variant: ResponseVariant,
@@ -21,15 +26,14 @@ class PromptRunner(
     private val onResponse: (LabeledResponse) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) {
-    private val histories = ResponseVariant.entries.associateWith {
-        mutableListOf<LlmMessage>()
+    private val agents = ResponseVariant.entries.associateWith {
+        LlmAgent(clientProvider)
     }
 
     suspend fun complete(
         prompt: String,
         settings: AppSettings,
     ): List<LabeledResponse> {
-        val client = clientProvider()
         val variants = settings.responseMode.variants()
         return variants.mapIndexed { index, variant ->
             onProgress(
@@ -42,23 +46,20 @@ class PromptRunner(
                     },
                 ),
             )
-            completeVariant(client, variant, prompt, settings).also(onResponse)
+            completeVariant(variant, prompt, settings).also(onResponse)
         }
     }
 
     /** Call from the owning worker, or while no request is running. */
-    fun historySnapshot(): Map<ResponseVariant, List<LlmMessage>> = histories.mapValues { it.value.toList() }
+    fun historySnapshot(): Map<ResponseVariant, List<LlmMessage>> = agents.mapValues { it.value.historySnapshot() }
 
     fun clearHistory() {
-        histories.values.forEach(MutableList<LlmMessage>::clear)
+        agents.values.forEach(LlmAgent::clearHistory)
     }
 
-    fun historyTurnCounts(): Map<ResponseVariant, Int> = histories.mapValues { (_, messages) ->
-        messages.count { it.role == LlmRole.ASSISTANT }
-    }
+    fun historyTurnCounts(): Map<ResponseVariant, Int> = agents.mapValues { it.value.completedTurnCount() }
 
     private suspend fun completeVariant(
-        client: LlmClient,
         variant: ResponseVariant,
         prompt: String,
         settings: AppSettings,
@@ -67,12 +68,6 @@ class PromptRunner(
             ResponseVariant.UNRESTRICTED -> prompt
             ResponseVariant.CONTROLLED -> withResponseConstraints(prompt, settings)
         }
-        val userMessage = LlmMessage(LlmRole.USER, requestPrompt)
-        val messages = if (settings.historyEnabled) {
-            histories.getValue(variant).toList() + userMessage
-        } else {
-            listOf(userMessage)
-        }
         val options = when (variant) {
             ResponseVariant.UNRESTRICTED -> CompletionOptions()
             ResponseVariant.CONTROLLED -> CompletionOptions(
@@ -80,12 +75,13 @@ class PromptRunner(
                 stopSequences = settings.stopSequence?.let(::listOf).orEmpty(),
             )
         }
-        val completion = client.complete(messages, options)
-
-        if (settings.historyEnabled) {
-            histories.getValue(variant) += userMessage
-            histories.getValue(variant) += LlmMessage(LlmRole.ASSISTANT, completion.content)
-        }
+        val completion = agents.getValue(variant).respond(
+            AgentRequest(
+                prompt = requestPrompt,
+                options = options,
+                historyEnabled = settings.historyEnabled,
+            ),
+        ).completion
 
         return LabeledResponse(variant, completion)
     }

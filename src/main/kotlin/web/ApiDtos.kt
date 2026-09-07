@@ -2,7 +2,9 @@ package org.example.web
 
 import kotlinx.serialization.Serializable
 import org.example.app.*
-import org.example.llm.*
+import org.example.llm.LlmKind
+import org.example.llm.LlmModel
+import org.example.llm.LlmModels
 
 @Serializable
 data class SettingsDto(
@@ -30,6 +32,7 @@ data class ModeDto(
     val id: String, val title: String, val description: String,
     val independentContext: Boolean = false, val connectionLocked: Boolean = false,
     val usesTokenLimit: Boolean = false, val usesTextConstraints: Boolean = false,
+    val usesHistory: Boolean = false,
 )
 @Serializable
 data class ProgressDto(val current: Int, val total: Int, val label: String)
@@ -79,9 +82,9 @@ fun SettingsDto.toSettings(): AppSettings {
 }
 
 val modes = listOf(
-    ModeDto("compare", "Сравнение ответов", "Два ответа: свободный и с вашими ограничениями. Для каждого сохраняется отдельная ветка истории.", usesTokenLimit = true, usesTextConstraints = true),
-    ModeDto("controlled", "С ограничениями", "Маркированный список с лимитом слов, пунктов, токенов и stop sequence.", usesTokenLimit = true, usesTextConstraints = true),
-    ModeDto("unrestricted", "Без ограничений", "Обычный диалог без дополнительных ограничений ответа."),
+    ModeDto("compare", "Сравнение ответов", "Два ответа: свободный и с вашими ограничениями. Для каждого сохраняется отдельная ветка истории.", usesTokenLimit = true, usesTextConstraints = true, usesHistory = true),
+    ModeDto("controlled", "С ограничениями", "Маркированный список с лимитом слов, пунктов, токенов и stop sequence.", usesTokenLimit = true, usesTextConstraints = true, usesHistory = true),
+    ModeDto("unrestricted", "Простой агент", "Агент принимает запрос, вызывает выбранную LLM через API и учитывает историю диалога, когда она включена.", usesHistory = true),
     ModeDto("reasoning", "4 способа рассуждения", "Прямой ответ, пошаговое решение, созданный промпт и группа экспертов. Затем — оценка точности. 6 вызовов, независимые контексты.", independentContext = true),
     ModeDto("temperature", "Сравнение температуры", "Temperature 0, 0.7 и 1.2, затем оценка точности, креативности и разнообразия. Для Luna используется gpt-4.1-mini. 4 независимых вызова.", independentContext = true),
     ModeDto("models", "Сравнение моделей GPT-5.6", "Luna, Terra и Sol последовательно отвечают на один запрос с reasoning_effort=medium. Sol оценивает анонимные ответы A/B/C. Нужен ключ OpenAI.", independentContext = true, connectionLocked = true, usesTokenLimit = true),

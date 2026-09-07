@@ -1,5 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
-import type { Mode, State } from "../src/api/types";
+import {expect, type Page, test} from "@playwright/test";
+import type {Mode, State} from "../src/api/types";
 
 const headers = {
   "X-Workbench-Request": "1",
@@ -74,6 +74,35 @@ test.beforeEach(async ({ page }) => {
   await page.request.delete("/api/notice", { headers, data: {} });
   await page.goto("/");
   await ready(page);
+});
+
+test("settings are shown only when the selected mode uses them", async ({
+  page,
+}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByText("Контекст", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("История диалога")).toBeVisible();
+  await expect(page.locator(".history-counts span")).toHaveCount(1);
+  await expect(page.locator(".history-counts span")).toContainText(
+    "Простой агент",
+  );
+  await expect(page.getByLabel("Максимум токенов")).toHaveCount(0);
+  await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
+  await expect(
+    page.locator(".history-counts").getByText("С ограничениями", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+
+  await setMode(page, "reasoning");
+  await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("История диалога")).toHaveCount(0);
+  await expect(page.getByLabel("Максимум токенов")).toHaveCount(0);
+
+  await setMode(page, "models");
+  await expect(page.getByLabel("Максимум токенов")).toBeVisible();
+  await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
+  await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
 test("all six modes, demos, history, settings, keys and keyboard shortcuts", async ({
@@ -168,6 +197,7 @@ test("all six modes, demos, history, settings, keys and keyboard shortcuts", asy
         .getByRole("region", { name: "Таблица метрик" }),
     ).toBeVisible();
   }
+  await setMode(page, "compare");
   await page
     .getByRole("button", { name: "Очистить историю", exact: true })
     .click();

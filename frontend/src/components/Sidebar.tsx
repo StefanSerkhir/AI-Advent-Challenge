@@ -1,25 +1,16 @@
-import { useEffect, useState } from "react";
+import {useEffect, useState} from "react";
+import {Badge, Button, Divider, NativeSelect, PasswordInput, Switch, TextInput, Tooltip,} from "@mantine/core";
 import {
-  Badge,
-  Button,
-  Divider,
-  NativeSelect,
-  PasswordInput,
-  Switch,
-  TextInput,
-  Tooltip,
-} from "@mantine/core";
-import {
-  IconKey,
-  IconPlugConnected,
-  IconAdjustments,
-  IconFlask,
-  IconHistory,
-  IconArrowRight,
-  IconTrash,
+    IconAdjustments,
+    IconArrowRight,
+    IconFlask,
+    IconHistory,
+    IconKey,
+    IconPlugConnected,
+    IconTrash,
 } from "@tabler/icons-react";
-import type { Workbench } from "../state/useWorkbench";
-import type { Mode, Provider } from "../api/types";
+import type {Workbench} from "../state/useWorkbench";
+import type {Mode, Provider} from "../api/types";
 
 function NumberSetting({
   label,
@@ -136,18 +127,15 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
           }
         />
         <p className="mode-description">{mode.description}</p>
-        <NumberSetting
-          label="Максимум токенов"
-          value={s.settings.maxTokens}
-          disabled={locked}
-          onSave={(value) => void w.settings({ maxTokens: value })}
-        />
-        {!mode.usesTokenLimit && (
-          <p className="micro">
-            Этот режим использует параметры модели по умолчанию.
-          </p>
+        {mode.usesTokenLimit && (
+          <NumberSetting
+            label="Максимум токенов"
+            value={s.settings.maxTokens}
+            disabled={locked}
+            onSave={(value) => void w.settings({ maxTokens: value })}
+          />
         )}
-        {!mode.connectionLocked && (
+        {mode.usesTextConstraints && (
           <>
             <div className="settings-pair">
               <NumberSetting
@@ -188,56 +176,52 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                 }}
               />
             )}
-            {!mode.usesTextConstraints && (
-              <p className="micro">
-                Слова, пункты и stop sequence применяются к ответу с
-                ограничениями.
-              </p>
-            )}
           </>
         )}
       </section>
-      <Divider />
-      <section>
-        <div className="section-label">
-          <IconHistory size={16} /> Контекст
-        </div>
-        <Switch
-          label="История диалога"
-          checked={s.settings.historyEnabled}
-          disabled={locked}
-          onChange={(e) =>
-            void w.settings({ historyEnabled: e.currentTarget.checked })
-          }
-        />
-        {mode.independentContext && (
-          <p className="micro">
-            В этом режиме запросы независимы. Сохранённая история не
-            используется.
-          </p>
-        )}
-        <div className="history-counts">
-          <span>
-            Без ограничений <b>{s.history.unrestricted}</b>
-          </span>
-          <span>
-            С ограничениями <b>{s.history.controlled}</b>
-          </span>
-        </div>
-        <Tooltip label="Удаляет контекст обеих веток. Ответы останутся на экране.">
-          <Button
-            fullWidth
-            variant="subtle"
-            color="gray"
-            size="xs"
-            leftSection={<IconTrash size={14} />}
-            disabled={locked}
-            onClick={() => void w.clear("history")}
-          >
-            Очистить историю
-          </Button>
-        </Tooltip>
-      </section>
+      {mode.usesHistory && (
+        <>
+          <Divider />
+          <section>
+            <div className="section-label">
+              <IconHistory size={16} /> Контекст
+            </div>
+            <Switch
+              label="История диалога"
+              checked={s.settings.historyEnabled}
+              disabled={locked}
+              onChange={(e) =>
+                void w.settings({ historyEnabled: e.currentTarget.checked })
+              }
+            />
+            <div className="history-counts">
+              {mode.id !== "controlled" && (
+                <span>
+                  Простой агент <b>{s.history.unrestricted}</b>
+                </span>
+              )}
+              {mode.id !== "unrestricted" && (
+                <span>
+                  С ограничениями <b>{s.history.controlled}</b>
+                </span>
+              )}
+            </div>
+            <Tooltip label="Удаляет сохранённый контекст диалоговых режимов. Ответы останутся на экране.">
+              <Button
+                fullWidth
+                variant="subtle"
+                color="gray"
+                size="xs"
+                leftSection={<IconTrash size={14} />}
+                disabled={locked}
+                onClick={() => void w.clear("history")}
+              >
+                Очистить историю
+              </Button>
+            </Tooltip>
+          </section>
+        </>
+      )}
       <Divider />
       <section>
         <div className="section-label">

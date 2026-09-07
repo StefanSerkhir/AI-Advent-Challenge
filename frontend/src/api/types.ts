@@ -31,6 +31,7 @@ export interface ModeInfo {
   connectionLocked: boolean;
   usesTokenLimit: boolean;
   usesTextConstraints: boolean;
+  usesHistory: boolean;
 }
 export interface Metrics {
   characters: number | null;
