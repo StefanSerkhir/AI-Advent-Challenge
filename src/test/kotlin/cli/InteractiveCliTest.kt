@@ -1,6 +1,7 @@
 package org.example.cli
 
 import kotlinx.coroutines.runBlocking
+import org.example.agent.NoOpConversationHistoryStore
 import org.example.app.AppSettings
 import org.example.app.ResponseMode
 import org.example.llm.*
@@ -17,6 +18,7 @@ class InteractiveCliTest {
             initialApiKeys = emptyMap(),
             clientFactory = { _, _ -> StubLlmClient },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         cli.processLine("/provider OpenAI")
@@ -48,6 +50,7 @@ class InteractiveCliTest {
             initialApiKeys = mapOf(LlmKind.OPENAI to "test-key"),
             clientFactory = { _, _ -> FailingLlmClient },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         val keepRunning = cli.processLine("Тестовый запрос")
@@ -64,6 +67,7 @@ class InteractiveCliTest {
             initialApiKeys = emptyMap(),
             clientFactory = { _, _ -> StubLlmClient },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         cli.run()
@@ -85,6 +89,7 @@ class InteractiveCliTest {
             initialApiKeys = mapOf(LlmKind.OPENAI to "test-key"),
             clientFactory = { _, _ -> StubLlmClient },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         cli.processLine("Тестовый запрос")
@@ -120,6 +125,7 @@ class InteractiveCliTest {
                 }
             },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         cli.processLine("Тестовая логическая задача")
@@ -158,6 +164,7 @@ class InteractiveCliTest {
                 }
             },
             terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
         )
 
         cli.processLine("Придумай слоган")

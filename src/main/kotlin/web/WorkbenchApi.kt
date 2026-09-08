@@ -1,8 +1,9 @@
 package org.example.web
 
-import org.example.app.*
 import kotlinx.serialization.json.*
-import kotlinx.serialization.encodeToString
+import org.example.app.ResponseMode
+import org.example.app.ResponseVariant
+import org.example.app.WorkbenchController
 
 class ApiProblem(val status: Int, val code: String, override val message: String) : RuntimeException(message)
 
@@ -93,7 +94,13 @@ class WorkbenchApi(val controller: WorkbenchController) {
 
     fun clear(history: Boolean): StateDto = synchronized(controller) {
         requireIdle()
-        if (history) controller.clearHistory() else controller.clearResults()
+        if (history) {
+            if (!controller.clearHistory()) {
+                throw ApiProblem(500, "persistence", "Не удалось очистить постоянную историю. Прежняя история сохранена.")
+            }
+        } else {
+            controller.clearResults()
+        }
         controller.state.value.toDto()
     }
 }

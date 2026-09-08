@@ -1,6 +1,9 @@
 package org.example.cli
 
 import kotlinx.coroutines.CancellationException
+import org.example.agent.ConversationHistoryStore
+import org.example.agent.HistoryPersistenceException
+import org.example.agent.JsonConversationHistoryStore
 import org.example.app.*
 import org.example.llm.LlmApiException
 import org.example.llm.LlmClient
@@ -41,11 +44,13 @@ class InteractiveCli(
     initialApiKeys: Map<LlmKind, String>,
     private val clientFactory: (LlmKind, String) -> LlmClient,
     private val terminal: Terminal = SystemTerminal,
+    historyStore: ConversationHistoryStore = JsonConversationHistoryStore(),
 ) {
     private val apiKeys = initialApiKeys.toMutableMap()
-    private val promptRunner = PromptRunner {
-        currentClient()
-    }
+    private val promptRunner = PromptRunner(
+        historyStore = historyStore,
+        clientProvider = { currentClient() },
+    )
     private val reasoningRunner = ReasoningRunner(
         clientProvider = { currentClient() },
         onProgress = { progress ->
@@ -71,6 +76,7 @@ class InteractiveCli(
         terminal.setTitle(windowTitle())
         try {
             terminal.println("Интерактивный LLM CLI запущен. /help — список команд.")
+            promptRunner.historyLoadWarning?.let { terminal.println("Предупреждение: $it") }
             initialPrompt?.takeIf(String::isNotBlank)?.let { executePrompt(it) }
 
             var keepRunning = true
@@ -335,8 +341,12 @@ class InteractiveCli(
     }
 
     private fun resetHistory() {
-        promptRunner.clearHistory()
-        terminal.println("История обеих веток очищена.")
+        try {
+            promptRunner.clearHistory()
+            terminal.println("История обеих веток очищена.")
+        } catch (_: HistoryPersistenceException) {
+            terminal.println("Ошибка: не удалось очистить постоянную историю; прежняя история сохранена.")
+        }
     }
 
     private fun showSettings() {

@@ -9,6 +9,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import org.example.agent.JsonConversationHistoryStore
 import org.example.app.AppBootstrap
 import org.example.app.DesktopAppController
 import org.example.config.LocalConfig
@@ -31,6 +32,7 @@ fun main() {
         initialSettings = bootstrap.settings,
         initialApiKeys = bootstrap.apiKeys,
         initialWarning = startupWarning,
+        historyStore = JsonConversationHistoryStore(),
         clientFactory = { kind, apiKey, model -> createLlmClient(kind, apiKey, httpClient, model) },
         persistSettings = configStore::save,
     )

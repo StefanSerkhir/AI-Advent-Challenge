@@ -1,5 +1,7 @@
 package org.example.agent
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
@@ -20,7 +22,11 @@ class LlmAgentTest {
                 CompletionFinished("stop", TokenUsage(4, 5, 9), "stream-model"),
             ),
         )
-        val agent = LlmAgent { client }
+        var persistedHistory = emptyList<LlmMessage>()
+        val agent = LlmAgent(
+            persistHistory = { persistedHistory = it },
+            clientProvider = { client },
+        )
         val updates = mutableListOf<String>()
 
         val response = agent.respond(AgentRequest("Покажи Markdown"), updates::add)
@@ -31,13 +37,12 @@ class LlmAgentTest {
         )
         assertEquals(updates.last(), response.content)
         assertEquals("stream-model", response.completion.model)
-        assertEquals(
-            listOf(
-                LlmMessage(LlmRole.USER, "Покажи Markdown"),
-                LlmMessage(LlmRole.ASSISTANT, updates.last()),
-            ),
-            agent.historySnapshot(),
+        val expectedHistory = listOf(
+            LlmMessage(LlmRole.USER, "Покажи Markdown"),
+            LlmMessage(LlmRole.ASSISTANT, updates.last()),
         )
+        assertEquals(expectedHistory, agent.historySnapshot())
+        assertEquals(expectedHistory, persistedHistory)
     }
 
     @Test
@@ -51,7 +56,8 @@ class LlmAgentTest {
                 throw LlmApiException("поток оборван")
             }
         }
-        val agent = LlmAgent { client }
+        var persistenceCalls = 0
+        val agent = LlmAgent(persistHistory = { persistenceCalls++ }, clientProvider = { client })
         val updates = mutableListOf<String>()
 
         assertFailsWith<LlmApiException> {
@@ -59,6 +65,29 @@ class LlmAgentTest {
         }
 
         assertEquals(listOf("Незавершённый ответ"), updates)
+        assertTrue(agent.historySnapshot().isEmpty())
+        assertEquals(0, persistenceCalls)
+    }
+
+    @Test
+    fun `agent does not persist or remember a cancelled stream`() = runBlocking {
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) =
+                error("complete must not be used")
+
+            override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
+                emit(TextDelta("часть ответа"))
+                awaitCancellation()
+            }
+        }
+        var persistenceCalls = 0
+        val agent = LlmAgent(persistHistory = { persistenceCalls++ }, clientProvider = { client })
+
+        assertFailsWith<CancellationException> {
+            kotlinx.coroutines.withTimeout(250) { agent.respond(AgentRequest("Вопрос")) }
+        }
+
+        assertEquals(0, persistenceCalls)
         assertTrue(agent.historySnapshot().isEmpty())
     }
 

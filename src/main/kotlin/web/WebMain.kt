@@ -3,8 +3,11 @@ package org.example.web
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import kotlinx.coroutines.runBlocking
-import org.example.app.*
-import org.example.config.*
+import org.example.agent.JsonConversationHistoryStore
+import org.example.app.AppBootstrap
+import org.example.app.WorkbenchController
+import org.example.config.LocalConfig
+import org.example.config.LocalConfigStore
 import org.example.llm.createLlmClient
 import org.example.network.createHttpClient
 
@@ -17,6 +20,7 @@ fun main() {
     val client = createHttpClient()
     val controller = WorkbenchController(bootstrap.settings, bootstrap.apiKeys,
         initialWarning = if (loaded.isFailure) "Не удалось прочитать .env; используются настройки по умолчанию." else bootstrap.warning,
+        historyStore = JsonConversationHistoryStore(),
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort)) }

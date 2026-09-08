@@ -63,7 +63,7 @@ fun DesktopApp(controller: DesktopAppController) {
                         onUpdateSettings = controller::updateSettings,
                         onUpdateModel = controller::updateModel,
                         onSaveApiKey = controller::saveApiKey,
-                        onClearHistory = controller::clearHistory,
+                        onClearHistory = { controller.clearHistory() },
                         onReasoningDemo = controller::submitReasoningDemo,
                         onTemperatureDemo = controller::submitTemperatureDemo,
                     )

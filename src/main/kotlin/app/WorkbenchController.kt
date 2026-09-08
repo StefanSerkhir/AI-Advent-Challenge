@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerializationException
+import org.example.agent.ConversationHistoryStore
+import org.example.agent.HistoryPersistenceException
+import org.example.agent.NoOpConversationHistoryStore
 import org.example.llm.*
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
@@ -73,6 +76,7 @@ class WorkbenchController(
     initialSettings: AppSettings,
     initialApiKeys: Map<LlmKind, String>,
     initialWarning: String? = null,
+    private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -94,6 +98,7 @@ class WorkbenchController(
             addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts()) }
         },
+        historyStore = historyStore,
         clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
     )
     private val _state = MutableStateFlow(
@@ -101,7 +106,11 @@ class WorkbenchController(
             settings = initialSettings.copy(),
             configuredProviders = apiKeys.keys.toSet(),
             historyTurnCounts = promptRunner.historyTurnCounts(),
-            notice = initialWarning?.let { UiNotice(it, NoticeKind.ERROR) },
+            historyMessages = promptRunner.historySnapshot(),
+            notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning)
+                .takeIf(List<String>::isNotEmpty)
+                ?.joinToString("\n")
+                ?.let { UiNotice(it, NoticeKind.ERROR) },
         ),
     )
     val state: StateFlow<WorkbenchState> = _state.asStateFlow()
@@ -155,11 +164,17 @@ class WorkbenchController(
     fun clearNotice() { publish { it.copy(notice = null) } }
 
     @Synchronized
-    fun clearHistory() {
-        if (_state.value.isRunning || closed) return
-        promptRunner.clearHistory()
-        publish { it.copy(historyTurnCounts = promptRunner.historyTurnCounts(), historyMessages = promptRunner.historySnapshot(),
-            notice = UiNotice("История обеих веток очищена.", NoticeKind.INFO)) }
+    fun clearHistory(): Boolean {
+        if (_state.value.isRunning || closed) return false
+        try {
+            promptRunner.clearHistory()
+            publish { it.copy(historyTurnCounts = promptRunner.historyTurnCounts(), historyMessages = promptRunner.historySnapshot(),
+                notice = UiNotice("История обеих веток очищена.", NoticeKind.INFO)) }
+            return true
+        } catch (_: HistoryPersistenceException) {
+            publish { it.copy(notice = UiNotice(HISTORY_SAVE_ERROR, NoticeKind.ERROR)) }
+            return false
+        }
     }
 
     @Synchronized
@@ -413,6 +428,7 @@ private const val STREAM_PUBLISH_INTERVAL_NANOS = 50_000_000L
 
 internal fun userFacingError(error: Throwable, secrets: Collection<String> = emptyList()): String {
     val message = when (error) {
+        is HistoryPersistenceException -> HISTORY_SAVE_ERROR
         is LlmApiException -> error.message ?: "Провайдер вернул ошибку."
         is HttpRequestTimeoutException -> "Превышено время ожидания ответа. Попробуйте ещё раз."
         is SerializationException -> "Провайдер вернул ответ в неожиданном формате. Попробуйте ещё раз."
@@ -424,6 +440,9 @@ internal fun userFacingError(error: Throwable, secrets: Collection<String> = emp
         safe.replace(secret, "••••")
     }
 }
+
+private const val HISTORY_SAVE_ERROR =
+    "Не удалось сохранить историю диалога. Новые сообщения не добавлены; проверьте права доступа к файлу."
 
 fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "DeepSeek"

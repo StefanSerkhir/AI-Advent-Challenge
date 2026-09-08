@@ -37,9 +37,11 @@ interface Agent {
  * by a single request worker at a time.
  */
 class LlmAgent(
+    initialHistory: List<LlmMessage> = emptyList(),
+    private val persistHistory: (List<LlmMessage>) -> Unit = {},
     private val clientProvider: () -> LlmClient,
 ) : Agent {
-    private val history = mutableListOf<LlmMessage>()
+    private val history = initialHistory.toMutableList()
 
     override suspend fun respond(
         request: AgentRequest,
@@ -53,8 +55,10 @@ class LlmAgent(
         val completion = clientProvider().streamToCompletion(messages, request.options, onDelta)
 
         if (request.historyEnabled) {
-            history += userMessage
-            history += LlmMessage(LlmRole.ASSISTANT, completion.content)
+            val completedHistory = history + userMessage + LlmMessage(LlmRole.ASSISTANT, completion.content)
+            persistHistory(completedHistory)
+            history.clear()
+            history.addAll(completedHistory)
         }
 
         return AgentResponse(completion)

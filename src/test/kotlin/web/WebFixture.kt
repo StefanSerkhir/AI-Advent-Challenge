@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import org.example.agent.JsonConversationHistoryStore
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
@@ -20,6 +21,7 @@ fun main() {
     val store = LocalConfigStore(directory.resolve(".env"), emptyMap())
     val controller = WorkbenchController(AppSettings(LlmKind.OPENAI),
         mapOf(LlmKind.OPENAI to "fixture-openai-key", LlmKind.DEEPSEEK to "fixture-deepseek-key"),
+        historyStore = JsonConversationHistoryStore(directory.resolve(".llm-history.json")),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
