@@ -228,6 +228,23 @@ test("all six modes, demos, history, settings, keys and keyboard shortcuts", asy
       await expect(exchange.locator(".metrics thead th").first()).toHaveText(
         "Ответ",
       );
+      await expect(exchange.locator(".metrics thead th")).toHaveText([
+        "Ответ",
+        "Символы",
+        "Слова",
+        "Input",
+        "Completion",
+        "Total",
+        "Finish reason",
+      ]);
+      await expect(exchange.locator(".metrics tbody td")).toHaveText([
+        /\d+/,
+        /\d+/,
+        "120",
+        "80",
+        "200",
+        "stop",
+      ]);
     }
     await expect(
       page
@@ -308,7 +325,11 @@ test("streaming response grows through SSE, survives refresh and reveals metrics
 
   const exchange = page.getByTestId("exchange").last();
   const card = exchange.getByTestId("response-card");
+  await expect(card).toContainText("Думаю");
+  await expect(exchange).not.toContainText("Формируется следующий ответ");
   await expect(card.getByRole("status", { name: "Ответ генерируется" })).toBeVisible();
+  await expect(card).toContainText("Поток");
+  await expect(card).not.toContainText("Думаю");
   const partial = await card.locator(".response-body").innerText();
   expect(partial.length).toBeGreaterThan(0);
   await expect

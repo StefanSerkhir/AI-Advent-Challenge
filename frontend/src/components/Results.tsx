@@ -1,5 +1,5 @@
 import {useState} from "react";
-import {ActionIcon, Alert, Badge, Button, Loader, Tooltip,} from "@mantine/core";
+import {ActionIcon, Alert, Badge, Button, Tooltip,} from "@mantine/core";
 import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
 import type {Exchange, ModeInfo, Output} from "../api/types";
 import {Markdown} from "./Markdown";
@@ -20,6 +20,28 @@ const counted = (count: number, one: string, few: string, many: string) => {
           : many;
   return `${count} ${word}`;
 };
+
+const thinkingOutput: Output = {
+  id: "thinking",
+  title: "ОТВЕТ",
+  kind: "response",
+  content: null,
+  error: null,
+  model: null,
+  streaming: true,
+  metrics: {
+    characters: null,
+    words: null,
+    completionTokens: null,
+    finishReason: null,
+    promptTokens: null,
+    reasoningTokens: null,
+    totalTokens: null,
+    elapsedMillis: null,
+    estimatedCostUsd: null,
+  },
+};
+
 function ResponseCard({ output }: { output: Output }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -70,7 +92,11 @@ function ResponseCard({ output }: { output: Output }) {
         <div
           className={`response-body ${long && !expanded ? "collapsed" : ""} ${output.streaming ? "streaming" : ""}`}
         >
-          <Markdown>{output.content ?? ""}</Markdown>
+          {output.streaming && !output.content ? (
+            <span className="thinking-text">Думаю</span>
+          ) : (
+            <Markdown>{output.content ?? ""}</Markdown>
+          )}
           {output.streaming && (
             <span
               className="streaming-cursor"
@@ -142,14 +168,10 @@ function MetricsTable({
               <th>Символы</th>
               <th>Слова</th>
               {models && <th>Время, с</th>}
-              {models && <th>Input</th>}
+              <th>Input</th>
               <th>Completion</th>
-              {models && (
-                <>
-                  <th>Reasoning</th>
-                  <th>Total</th>
-                </>
-              )}
+              {models && <th>Reasoning</th>}
+              <th>Total</th>
               <th>Finish reason</th>
               {models && <th>Стоимость, USD</th>}
             </tr>
@@ -174,14 +196,10 @@ function MetricsTable({
                       : (o.metrics.elapsedMillis / 1000).toFixed(2)}
                   </td>
                 )}
-                {models && <td>{number(o.metrics.promptTokens)}</td>}
+                <td>{number(o.metrics.promptTokens)}</td>
                 <td>{number(o.metrics.completionTokens)}</td>
-                {models && (
-                  <>
-                    <td>{number(o.metrics.reasoningTokens)}</td>
-                    <td>{number(o.metrics.totalTokens)}</td>
-                  </>
-                )}
+                {models && <td>{number(o.metrics.reasoningTokens)}</td>}
+                <td>{number(o.metrics.totalTokens)}</td>
                 <td>
                   <code>{o.metrics.finishReason ?? "—"}</code>
                 </td>
@@ -206,6 +224,9 @@ export function ExchangeView({
   const responses = e.outputs.filter((o) => o.kind === "response");
   const prompts = e.outputs.filter((o) => o.kind === "prompt");
   const evaluation = e.outputs.filter((o) => o.kind === "evaluation");
+  const hasVisibleStream = [...responses, ...evaluation].some(
+    (o) => o.streaming,
+  );
   const title = modes.find((m) => m.id === e.mode)?.title ?? e.mode;
   return (
     <section
@@ -255,6 +276,9 @@ export function ExchangeView({
         {responses.map((o) => (
           <ResponseCard output={o} key={o.id} />
         ))}
+        {e.status === "pending" && !hasVisibleStream && (
+          <ResponseCard output={thinkingOutput} />
+        )}
       </div>
       {responses.length > 0 && e.status !== "pending" && (
         <MetricsTable
@@ -276,11 +300,6 @@ export function ExchangeView({
         </p>
       )}
       {e.evaluationNote && <Alert color="yellow">{e.evaluationNote}</Alert>}
-      {e.status === "pending" && (
-        <div className="pending-label" role="status">
-          <Loader size="xs" /> Формируется следующий ответ…
-        </div>
-      )}
       {e.status === "cancelled" && (
         <Alert color="gray">
           Операция отменена. Полученные ответы сохранены. Можно отправить новый

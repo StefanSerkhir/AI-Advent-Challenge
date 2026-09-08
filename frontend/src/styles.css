@@ -603,6 +603,9 @@ button {
   overflow: hidden;
   mask-image: linear-gradient(to bottom, black 80%, transparent);
 }
+.thinking-text {
+  color: #656b7f;
+}
 .streaming-cursor {
   display: inline-block;
   width: 2px;
@@ -783,14 +786,6 @@ button {
 }
 .metrics code {
   font-size: 9px;
-}
-.pending-label {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 11px;
-  color: #989caf;
-  padding: 5px;
 }
 .scroll-latest {
   position: absolute;
@@ -1101,10 +1096,6 @@ button {
 }
 .exchange-heading {
   font-size: 12px;
-}
-.pending-label {
-  font-size: 12px;
-  color: #7c869c;
 }
 .composer-zone .mantine-Alert-message {
   font-size: 12px;

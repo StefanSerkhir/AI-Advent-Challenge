@@ -135,7 +135,7 @@ class OpenAiCompatibleLlmClient(
                     ?.apiValue
                     .takeIf { config.supportsReasoningEffort },
                 stream = true.takeIf { streaming },
-                streamOptions = ChatCompletionStreamOptions().takeIf { streaming },
+                streamOptions = ChatCompletionStreamOptions(includeUsage = true).takeIf { streaming },
             ),
         )
     }

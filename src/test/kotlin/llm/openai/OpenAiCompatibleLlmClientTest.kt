@@ -34,7 +34,12 @@ class OpenAiCompatibleLlmClientTest {
                 """.trimIndent(),
                 headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
             )
-        }) { install(ContentNegotiation) { json() } }
+        }) {
+            install(ContentNegotiation) {
+                // Keep this aligned with createHttpClient(): default-valued fields are not encoded.
+                json(Json { ignoreUnknownKeys = true })
+            }
+        }
         try {
             val events = OpenAiLlmClient("fake-key", http, "gpt-test")
                 .stream("Привет")

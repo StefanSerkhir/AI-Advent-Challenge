@@ -49,7 +49,13 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
 
     override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
         val prompt = messages.last().content
-        delay(if ("[[slow]]" in prompt) 2500 else 180)
+        delay(
+            when {
+                "[[slow]]" in prompt -> 2500
+                "[[stream]]" in prompt -> 500
+                else -> 180
+            },
+        )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         val content = when {

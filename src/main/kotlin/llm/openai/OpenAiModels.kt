@@ -26,7 +26,7 @@ data class ChatCompletionRequest(
 @Serializable
 data class ChatCompletionStreamOptions(
     @SerialName("include_usage")
-    val includeUsage: Boolean = true,
+    val includeUsage: Boolean,
 )
 
 @Serializable
