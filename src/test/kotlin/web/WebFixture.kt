@@ -90,7 +90,7 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             else -> "## Ответ\n\nКвантовый компьютер использует **кубиты** и квантовые операции. Интерференция помогает усилить вероятность нужного результата.\n\n| Подход | Контекст |\n|---|---|\n| Текущий запрос | ${messages.size} сообщений |\n\nФормула: \\( E = mc^2 \\)."
         }
         return CompletionResult(content, if (options.maxTokens != null && options.maxTokens < 50) "length" else "stop",
-            TokenUsage(120, 80, 200, cachedPromptTokens = 20, reasoningTokens = 10),
+            TokenUsage(120, 80, 200, cachedPromptTokens = 20, cacheWritePromptTokens = 5, reasoningTokens = 10),
             if (model == "gpt-5.6-luna" && options.temperature != null) "gpt-4.1-mini" else model)
     }
 }

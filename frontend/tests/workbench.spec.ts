@@ -86,7 +86,8 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.locator(".history-counts span")).toContainText(
     "Простой агент",
   );
-  await expect(page.getByLabel("Максимум токенов")).toHaveCount(0);
+  await expect(page.getByLabel("Максимум токенов")).toBeVisible();
+  await expect(page.getByLabel("Переполнение контекста")).toBeVisible();
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(
     page.locator(".history-counts").getByText("С ограничениями", {
@@ -127,7 +128,7 @@ test("prompt focus uses one clean highlight around the composer", async ({
     .toBe("rgb(133, 139, 217)");
 });
 
-test("all six modes, demos, history, settings, keys and keyboard shortcuts", async ({
+test("all seven modes, demos, history, settings, keys and keyboard shortcuts", async ({
   page,
 }) => {
   const consoleErrors: string[] = [];
@@ -245,6 +246,14 @@ test("all six modes, demos, history, settings, keys and keyboard shortcuts", asy
         "200",
         "stop",
       ]);
+      await expect(page.getByTestId("token-metrics-panel")).toHaveCount(1);
+      const tokenPanel = exchange.getByTestId("token-metrics-panel");
+      await expect(tokenPanel).not.toHaveAttribute("open", "");
+      await expect(exchange.getByLabel("Токенные метрики хода 2")).toBeHidden();
+      await tokenPanel.locator("summary").click();
+      await expect(exchange.getByLabel("Токенные метрики хода 2")).toBeVisible();
+      await expect(exchange.getByText("usage API получен").last()).toBeVisible();
+      await expect(exchange.getByLabel("Таблица роста токенов по ходам")).toBeVisible();
     }
     await expect(
       page
@@ -273,6 +282,36 @@ test("all six modes, demos, history, settings, keys and keyboard shortcuts", asy
   }
   await expect(page.getByTestId("exchange")).toHaveCount(7);
   expect(consoleErrors).toEqual([]);
+});
+
+test("token and context demos show growth and safe overflow without a paid API", async ({ page }) => {
+  await page.getByRole("button", { name: "Токены: короткий диалог", exact: true }).click();
+  await done(page);
+  let exchange = page.getByTestId("exchange").last();
+  let tokenPanel = exchange.getByTestId("token-metrics-panel");
+  await expect(tokenPanel).not.toHaveAttribute("open", "");
+  await tokenPanel.locator("summary").click();
+  await expect(exchange.getByLabel("Таблица роста токенов по ходам")).toBeVisible();
+  await expect(exchange.getByLabel("Токенные метрики хода 4")).toBeVisible();
+  await expect(exchange.getByText("Приблизительный tokenizer").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Токены: длинный диалог", exact: true }).click();
+  await done(page);
+  exchange = page.getByTestId("exchange").last();
+  tokenPanel = exchange.getByTestId("token-metrics-panel");
+  await tokenPanel.locator("summary").click();
+  await expect(exchange.getByLabel("Токенные метрики хода 14")).toBeVisible();
+  await expect(exchange.locator(".conversation-summary")).toContainText("Cumulative API input");
+
+  await page.getByRole("button", { name: "Токены: переполнение 6K", exact: true }).click();
+  await done(page);
+  exchange = page.getByTestId("exchange").last();
+  tokenPanel = exchange.getByTestId("token-metrics-panel");
+  await tokenPanel.locator("summary").click();
+  await expect(exchange.getByText("REJECT · локальное отклонение").first()).toBeVisible();
+  await expect(exchange.getByText("Активный контекст сокращён")).toBeVisible();
+  await expect(exchange.getByText(/в постоянной истории — да; в активном API-контексте.*— нет/)).toBeVisible();
+  await expect(exchange.getByText("Симуляция уменьшенного окна").first()).toBeVisible();
 });
 
 test("refresh during request, second tab, reconnect and cancellation do not duplicate generation", async ({
@@ -350,7 +389,7 @@ test("streaming response grows through SSE, survives refresh and reveals metrics
   await expect(
     completed.getByRole("status", { name: "Ответ генерируется" }),
   ).toHaveCount(0);
-  await expect(completed.locator("strong")).toContainText("Жирный текст");
+  await expect(completed.locator(".response-card .response-body strong")).toContainText("Жирный текст");
   await expect(completed.locator("pre")).toContainText("val answer = 42");
   await expect(completed.locator(".metrics")).toBeVisible();
 });

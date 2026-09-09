@@ -39,7 +39,7 @@ class OpenAiCompatibleLlmClient(
             configureRequest(messages, options, streaming = false)
         }
 
-        ensureSuccessful(httpResponse.status)
+        ensureSuccessful(httpResponse)
 
         val response = httpResponse.body<ChatCompletionResponse>()
         val choice = response.choices.firstOrNull()
@@ -59,7 +59,7 @@ class OpenAiCompatibleLlmClient(
         httpClient.preparePost(config.chatCompletionsUrl) {
             configureRequest(messages, options, streaming = true)
         }.execute { httpResponse ->
-            ensureSuccessful(httpResponse.status)
+            ensureSuccessful(httpResponse)
 
             val dataLines = mutableListOf<String>()
             var receivedDone = false
@@ -76,6 +76,9 @@ class OpenAiCompatibleLlmClient(
 
                 val element = streamJson.parseToJsonElement(data)
                 element.jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content?.let {
+                    if (isContextError(it)) throw LlmContextApiException(
+                        "Провайдер прервал поток из-за превышения контекстного окна. Уменьшите историю или резерв ответа.",
+                    )
                     throw LlmApiException("провайдер прервал поток: $it")
                 }
                 val chunk = streamJson.decodeFromJsonElement<ChatCompletionChunk>(element)
@@ -140,8 +143,20 @@ class OpenAiCompatibleLlmClient(
         )
     }
 
-    private fun ensureSuccessful(status: HttpStatusCode) {
+    private suspend fun ensureSuccessful(response: HttpResponse) {
+        val status = response.status
         if (status.isSuccess()) return
+        val errorBody = runCatching { response.bodyAsText() }.getOrDefault("")
+        val providerMessage = runCatching {
+            val root = streamJson.parseToJsonElement(errorBody).jsonObject
+            root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+        }.getOrNull() ?: errorBody.take(2_000)
+        if (status.value == 400 && isContextError(providerMessage)) {
+            throw LlmContextApiException(
+                "Провайдер отклонил запрос из-за превышения контекстного окна. Уменьшите историю или резерв ответа.",
+                status.value,
+            )
+        }
         val message = when (status.value) {
             401 -> "неверный API-ключ"
             402 -> "недостаточно средств на балансе LLM-провайдера"
@@ -154,6 +169,12 @@ class OpenAiCompatibleLlmClient(
             else -> "LLM API вернул ошибку ${status.value}"
         }
         throw LlmApiException(message)
+    }
+
+    private fun isContextError(message: String): Boolean {
+        val normalized = message.lowercase()
+        return listOf("context length", "context window", "maximum context", "too many tokens", "context_length_exceeded")
+            .any(normalized::contains)
     }
 
     private fun ChatTokenUsage.toTokenUsage() = TokenUsage(

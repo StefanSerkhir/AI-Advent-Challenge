@@ -784,6 +784,215 @@ button {
 .metrics td {
   color: #777e94;
 }
+.turn-metrics,
+.token-dashboard {
+  border: 1px solid #dfe2ef;
+  border-radius: 12px;
+  background: #fff;
+  padding: 17px;
+  min-width: 0;
+}
+.token-metrics-panel {
+  border: 1px solid #dfe2ef;
+  border-radius: 12px;
+  background: #f7f8fb;
+  min-width: 0;
+  overflow: hidden;
+}
+.token-metrics-panel > summary {
+  cursor: pointer;
+  padding: 14px 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #52586a;
+  font-size: 11px;
+  font-weight: 600;
+}
+.token-metrics-panel > summary::marker {
+  content: "";
+}
+.token-metrics-panel > summary::before {
+  content: "›";
+  color: #858bd1;
+  font-size: 18px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+.token-metrics-panel[open] > summary::before {
+  transform: rotate(90deg);
+}
+.token-metrics-panel > summary span:first-of-type {
+  flex: 1;
+}
+.token-metrics-panel > summary span:last-child {
+  color: #8a90a0;
+  font-size: 9px;
+  font-weight: 500;
+  text-align: right;
+}
+.token-metrics-panel-content {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+.token-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.token-section-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.token-section-heading code,
+.pricing-caption code {
+  font-size: 10px;
+  color: #777e94;
+}
+.token-kpis,
+.conversation-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.token-kpis > div,
+.conversation-summary > div {
+  background: #f7f8fb;
+  border: 1px solid #eceef5;
+  border-radius: 8px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.token-kpis span,
+.conversation-summary span,
+.token-details dt {
+  color: #858a9a;
+  font-size: 9px;
+}
+.token-kpis strong,
+.conversation-summary strong,
+.token-details dd {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  margin: 0;
+}
+sup {
+  color: #858bd1;
+  font-size: 8px;
+  font-weight: 600;
+}
+.context-meter {
+  margin: 13px 0;
+}
+.context-meter-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.context-track {
+  height: 8px;
+  background: #eceef3;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.context-track span {
+  display: block;
+  height: 100%;
+  background: #36a180;
+}
+.context-track.warning span { background: #d59b35; }
+.context-track.danger span { background: #d97742; }
+.context-track.critical span { background: #cf4b55; }
+.context-warning {
+  font-size: 10px;
+  margin-top: 7px;
+  color: #976b24;
+}
+.context-warning.danger,
+.context-warning.critical { color: #b54a43; }
+.token-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px 14px;
+  margin: 12px 0;
+}
+.token-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid #f0f1f5;
+}
+.pricing-caption {
+  margin-top: 10px;
+  font-size: 9px;
+  color: #9297a5;
+  overflow-wrap: anywhere;
+}
+.token-dashboard h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.conversation-summary > p {
+  grid-column: 1/-1;
+  font-size: 9px;
+  color: #8a90a0;
+}
+.growth-chart {
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: 9px;
+  background: #fafbfc;
+}
+.growth-row {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+  font-size: 9px;
+  color: #7b8090;
+}
+.growth-bars {
+  display: grid;
+  gap: 2px;
+}
+.growth-bars i {
+  display: block;
+  min-width: 2px;
+  height: 4px;
+  border-radius: 4px;
+}
+.input-bar,
+.legend-input { background: #5963cf; }
+.cost-bar,
+.legend-cost { background: #35a180; }
+.growth-chart > p {
+  margin-top: 9px;
+  font-size: 9px;
+  color: #818697;
+}
+.growth-chart > p span {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin: 0 4px 0 9px;
+}
+.token-growth-table table {
+  min-width: 1120px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .metrics code {
   font-size: 9px;
 }

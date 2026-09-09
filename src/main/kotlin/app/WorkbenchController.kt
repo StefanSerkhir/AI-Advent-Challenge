@@ -11,6 +11,9 @@ import org.example.agent.ConversationHistoryStore
 import org.example.agent.HistoryPersistenceException
 import org.example.agent.NoOpConversationHistoryStore
 import org.example.llm.*
+import org.example.tokens.ContextLimitExceededException
+import org.example.tokens.ConversationTokenTotals
+import org.example.tokens.TurnTokenMetrics
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -34,12 +37,13 @@ sealed interface RequestResult {
     data class Reasoning(val report: ReasoningReport) : RequestResult
     data class Temperature(val report: TemperatureReport) : RequestResult
     data class ModelComparison(val report: ModelComparisonReport) : RequestResult
+    data class TokensContext(val report: TokenContextDemoReport) : RequestResult
 }
 
 sealed interface ExchangeOutcome {
     data object Pending : ExchangeOutcome
     data class Completed(val result: RequestResult) : ExchangeOutcome
-    data class Failed(val message: String) : ExchangeOutcome
+    data class Failed(val message: String, val code: String = "request_failed") : ExchangeOutcome
     data object Cancelled : ExchangeOutcome
 }
 
@@ -62,6 +66,8 @@ data class WorkbenchState(
     val configuredProviders: Set<LlmKind>,
     val historyTurnCounts: Map<ResponseVariant, Int>,
     val historyMessages: Map<ResponseVariant, List<LlmMessage>> = emptyMap(),
+    val tokenMetrics: Map<ResponseVariant, List<TurnTokenMetrics>> = emptyMap(),
+    val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
     val exchanges: List<ConversationExchange> = emptyList(),
     val operation: OperationState = OperationState.Idle,
     val notice: UiNotice? = null,
@@ -95,8 +101,9 @@ class WorkbenchController(
         onProgress = { reportProgress(it.current, it.total, it.label) },
         onDelta = { publishStreamingOutput(it.asOutput()) },
         onResponse = {
-            addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion))
-            publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts()) }
+            addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion, tokenMetrics = it.tokenMetrics))
+            publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts(),
+                tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot()) }
         },
         historyStore = historyStore,
         clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
@@ -107,6 +114,8 @@ class WorkbenchController(
             configuredProviders = apiKeys.keys.toSet(),
             historyTurnCounts = promptRunner.historyTurnCounts(),
             historyMessages = promptRunner.historySnapshot(),
+            tokenMetrics = promptRunner.tokenMetricsSnapshot(),
+            tokenTotals = promptRunner.tokenTotalsSnapshot(),
             notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning)
                 .takeIf(List<String>::isNotEmpty)
                 ?.joinToString("\n")
@@ -169,6 +178,7 @@ class WorkbenchController(
         try {
             promptRunner.clearHistory()
             publish { it.copy(historyTurnCounts = promptRunner.historyTurnCounts(), historyMessages = promptRunner.historySnapshot(),
+                tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
                 notice = UiNotice("История обеих веток очищена.", NoticeKind.INFO)) }
             return true
         } catch (_: HistoryPersistenceException) {
@@ -205,6 +215,14 @@ class WorkbenchController(
     )
 
     @Synchronized
+    fun submitTokenDemo(scenario: TokenDemoScenario): Boolean = submitInternal(
+        prompt = scenario.title,
+        referenceAnswer = null,
+        forcedMode = ResponseMode.TOKENS_CONTEXT,
+        tokenDemoScenario = scenario,
+    )
+
+    @Synchronized
     fun cancelCurrent() {
         currentJob?.cancel(CancellationException("Отменено пользователем"))
     }
@@ -230,6 +248,7 @@ class WorkbenchController(
         prompt: String,
         referenceAnswer: String?,
         forcedMode: ResponseMode? = null,
+        tokenDemoScenario: TokenDemoScenario? = null,
     ): Boolean {
         if (_state.value.isRunning || closed) return false
         val normalizedPrompt = prompt.trim()
@@ -245,7 +264,7 @@ class WorkbenchController(
             settings.llmKind
         }
         val apiKey = apiKeys[requestKind]
-        if (apiKey == null) {
+        if (apiKey == null && settings.responseMode != ResponseMode.TOKENS_CONTEXT) {
             publish {
                 it.copy(
                     notice = UiNotice(
@@ -264,6 +283,11 @@ class WorkbenchController(
             ResponseMode.REASONING -> TOTAL_REASONING_API_CALLS
             ResponseMode.TEMPERATURE -> TOTAL_TEMPERATURE_API_CALLS
             ResponseMode.MODEL_COMPARISON -> TOTAL_MODEL_COMPARISON_API_CALLS
+            ResponseMode.TOKENS_CONTEXT -> when (tokenDemoScenario ?: TokenDemoScenario.SHORT) {
+                TokenDemoScenario.SHORT -> 4
+                TokenDemoScenario.LONG -> 14
+                TokenDemoScenario.OVERFLOW -> 2
+            }
         }
         val exchange = ConversationExchange(
             id = exchangeId,
@@ -282,8 +306,8 @@ class WorkbenchController(
         currentJob = workerScope.launch(start = CoroutineStart.ATOMIC) {
             try {
                 ensureActive()
-                if (settings.responseMode != ResponseMode.MODEL_COMPARISON) {
-                    requestClient.set(clientFactory(requestKind, apiKey, settings.model))
+                if (settings.responseMode !in setOf(ResponseMode.MODEL_COMPARISON, ResponseMode.TOKENS_CONTEXT)) {
+                    requestClient.set(clientFactory(requestKind, requireNotNull(apiKey), settings.model))
                 }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
@@ -313,15 +337,27 @@ class WorkbenchController(
                             onDelta = { publishStreamingOutput(it.asOutput()) },
                             onRun = { addOutput(it.asOutput()) },
                             onProgress = { reportProgress(it.current, it.total, it.label) },
-                            clientProvider = { model -> clientFactory(LlmKind.OPENAI, apiKey, model) },
+                            clientProvider = { model -> clientFactory(LlmKind.OPENAI, requireNotNull(apiKey), model) },
                             errorMessage = { userFacingError(it, apiKeys.values) },
                         ).compare(normalizedPrompt, settings.maxTokens),
                     )
+
+                    ResponseMode.TOKENS_CONTEXT -> {
+                        val report = TokenContextDemoRunner().run(tokenDemoScenario ?: TokenDemoScenario.SHORT)
+                        report.turns.forEachIndexed { index, turn ->
+                            reportProgress(index + 1, report.turns.size, turn.title)
+                            addOutput(ExperimentOutput(turn.id, turn.title,
+                                turn.content?.let { CompletionResult(it, turn.metrics.finishReason, turn.metrics.actualUsage, turn.metrics.model) },
+                                error = turn.error, kind = "token-turn", tokenMetrics = turn.metrics))
+                        }
+                        RequestResult.TokensContext(report)
+                    }
                 }
                 when (result) {
                     is RequestResult.Reasoning -> addOutput(ExperimentOutput("evaluation", "Сравнение и оценка точности", result.report.evaluation, kind = "evaluation"))
                     is RequestResult.Temperature -> addOutput(ExperimentOutput("evaluation", "Выводы по использованию", result.report.evaluation, kind = "evaluation"))
                     is RequestResult.ModelComparison -> result.report.evaluation?.let { addOutput(it.asOutput(evaluation = true)) }
+                    is RequestResult.TokensContext -> Unit
                     else -> Unit
                 }
                 updateExchange(exchangeId, ExchangeOutcome.Completed(result))
@@ -329,13 +365,19 @@ class WorkbenchController(
                 updateExchange(exchangeId, ExchangeOutcome.Cancelled)
             } catch (error: Exception) {
                 val message = userFacingError(error, apiKeys.values)
-                updateExchange(exchangeId, ExchangeOutcome.Failed(message))
+                val code = when (error) {
+                    is ContextLimitExceededException -> "context_limit_exceeded"
+                    is LlmContextApiException -> "provider_context_limit"
+                    else -> "request_failed"
+                }
+                updateExchange(exchangeId, ExchangeOutcome.Failed(message, code))
                 publish { it.copy(notice = UiNotice(message, NoticeKind.ERROR)) }
             } finally {
                 synchronized(this@WorkbenchController) {
                     requestClient.set(null)
                     currentJob = null
-                    publish { it.copy(operation = OperationState.Idle, historyTurnCounts = promptRunner.historyTurnCounts()) }
+                    publish { it.copy(operation = OperationState.Idle, historyTurnCounts = promptRunner.historyTurnCounts(),
+                        tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot()) }
                 }
             }
         }
@@ -397,10 +439,12 @@ class WorkbenchController(
 
     @Synchronized
     private fun publishStreamingOutput(output: ExperimentOutput) {
+        val priorOutput = latestStreamingOutputs[output.id]
         latestStreamingOutputs[output.id] = output
         val now = System.nanoTime()
         val previous = lastStreamPublishNanos[output.id]
-        if (previous != null && now - previous < STREAM_PUBLISH_INTERVAL_NANOS) return
+        val firstVisibleDelta = priorOutput?.completion?.content.isNullOrEmpty() && !output.completion?.content.isNullOrEmpty()
+        if (!firstVisibleDelta && previous != null && now - previous < STREAM_PUBLISH_INTERVAL_NANOS) return
         lastStreamPublishNanos[output.id] = now
         publish { current -> current.copy(exchanges = current.exchanges.map { exchange ->
             if (exchange.outcome == ExchangeOutcome.Pending) {

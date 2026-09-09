@@ -31,6 +31,26 @@ class PromptRunnerTest {
     }
 
     @Test
+    fun `completed token metrics restore after restart and legacy usage stays unavailable`() = runBlocking {
+        val directory = createTempDirectory("llm-metrics-restart-test")
+        val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        try {
+            val settings = AppSettings(LlmKind.OPENAI, model = "gpt-5.6-sol", responseMode = ResponseMode.UNRESTRICTED)
+            val first = PromptRunner(historyStore = JsonConversationHistoryStore(file), clientProvider = { RecordingLlmClient() })
+            first.complete("first", settings)
+            val restored = PromptRunner(historyStore = JsonConversationHistoryStore(file), clientProvider = { RecordingLlmClient() })
+            assertEquals(1, restored.tokenMetricsSnapshot().getValue(ResponseVariant.UNRESTRICTED).size)
+            assertEquals(10, restored.tokenTotalsSnapshot().getValue(ResponseVariant.UNRESTRICTED).cumulativeApiInputTokens)
+
+            file.writeText("""{"version":1,"branches":[{"id":"unrestricted","messages":[{"role":"user","text":"old"},{"role":"assistant","text":"answer"}]}]}""")
+            val legacy = PromptRunner(historyStore = JsonConversationHistoryStore(file), clientProvider = { RecordingLlmClient() })
+            val legacyTurn = legacy.tokenMetricsSnapshot().getValue(ResponseVariant.UNRESTRICTED).single()
+            assertNull(legacyTurn.actualUsage)
+            assertNull(legacyTurn.cumulativeTotals.cumulativeApiInputTokens)
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test
     fun `history can be disabled and cleared`() = runBlocking {
         val client = RecordingLlmClient()
         val runner = PromptRunner { client }

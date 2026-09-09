@@ -19,6 +19,7 @@ private const val MAX_WORDS_NAME = "max_words"
 private const val BULLET_COUNT_NAME = "bullet_count"
 private const val STOP_SEQUENCE_NAME = "stop_sequence"
 private const val HISTORY_ENABLED_NAME = "history_enabled"
+private const val CONTEXT_OVERFLOW_POLICY_NAME = "context_overflow_policy"
 
 data class LocalConfig(
     val apiKey: String? = null,
@@ -32,13 +33,14 @@ data class LocalConfig(
     val bulletCount: String? = null,
     val stopSequence: String? = null,
     val historyEnabled: String? = null,
+    val contextOverflowPolicy: String? = null,
 ) {
     // Prevent accidental disclosure if the object reaches a logger or assertion message.
     override fun toString(): String = "LocalConfig(" +
         "apiKey=${apiKey.redacted()}, llmKind=$llmKind, model=$model, " +
         "deepSeekApiKey=${deepSeekApiKey.redacted()}, openAiApiKey=${openAiApiKey.redacted()}, " +
         "responseMode=$responseMode, maxTokens=$maxTokens, maxWords=$maxWords, " +
-        "bulletCount=$bulletCount, stopSequence=$stopSequence, historyEnabled=$historyEnabled)"
+        "bulletCount=$bulletCount, stopSequence=$stopSequence, historyEnabled=$historyEnabled, contextOverflowPolicy=$contextOverflowPolicy)"
 }
 
 class LocalConfigStore(
@@ -60,6 +62,7 @@ class LocalConfigStore(
             bulletCount = loadValue(BULLET_COUNT_NAME, fileValues),
             stopSequence = loadValue(STOP_SEQUENCE_NAME, fileValues),
             historyEnabled = loadValue(HISTORY_ENABLED_NAME, fileValues),
+            contextOverflowPolicy = loadValue(CONTEXT_OVERFLOW_POLICY_NAME, fileValues),
         )
     }
 
@@ -74,6 +77,7 @@ class LocalConfigStore(
             BULLET_COUNT_NAME to settings.bulletCount.toString(),
             STOP_SEQUENCE_NAME to (settings.stopSequence ?: "off"),
             HISTORY_ENABLED_NAME to settings.historyEnabled.toString(),
+            CONTEXT_OVERFLOW_POLICY_NAME to settings.contextOverflowPolicy.name,
         )
         apiKeys[LlmKind.DEEPSEEK]?.let { updates[DEEPSEEK_API_KEY_NAME] = it }
         apiKeys[LlmKind.OPENAI]?.let { updates[OPENAI_API_KEY_NAME] = it }

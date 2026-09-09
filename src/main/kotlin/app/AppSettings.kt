@@ -2,6 +2,7 @@ package org.example.app
 
 import org.example.llm.LlmKind
 import org.example.llm.LlmModels
+import org.example.tokens.ContextOverflowPolicy
 
 const val DEFAULT_STOP_SEQUENCE = "<END_OF_RESPONSE>"
 
@@ -11,7 +12,8 @@ enum class ResponseMode(val cliValue: String) {
     UNRESTRICTED("unrestricted"),
     REASONING("reasoning"),
     TEMPERATURE("temperature"),
-    MODEL_COMPARISON("models");
+    MODEL_COMPARISON("models"),
+    TOKENS_CONTEXT("tokens");
 
     companion object {
         fun from(value: String): ResponseMode? = entries.firstOrNull {
@@ -37,6 +39,7 @@ data class AppSettings(
     var bulletCount: Int = 3,
     var stopSequence: String? = DEFAULT_STOP_SEQUENCE,
     var historyEnabled: Boolean = true,
+    var contextOverflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
 ) {
     init {
         require(maxTokens > 0)

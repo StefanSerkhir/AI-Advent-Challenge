@@ -76,6 +76,23 @@ class OpenAiCompatibleLlmClientTest {
     }
 
     @Test
+    fun `provider context overflow is a structured error instead of generic 400`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                content = """{"error":{"message":"This model's maximum context length was exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}""",
+                status = HttpStatusCode.BadRequest,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }) { install(ContentNegotiation) { json() } }
+        try {
+            val error = assertFailsWith<LlmContextApiException> { OpenAiLlmClient("fake-key", http).complete("too long") }
+            assertEquals(400, error.providerStatus)
+            assertContains(error.message.orEmpty(), "контекстного окна")
+            assertFalse(error.message.orEmpty().contains("LLM API вернул ошибку 400"))
+        } finally { http.close() }
+    }
+
+    @Test
     fun `real provider adapters preserve fallback stop and reasoning request parameters`() = runBlocking {
         val requests = mutableListOf<JsonObject>()
         val http = HttpClient(MockEngine { request ->

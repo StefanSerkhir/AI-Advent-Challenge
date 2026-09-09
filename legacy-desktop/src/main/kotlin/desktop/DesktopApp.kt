@@ -413,6 +413,7 @@ private fun ResultView(result: RequestResult) {
         is RequestResult.Reasoning -> ReasoningView(result.report)
         is RequestResult.Temperature -> TemperatureView(result.report)
         is RequestResult.ModelComparison -> ModelComparisonView(result.report)
+        is RequestResult.TokensContext -> Text("Эксперимент токенов доступен в web-интерфейсе.")
     }
 }
 
@@ -989,4 +990,5 @@ private fun ResponseMode.title(): String = when (this) {
     ResponseMode.REASONING -> "4 способа рассуждения"
     ResponseMode.TEMPERATURE -> "Сравнение температуры"
     ResponseMode.MODEL_COMPARISON -> "Сравнение моделей GPT-5.6"
+    ResponseMode.TOKENS_CONTEXT -> "Токены и контекст"
 }

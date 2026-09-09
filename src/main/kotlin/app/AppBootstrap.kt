@@ -3,6 +3,7 @@ package org.example.app
 import org.example.config.LocalConfig
 import org.example.llm.LlmKind
 import org.example.llm.LlmModels
+import org.example.tokens.ContextOverflowPolicy
 
 class AppBootstrap private constructor(
     val settings: AppSettings,
@@ -59,6 +60,12 @@ class AppBootstrap private constructor(
                     else -> config.stopSequence
                 },
                 historyEnabled = historyEnabled,
+                contextOverflowPolicy = config.contextOverflowPolicy?.let { raw ->
+                    runCatching { ContextOverflowPolicy.valueOf(raw.trim().uppercase()) }.getOrElse {
+                        warnings += "context_overflow_policy в .env не распознана; используется REJECT"
+                        ContextOverflowPolicy.REJECT
+                    }
+                } ?: ContextOverflowPolicy.REJECT,
             )
             val apiKeys = buildMap {
                 config.apiKey?.let { put(configuredLlmKind, it) }

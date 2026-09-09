@@ -39,6 +39,39 @@ class WorkbenchApiTest {
         contentType(ContentType.Application.Json)
         setBody(body)
     }
+
+    @Test
+    fun `token demos need no key and expose short long and overflow metrics`() = runBlocking {
+        val c = controller(mode = ResponseMode.TOKENS_CONTEXT, keys = emptyMap())
+        val api = WorkbenchApi(c)
+        try {
+            api.start(command(prompt = "", demo = "tokens-short"))
+            c.awaitCurrentRequest()
+            var dto = c.state.value.toDto()
+            val short = dto.exchanges.last()
+            assertEquals("completed", short.status)
+            assertEquals(4, short.outputs.count { it.tokenMetrics != null })
+            assertNotNull(short.outputs.last().tokenMetrics?.actualInputTokens?.value)
+
+            api.start(command(prompt = "", demo = "tokens-long"))
+            c.awaitCurrentRequest()
+            dto = c.state.value.toDto()
+            val long = dto.exchanges.last()
+            assertEquals(14, long.outputs.count { it.tokenMetrics != null })
+            val last = long.outputs.last().tokenMetrics!!
+            assertTrue(last.cumulativeTotals.cumulativeApiInputTokens.value!! > last.cumulativeTotals.currentHistoryTokens.value!!)
+
+            api.start(command(prompt = "", demo = "tokens-overflow"))
+            c.awaitCurrentRequest()
+            val overflow = c.state.value.toDto().exchanges.last()
+            assertEquals(2, overflow.outputs.size)
+            assertNull(overflow.outputs.first().tokenMetrics!!.actualInputTokens.value)
+            assertTrue(overflow.outputs.first().tokenMetrics!!.exceededByTokens.value!! > 0)
+            assertTrue(overflow.outputs.last().tokenMetrics!!.excludedMessageCount.value!! > 0)
+            assertEquals(true, overflow.sentinelInPermanentHistory)
+            assertEquals(false, overflow.sentinelInActiveContext)
+        } finally { c.close() }
+    }
     private suspend fun HttpResponse.state(): StateDto = apiJson.decodeFromString(bodyAsText())
     private val base = "http://localhost:8080/api"
 
@@ -52,7 +85,7 @@ class WorkbenchApiTest {
         application { workbenchModule(WorkbenchApi(c)) }
         try {
             val initial = client.get("$base/settings").state()
-            assertEquals(6, initial.modes.size)
+            assertEquals(7, initial.modes.size)
             assertEquals(2, initial.providers.size)
             assertFalse(initial.providers.any { it.hasKey })
             assertEquals(HttpStatusCode.BadRequest, client.post("$base/operations") { localJson(apiJson.encodeToString(command())) }.status)

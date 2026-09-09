@@ -6,10 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.example.llm.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class LlmAgentTest {
     @Test
@@ -28,8 +25,9 @@ class LlmAgentTest {
             clientProvider = { client },
         )
         val updates = mutableListOf<String>()
+        val metricUpdates = mutableListOf<org.example.tokens.TurnTokenMetrics>()
 
-        val response = agent.respond(AgentRequest("Покажи Markdown"), updates::add)
+        val response = agent.respond(AgentRequest("Покажи Markdown", model = "gpt-5.6-sol"), updates::add, metricUpdates::add)
 
         assertEquals(
             listOf("# Заг", "# Заголовок\n\n**жир", "# Заголовок\n\n**жирный текст**"),
@@ -43,6 +41,9 @@ class LlmAgentTest {
         )
         assertEquals(expectedHistory, agent.historySnapshot())
         assertEquals(expectedHistory, persistedHistory)
+        assertNull(metricUpdates.first().actualUsage)
+        assertEquals(4, metricUpdates.last().actualUsage?.promptTokens)
+        assertEquals(response.tokenMetrics, metricUpdates.last())
     }
 
     @Test

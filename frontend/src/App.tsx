@@ -15,7 +15,7 @@ import {
 } from "@tabler/icons-react";
 import {useWorkbench} from "./state/useWorkbench";
 import {Sidebar} from "./components/Sidebar";
-import {ExchangeView} from "./components/Results";
+import {ExchangeView, TokenMetricsPanel} from "./components/Results";
 
 export default function App() {
   const w = useWorkbench();
@@ -69,6 +69,7 @@ export default function App() {
       </div>
     );
   const mode = s.modes.find((m) => m.id === s.settings.mode)!;
+  const lastUnrestrictedId = [...s.exchanges].reverse().find((e) => e.mode === "unrestricted")?.id;
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -155,6 +156,7 @@ export default function App() {
         >
           <div className="conversation-inner">
             {!s.exchanges.length ? (
+              <>
               <div className="welcome">
                 <div className="welcome-symbol">
                   <IconLayoutColumns size={34} stroke={1.4} />
@@ -212,6 +214,9 @@ export default function App() {
                   Выберите подключение слева и задайте свой первый вопрос
                 </p>
               </div>
+              {s.tokenConversations.unrestricted?.turns.length > 0 &&
+                <TokenMetricsPanel conversation={s.tokenConversations.unrestricted} />}
+              </>
             ) : (
               s.exchanges.map((e) => (
                 <ExchangeView
@@ -219,6 +224,8 @@ export default function App() {
                   exchange={e}
                   modes={s.modes}
                   priceDate={s.priceDate}
+                  showTokenMetrics={e.id === lastUnrestrictedId}
+                  tokenConversation={e.id === lastUnrestrictedId ? s.tokenConversations.unrestricted : undefined}
                 />
               ))
             )}

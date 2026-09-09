@@ -194,6 +194,16 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                 void w.settings({ historyEnabled: e.currentTarget.checked })
               }
             />
+            <NativeSelect
+              label="Переполнение контекста"
+              value={s.settings.contextOverflowPolicy}
+              disabled={locked}
+              data={[
+                { value: "REJECT", label: "REJECT — отклонить" },
+                { value: "DROP_OLDEST", label: "DROP_OLDEST — убрать старые пары" },
+              ]}
+              onChange={(e) => void w.settings({ contextOverflowPolicy: e.currentTarget.value as "REJECT" | "DROP_OLDEST" })}
+            />
             <div className="history-counts">
               {mode.id !== "controlled" && (
                 <span>
@@ -248,6 +258,15 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
           onClick={() => void w.start("", "temperature")}
         >
           Демо: температура
+        </Button>
+        <Button justify="space-between" fullWidth variant="default" size="sm" rightSection={<IconArrowRight size={15} />} disabled={locked} onClick={() => void w.start("", "tokens-short")}>
+          Токены: короткий диалог
+        </Button>
+        <Button justify="space-between" fullWidth variant="default" size="sm" rightSection={<IconArrowRight size={15} />} disabled={locked} onClick={() => void w.start("", "tokens-long")}>
+          Токены: длинный диалог
+        </Button>
+        <Button justify="space-between" fullWidth variant="default" size="sm" rightSection={<IconArrowRight size={15} />} disabled={locked} onClick={() => void w.start("", "tokens-overflow")}>
+          Токены: переполнение 6K
         </Button>
       </section>
       <div className="sidebar-footer">

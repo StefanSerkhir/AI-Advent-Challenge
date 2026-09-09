@@ -2,6 +2,9 @@ package org.example.agent
 
 import org.example.llm.LlmMessage
 import org.example.llm.LlmRole
+import org.example.llm.TokenUsage
+import org.example.tokens.*
+import java.math.BigDecimal
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.io.path.createTempDirectory
@@ -28,13 +31,53 @@ class ConversationHistoryStoreTest {
 
             assertEquals(history, JsonConversationHistoryStore(file).load())
             val json = file.readText()
-            assertContains(json, "\"version\": 1")
+            assertContains(json, "\"version\": 2")
             assertContains(json, "\"id\": \"unrestricted\"")
             assertContains(json, "\"role\": \"user\"")
             assertFalse("api_key" in json)
         } finally {
             directory.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    fun `version two restores turn metrics and exact decimal cost`() {
+        val directory = createTempDirectory("llm-history-metrics-test")
+        val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val estimator = ApproximateChatTokenEstimator()
+        val messages = listOf(LlmMessage(LlmRole.USER, "u"), LlmMessage(LlmRole.ASSISTANT, "a"))
+        val turn = TurnTokenMetrics(
+            id = "stable-turn", turnNumber = 1, model = "gpt-5.6-sol", userMessage = "u", assistantMessage = "a",
+            estimatedCurrentMessageTokens = estimator.estimateContent("u"),
+            estimatedHistoryTokens = estimator.estimateMessages(emptyList()),
+            estimatedContextTokens = estimator.estimateMessages(messages.take(1)),
+            actualUsage = TokenUsage(11, 7, 18, 2, 1, 3),
+            contextBudget = ContextBudget(1_050_000, 300, 300, 1_049_700, BigDecimal("0.0011"), 1_049_689),
+            finishReason = "stop", turnCostUsd = BigDecimal("0.000123456789"),
+            cumulativeTotals = ConversationTokenTotals(1, 20, 11, 7, 3, 18, 2, 1, BigDecimal("0.000123456789"), 0),
+            overflowPolicy = ContextOverflowPolicy.REJECT, requiredTokens = 11,
+            pricingProfileId = ModelContextProfiles.GPT_5_6_SOL.id,
+            pricingEffectiveDate = ModelContextProfiles.GPT_5_6_SOL.effectiveDate,
+            pricingSourceUrl = ModelContextProfiles.GPT_5_6_SOL.sourceUrl,
+        )
+        try {
+            JsonConversationHistoryStore(file).saveState(ConversationPersistenceSnapshot(mapOf("unrestricted" to messages), mapOf("unrestricted" to listOf(turn))))
+            val restored = JsonConversationHistoryStore(file).loadState()
+            assertEquals(messages, restored.messages.getValue("unrestricted"))
+            assertEquals(turn, restored.turnMetrics.getValue("unrestricted").single())
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test
+    fun `legacy version one loads messages without inventing actual metrics`() {
+        val directory = createTempDirectory("llm-history-v1-test")
+        val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        try {
+            file.writeText("""{"version":1,"branches":[{"id":"unrestricted","messages":[{"role":"user","text":"old"},{"role":"assistant","text":"answer"}]}]}""")
+            val restored = JsonConversationHistoryStore(file).loadState()
+            assertEquals(listOf("old", "answer"), restored.messages.getValue("unrestricted").map { it.content })
+            assertTrue(restored.turnMetrics.getValue("unrestricted").isEmpty())
+        } finally { directory.toFile().deleteRecursively() }
     }
 
     @Test

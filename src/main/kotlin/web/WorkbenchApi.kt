@@ -3,6 +3,7 @@ package org.example.web
 import kotlinx.serialization.json.*
 import org.example.app.ResponseMode
 import org.example.app.ResponseVariant
+import org.example.app.TokenDemoScenario
 import org.example.app.WorkbenchController
 
 class ApiProblem(val status: Int, val code: String, override val message: String) : RuntimeException(message)
@@ -29,6 +30,7 @@ class WorkbenchApi(val controller: WorkbenchController) {
             ResponseVariant.entries.associate { variant ->
                 variant.name.lowercase() to state.historyMessages[variant].orEmpty().map { HistoryMessageDto(it.role.apiValue, it.content) }
             },
+            state.toDto().tokenConversations,
         )))
     }
 
@@ -77,6 +79,9 @@ class WorkbenchApi(val controller: WorkbenchController) {
             null -> controller.submit(command.prompt)
             "reasoning" -> controller.submitReasoningDemo()
             "temperature" -> controller.submitTemperatureDemo()
+            "tokens-short" -> controller.submitTokenDemo(TokenDemoScenario.SHORT)
+            "tokens-long" -> controller.submitTokenDemo(TokenDemoScenario.LONG)
+            "tokens-overflow" -> controller.submitTokenDemo(TokenDemoScenario.OVERFLOW)
             else -> throw ApiProblem(400, "validation", "Неизвестная демонстрация.")
         }
         if (!accepted) throw ApiProblem(400, "validation", controller.state.value.notice?.message ?: "Запрос не принят.")

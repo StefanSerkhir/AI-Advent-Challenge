@@ -2,9 +2,11 @@ package org.example.app
 
 import kotlinx.coroutines.CancellationException
 import org.example.llm.*
+import org.example.tokens.ModelContextProfiles
+import org.example.tokens.TokenCostCalculator
 
 const val TOTAL_MODEL_COMPARISON_API_CALLS = 4
-const val MODEL_PRICE_DATE = "04.09.2026"
+const val MODEL_PRICE_DATE = "09.09.2026"
 
 data class ModelComparisonTarget(
     val answerLabel: String,
@@ -15,18 +17,9 @@ data class ModelComparisonTarget(
     val cachedInputPricePerMillion: Double,
     val outputPricePerMillion: Double,
 ) {
-    fun estimatedCostUsd(usage: TokenUsage): Double {
-        val cachedTokens = usage.cachedPromptTokens.coerceIn(0, usage.promptTokens)
-        val cacheWriteTokens = usage.cacheWritePromptTokens
-            .coerceIn(0, usage.promptTokens - cachedTokens)
-        val regularTokens = usage.promptTokens - cachedTokens - cacheWriteTokens
-        return (
-            regularTokens * inputPricePerMillion +
-                cachedTokens * cachedInputPricePerMillion +
-                cacheWriteTokens * inputPricePerMillion * 1.25 +
-                usage.completionTokens * outputPricePerMillion
-            ) / 1_000_000.0
-    }
+    fun estimatedCostUsd(usage: TokenUsage): Double =
+        TokenCostCalculator().calculate(usage, ModelContextProfiles.find(modelId))?.toDouble()
+            ?: error("Unknown pricing profile: $modelId")
 }
 
 val MODEL_COMPARISON_TARGETS = listOf(

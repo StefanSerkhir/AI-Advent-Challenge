@@ -142,4 +142,9 @@ enum class ReasoningEffort(val apiValue: String) {
     MEDIUM("medium"),
 }
 
-class LlmApiException(message: String) : RuntimeException(message)
+open class LlmApiException(message: String) : RuntimeException(message)
+
+class LlmContextApiException(
+    message: String,
+    val providerStatus: Int? = null,
+) : LlmApiException(message)

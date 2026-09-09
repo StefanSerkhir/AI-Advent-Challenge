@@ -5,11 +5,13 @@ import org.example.llm.CompletionOptions
 import org.example.llm.CompletionResult
 import org.example.llm.LlmClient
 import org.example.llm.LlmMessage
+import org.example.tokens.*
 
 data class LabeledResponse(
     val variant: ResponseVariant,
     val completion: CompletionResult,
     val heading: String = variant.heading,
+    val tokenMetrics: TurnTokenMetrics? = null,
 ) {
     val content: String
         get() = completion.content
@@ -32,17 +34,23 @@ class PromptRunner(
     private val agents: Map<ResponseVariant, LlmAgent>
 
     init {
-        val (restoredHistory, warning) = try {
-            historyStore.load() to null
+        val (restoredState, warning) = try {
+            historyStore.loadState() to null
         } catch (_: Exception) {
-            emptyMap<String, List<LlmMessage>>() to HISTORY_LOAD_WARNING
+            ConversationPersistenceSnapshot() to HISTORY_LOAD_WARNING
         }
         historyLoadWarning = warning
         agents = ResponseVariant.entries.associateWith { variant ->
+            val restoredMessages = restoredState.messages[variant.historyId].orEmpty()
+            val restoredMetrics = restoredState.turnMetrics[variant.historyId].orEmpty().ifEmpty {
+                legacyTurnMetrics(variant, restoredMessages)
+            }
             LlmAgent(
                 clientProvider = clientProvider,
-                initialHistory = restoredHistory[variant.historyId].orEmpty(),
+                initialHistory = restoredMessages,
+                initialTurnMetrics = restoredMetrics,
                 persistHistory = { completedHistory -> persist(variant, completedHistory) },
+                persistConversation = { completedHistory, turns -> persist(variant, completedHistory, turns) },
             )
         }
     }
@@ -79,9 +87,16 @@ class PromptRunner(
 
     fun historyTurnCounts(): Map<ResponseVariant, Int> = agents.mapValues { it.value.completedTurnCount() }
 
+    fun tokenMetricsSnapshot(): Map<ResponseVariant, List<TurnTokenMetrics>> =
+        agents.mapValues { it.value.tokenMetricsSnapshot() }
+
+    fun tokenTotalsSnapshot(): Map<ResponseVariant, ConversationTokenTotals> =
+        agents.mapValues { it.value.conversationTotals() }
+
     private fun persist(
         changedVariant: ResponseVariant,
         completedHistory: List<LlmMessage>,
+        completedTurns: List<TurnTokenMetrics> = agents.getValue(changedVariant).tokenMetricsSnapshot(),
     ) {
         val snapshot: ConversationHistorySnapshot = ResponseVariant.entries.associate { variant ->
             variant.historyId to if (variant == changedVariant) {
@@ -90,7 +105,10 @@ class PromptRunner(
                 agents.getValue(variant).historySnapshot()
             }
         }
-        historyStore.save(snapshot)
+        val metrics = ResponseVariant.entries.associate { variant ->
+            variant.historyId to if (variant == changedVariant) completedTurns else agents.getValue(variant).tokenMetricsSnapshot()
+        }
+        historyStore.saveState(ConversationPersistenceSnapshot(snapshot, metrics))
     }
 
     private suspend fun completeVariant(
@@ -103,26 +121,38 @@ class PromptRunner(
             ResponseVariant.CONTROLLED -> withResponseConstraints(prompt, settings)
         }
         val options = when (variant) {
-            ResponseVariant.UNRESTRICTED -> CompletionOptions()
+            ResponseVariant.UNRESTRICTED -> CompletionOptions(
+                maxTokens = settings.maxTokens.takeIf { settings.responseMode == ResponseMode.UNRESTRICTED },
+            )
             ResponseVariant.CONTROLLED -> CompletionOptions(
                 maxTokens = settings.maxTokens,
                 stopSequences = settings.stopSequence?.let(::listOf).orEmpty(),
             )
         }
         val heading = if (settings.responseMode == ResponseMode.UNRESTRICTED) "ОТВЕТ АГЕНТА" else variant.heading
-        val completion = agents.getValue(variant).respond(
+        var preparedMetrics: TurnTokenMetrics? = null
+        val response = agents.getValue(variant).respond(
             AgentRequest(
                 prompt = requestPrompt,
                 options = options,
                 historyEnabled = settings.historyEnabled,
+                model = settings.model,
+                overflowPolicy = settings.contextOverflowPolicy,
             ),
-            onDelta = { content -> onDelta(ExperimentOutputDelta(variant.name, heading, content)) },
-        ).completion
+            onDelta = { content -> onDelta(ExperimentOutputDelta(variant.name, heading, content, tokenMetrics = preparedMetrics)) },
+            onMetrics = { metrics ->
+                preparedMetrics = metrics
+                if (settings.responseMode == ResponseMode.UNRESTRICTED && metrics.actualUsage == null) {
+                    onDelta(ExperimentOutputDelta(variant.name, heading, "", tokenMetrics = metrics))
+                }
+            },
+        )
 
         return LabeledResponse(
             variant = variant,
-            completion = completion,
+            completion = response.completion,
             heading = heading,
+            tokenMetrics = response.tokenMetrics,
         )
     }
 
@@ -133,6 +163,7 @@ class PromptRunner(
         ResponseMode.REASONING -> error("Reasoning mode must be handled by ReasoningRunner")
         ResponseMode.TEMPERATURE -> error("Temperature mode must be handled by TemperatureRunner")
         ResponseMode.MODEL_COMPARISON -> error("Model comparison mode must be handled by ModelComparisonRunner")
+        ResponseMode.TOKENS_CONTEXT -> error("Token context demo must be handled by TokenContextDemoRunner")
     }
 }
 
@@ -144,3 +175,43 @@ private val ResponseVariant.historyId: String
 
 private const val HISTORY_LOAD_WARNING =
     "Не удалось восстановить историю диалога: файл повреждён, недоступен или имеет неподдерживаемую версию. Начата пустая история."
+
+private fun legacyTurnMetrics(variant: ResponseVariant, messages: List<LlmMessage>): List<TurnTokenMetrics> {
+    val estimator = ApproximateChatTokenEstimator()
+    val turns = mutableListOf<TurnTokenMetrics>()
+    val activeHistory = mutableListOf<LlmMessage>()
+    var index = 0
+    while (index < messages.lastIndex) {
+        val user = messages[index]
+        val assistant = messages[index + 1]
+        if (user.role == org.example.llm.LlmRole.USER && assistant.role == org.example.llm.LlmRole.ASSISTANT) {
+            val current = estimator.estimateContent(user.content)
+            val historyEstimate = estimator.estimateMessages(activeHistory)
+            val context = estimator.estimateMessages(activeHistory + user)
+            activeHistory += user
+            activeHistory += assistant
+            val provisional = TurnTokenMetrics(
+                id = "legacy-${variant.name.lowercase()}-${turns.size + 1}",
+                turnNumber = turns.size + 1,
+                model = "unknown-legacy-model",
+                userMessage = user.content,
+                assistantMessage = assistant.content,
+                estimatedCurrentMessageTokens = current,
+                estimatedHistoryTokens = historyEstimate,
+                estimatedContextTokens = context,
+                contextBudget = ContextBudget(null, null, null, null, null, null),
+                cumulativeTotals = ConversationTokenTotals(),
+                overflowPolicy = ContextOverflowPolicy.REJECT,
+                requiredTokens = context.tokens,
+                pricingProfileId = null,
+            )
+            val candidate = turns + provisional
+            turns += provisional.copy(cumulativeTotals = aggregateTotals(candidate, estimator.estimateMessages(activeHistory).tokens))
+            index += 2
+        } else {
+            activeHistory += user
+            index++
+        }
+    }
+    return turns
+}

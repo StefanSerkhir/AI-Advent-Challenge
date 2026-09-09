@@ -1,6 +1,7 @@
 package org.example.app
 
 import org.example.llm.CompletionResult
+import org.example.tokens.TurnTokenMetrics
 
 /** Completed stages remain available even when a later stage fails or is cancelled. */
 data class ExperimentOutput(
@@ -12,6 +13,7 @@ data class ExperimentOutput(
     val elapsedMillis: Long? = null,
     val estimatedCostUsd: Double? = null,
     val streaming: Boolean = false,
+    val tokenMetrics: TurnTokenMetrics? = null,
 )
 
 data class ExperimentOutputDelta(
@@ -19,6 +21,7 @@ data class ExperimentOutputDelta(
     val title: String,
     val content: String,
     val kind: String = "response",
+    val tokenMetrics: TurnTokenMetrics? = null,
 )
 
 fun ExperimentOutputDelta.asOutput() = ExperimentOutput(
@@ -27,6 +30,7 @@ fun ExperimentOutputDelta.asOutput() = ExperimentOutput(
     completion = CompletionResult(content, finishReason = null, usage = null),
     kind = kind,
     streaming = true,
+    tokenMetrics = tokenMetrics,
 )
 
 fun ModelComparisonRun.asOutput(evaluation: Boolean = false) = ExperimentOutput(
