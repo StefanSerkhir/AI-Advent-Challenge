@@ -2,12 +2,13 @@ import {useState} from "react";
 import {ActionIcon, Alert, Badge, Button, Tooltip,} from "@mantine/core";
 import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
 import type {
-  ConversationTokenTotals,
-  Exchange,
-  ModeInfo,
-  Output,
-  TokenConversation,
-  TurnTokenMetrics
+    ContextSavings,
+    ConversationTokenTotals,
+    Exchange,
+    ModeInfo,
+    Output,
+    TokenConversation,
+    TurnTokenMetrics
 } from "../api/types";
 import {Markdown} from "./Markdown";
 
@@ -223,6 +224,61 @@ function MetricsTable({
   );
 }
 
+export function ContextSavingsTable({ savings }: { savings: ContextSavings }) {
+  const saving = savings.savingPercent === null
+    ? "н/д"
+    : `${savings.savingPercent.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}%`;
+  return (
+    <details className="metrics context-savings" open data-testid="context-savings-table">
+      <summary>
+        Экономия управления контекстом <span>{counted(savings.mainRequests, "вызов", "вызова", "вызовов")}</span>
+      </summary>
+      <div className="table-scroll" tabIndex={0} role="region" aria-label="Таблица экономии от сжатия контекста">
+        <table>
+          <thead>
+            <tr>
+              <th>Режим</th>
+              <th>Качество</th>
+              <th>Main input</th>
+              <th>Main output</th>
+              <th>Summary input</th>
+              <th>Summary output</th>
+              <th>Total</th>
+              <th>Экономия</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Полная история <sup title="Расчётное значение">est.</sup></th>
+              <td title="В живом диалоге автоматическая оценка качества не выполняется">н/д</td>
+              <td>{number(savings.baselineEstimatedInputTokens)}</td>
+              <td title="Тот же фактический output используется в обеих строках">{number(savings.compressedMainOutputTokens)}</td>
+              <td>0</td>
+              <td>0</td>
+              <td>{number(savings.baselineEstimatedTotalTokens)}</td>
+              <td>0%</td>
+            </tr>
+            <tr>
+              <th>Summary + recent <sup title="Фактические usage API">actual</sup></th>
+              <td title="В живом диалоге автоматическая оценка качества не выполняется">н/д</td>
+              <td>{number(savings.compressedMainInputTokens)}</td>
+              <td>{number(savings.compressedMainOutputTokens)}</td>
+              <td>{number(savings.summaryInputTokens)}</td>
+              <td>{number(savings.summaryOutputTokens)}</td>
+              <td>{number(savings.compressedTotalTokens)}</td>
+              <td><strong>{saving}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="micro">
+        Полная история — контрфактическая оценка: actual API input скорректирован на разницу локальных tokenizer-оценок, без второго платного запроса.
+        Summary + recent включает фактические токены основных вызовов и {savings.summarizationRequests} summary-вызовов.
+      </p>
+    </details>
+  );
+}
+
 const decimalCost = (value: string | null) =>
   value === null ? "н/д" : `$${Number(value).toLocaleString("ru-RU", { minimumFractionDigits: 6, maximumFractionDigits: 10 })}`;
 const tokenValue = (value: { value: number | null }) =>
@@ -367,12 +423,14 @@ export function ExchangeView({
   priceDate,
   showTokenMetrics = false,
   tokenConversation,
+  contextSavings,
 }: {
   exchange: Exchange;
   modes: ModeInfo[];
   priceDate: string;
   showTokenMetrics?: boolean;
   tokenConversation?: TokenConversation;
+  contextSavings?: ContextSavings;
 }) {
   const responses = e.outputs.filter((o) => o.kind === "response" || o.kind === "token-turn");
   const prompts = e.outputs.filter((o) => o.kind === "prompt");
@@ -472,6 +530,7 @@ export function ExchangeView({
         </p>
       )}
       {e.evaluationNote && <Alert color="yellow">{e.evaluationNote}</Alert>}
+      {e.mode === "unrestricted" && contextSavings && <ContextSavingsTable savings={contextSavings} />}
       {displayedTokenConversation && <TokenMetricsPanel conversation={displayedTokenConversation} />}
       {e.sentinelInPermanentHistory !== null && <Alert color="blue">Контрольный сентинел: в постоянной истории — {e.sentinelInPermanentHistory ? "да" : "нет"}; в активном API-контексте после DROP_OLDEST — {e.sentinelInActiveContext ? "да" : "нет"}.</Alert>}
       {e.status === "cancelled" && (

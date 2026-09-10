@@ -108,6 +108,50 @@ class PromptRunnerTest {
     }
 
     @Test
+    fun `managed summary is restored and used by the UI agent after restart`() = runBlocking {
+        val directory = createTempDirectory("managed-context-restart-test")
+        val historyFile = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
+        val settings = AppSettings(
+            llmKind = LlmKind.OPENAI,
+            responseMode = ResponseMode.UNRESTRICTED,
+            contextManagementEnabled = true,
+            recentMessagesLimit = 2,
+            summarizationBatchSize = 2,
+        )
+        try {
+            val firstClient = RecordingLlmClient()
+            val first = PromptRunner(
+                historyStore = JsonConversationHistoryStore(historyFile),
+                contextStateStore = JsonContextStateStore(contextFile),
+                clientProvider = { firstClient },
+            )
+            first.complete("first", settings)
+            first.complete("second", settings)
+            assertEquals(3, firstClient.calls.size) // two main calls + one summary update
+
+            val restartedClient = RecordingLlmClient()
+            val restarted = PromptRunner(
+                historyStore = JsonConversationHistoryStore(historyFile),
+                contextStateStore = JsonContextStateStore(contextFile),
+                clientProvider = { restartedClient },
+            )
+            restarted.complete("third", settings)
+
+            val sent = restartedClient.calls.first().messages
+            assertEquals(
+                listOf(LlmRole.SYSTEM, LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
+                sent.map(LlmMessage::role),
+            )
+            assertContains(sent[1].content, "answer-3")
+            assertFalse(sent.any { it.content == "first" })
+            assertEquals(listOf("second", "answer-2", "third"), sent.takeLast(3).map(LlmMessage::content))
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `persisted response branches remain independent`() = runBlocking {
         val directory = createTempDirectory("llm-history-test")
         val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)

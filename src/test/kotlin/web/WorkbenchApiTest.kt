@@ -95,11 +95,20 @@ class WorkbenchApiTest {
             assertFalse(saved.bodyAsText().contains(key))
             assertTrue(saved.state().providers.first { it.id == "OPENAI" }.hasKey)
             assertEquals(key, store.load().openAiApiKey)
-            val changed = initial.settings.copy(mode = "controlled", maxTokens = 123, maxWords = 12, bulletCount = 2, stopSequence = "DONE", historyEnabled = false)
+            val changed = initial.settings.copy(
+                mode = "controlled", maxTokens = 123, maxWords = 12, bulletCount = 2,
+                stopSequence = "DONE", historyEnabled = false, contextManagementEnabled = true,
+                recentMessagesLimit = 4, summarizationBatchSize = 3,
+            )
             val state = client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(1, changed))) }.state()
             assertEquals(changed, state.settings)
             assertEquals("123", store.load().maxTokens)
+            assertEquals("true", store.load().contextManagementEnabled)
+            assertEquals("4", store.load().recentMessagesLimit)
+            assertEquals("3", store.load().summarizationBatchSize)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(maxTokens = 0)))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(recentMessagesLimit = 0)))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(summarizationBatchSize = 0)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(stopSequence = "\n")))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/key") { localJson("{broken $key}") }.status)
             assertFalse(client.get("$base/state").bodyAsText().contains(key))

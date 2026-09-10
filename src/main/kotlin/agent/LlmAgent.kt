@@ -10,6 +10,9 @@ data class AgentRequest(
     val historyEnabled: Boolean = true,
     val model: String = "unknown",
     val overflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
+    val contextManagementEnabled: Boolean = false,
+    val recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
+    val summarizationBatchSize: Int = DEFAULT_SUMMARIZATION_BATCH_SIZE,
 )
 
 /** The agent response keeps the provider result, including model and token metadata. */
@@ -49,11 +52,17 @@ class LlmAgent(
     private val tokenEstimator: TokenEstimator = ApproximateChatTokenEstimator(),
     private val profileProvider: (String) -> ModelContextProfile? = ModelContextProfiles::find,
     private val costCalculator: TokenCostCalculator = TokenCostCalculator(),
+    private val contextManager: ContextManager? = null,
+    private val contextSessionId: String = "default",
     private val clientProvider: () -> LlmClient,
 ) : Agent {
     private val history = initialHistory.toMutableList()
     private val completedMetrics = initialTurnMetrics.toMutableList()
     private val runtimeMetrics = mutableListOf<TurnTokenMetrics>()
+
+    init {
+        contextManager?.synchronizeRawHistory(contextSessionId, initialHistory)
+    }
 
     override suspend fun respond(
         request: AgentRequest,
@@ -64,7 +73,22 @@ class LlmAgent(
         require(prompt.isNotEmpty()) { "Запрос агенту не может быть пустым." }
 
         val userMessage = LlmMessage(LlmRole.USER, prompt)
-        val requestHistory = if (request.historyEnabled) history.toList() else emptyList()
+        val baselineInputEstimate = if (request.historyEnabled && request.contextManagementEnabled) {
+            tokenEstimator.estimateMessages(
+                listOf(LlmMessage(LlmRole.SYSTEM, DEFAULT_AGENT_SYSTEM_INSTRUCTIONS)) + history + userMessage,
+            ).tokens
+        } else {
+            null
+        }
+        val requestHistory = when {
+            !request.historyEnabled -> emptyList()
+            request.contextManagementEnabled -> {
+                val manager = requireNotNull(contextManager) { "ContextManager is required when context management is enabled" }
+                manager.configure(request.contextCompressionConfig(enabled = true))
+                manager.contextFor(contextSessionId, userMessage).dropLast(1)
+            }
+            else -> history.toList()
+        }
         val profile = profileProvider(request.model)
         val preparation = try {
             ContextPreparer(tokenEstimator).prepare(
@@ -119,6 +143,20 @@ class LlmAgent(
             history.addAll(completedHistory)
             completedMetrics.clear()
             completedMetrics.addAll(turns)
+            contextManager?.let { manager ->
+                manager.configure(request.contextCompressionConfig(enabled = request.contextManagementEnabled))
+                if (request.contextManagementEnabled) {
+                    val estimatedBaselineAnchoredToUsage = baselineInputEstimate?.let { fullHistoryEstimate ->
+                        completion.usage?.let { usage ->
+                            (usage.promptTokens + fullHistoryEstimate - preparation.estimatedContextTokens.tokens)
+                                .coerceAtLeast(0)
+                        } ?: fullHistoryEstimate
+                    }
+                    manager.recordMainUsage(contextSessionId, completion.usage, estimatedBaselineAnchoredToUsage)
+                }
+                // The manager saves raw messages before summarizing, so a summary failure cannot lose this exchange.
+                runCatching { manager.addExchange(contextSessionId, userMessage, assistantMessage) }
+            }
         } else {
             runtimeMetrics += completed
         }
@@ -133,6 +171,9 @@ class LlmAgent(
 
     fun tokenMetricsSnapshot(): List<TurnTokenMetrics> = completedMetrics.toList()
 
+    fun contextSavingsSnapshot(): ContextSavingsSnapshot =
+        contextManager?.savings(contextSessionId) ?: ContextSavingsSnapshot()
+
     fun conversationTotals(): ConversationTokenTotals = aggregateTotals(
         completedMetrics,
         tokenEstimator.estimateMessages(history).tokens,
@@ -141,6 +182,7 @@ class LlmAgent(
     fun clearHistory() {
         history.clear()
         completedMetrics.clear()
+        contextManager?.clear(contextSessionId)
     }
 
     private fun preparedMetrics(
@@ -172,3 +214,10 @@ class LlmAgent(
         )
     }
 }
+
+private fun AgentRequest.contextCompressionConfig(enabled: Boolean) = ContextCompressionConfig(
+    enabled = enabled,
+    recentMessagesLimit = recentMessagesLimit,
+    summarizationBatchSize = summarizationBatchSize,
+    systemInstructions = DEFAULT_AGENT_SYSTEM_INSTRUCTIONS,
+)

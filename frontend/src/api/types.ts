@@ -18,6 +18,9 @@ export interface Settings {
   stopSequence: string | null;
   historyEnabled: boolean;
   contextOverflowPolicy: "REJECT" | "DROP_OLDEST";
+  contextManagementEnabled: boolean;
+  recentMessagesLimit: number;
+  summarizationBatchSize: number;
 }
 export interface ProviderInfo {
   id: Provider;
@@ -110,6 +113,20 @@ export interface TokenConversation {
   turns: TurnTokenMetrics[];
   totals: ConversationTokenTotals;
 }
+export interface ContextSavings {
+  mainRequests: number;
+  summarizationRequests: number;
+  baselineEstimatedInputTokens: number;
+  baselineEstimatedTotalTokens: number;
+  compressedMainInputTokens: number;
+  compressedMainOutputTokens: number;
+  compressedMainTotalTokens: number;
+  summaryInputTokens: number;
+  summaryOutputTokens: number;
+  summaryTotalTokens: number;
+  compressedTotalTokens: number;
+  savingPercent: number | null;
+}
 export interface Output {
   id: string;
   title: string;
@@ -150,6 +167,7 @@ export interface State {
   notice: { kind: "info" | "error"; message: string } | null;
   priceDate: string;
   tokenConversations: Record<string, TokenConversation>;
+  contextSavings: ContextSavings | null;
 }
 export interface StartCommand {
   requestId: string;

@@ -10,6 +10,57 @@ import kotlin.test.*
 
 class LlmAgentTest {
     @Test
+    fun `managed context replaces old raw messages with summary in the next agent request`() = runBlocking {
+        val mainCalls = mutableListOf<List<LlmMessage>>()
+        var summaryCalls = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                return if (messages.firstOrNull()?.content == SUMMARY_SYSTEM_PROMPT) {
+                    summaryCalls++
+                    CompletionResult("summary: first fact", "stop", TokenUsage(12, 3, 15), "test-model")
+                } else {
+                    mainCalls += messages
+                    CompletionResult("answer-${mainCalls.size}", "stop", TokenUsage(10, 2, 12), "test-model")
+                }
+            }
+        }
+        val manager = ContextManager(
+            ContextCompressionConfig(enabled = false),
+            InMemoryContextStateStore(),
+            LlmHistorySummarizer(clientProvider = { client }),
+        )
+        val agent = LlmAgent(contextManager = manager, contextSessionId = "ui-agent", clientProvider = { client })
+        val request: (String) -> AgentRequest = { prompt ->
+            AgentRequest(prompt, contextManagementEnabled = true, recentMessagesLimit = 2, summarizationBatchSize = 2)
+        }
+
+        agent.respond(request("first fact"))
+        agent.respond(request("second fact"))
+        assertEquals(1, summaryCalls)
+        agent.respond(request("current question"))
+
+        assertEquals(2, summaryCalls)
+        val sent = mainCalls.last()
+        assertEquals(
+            listOf(LlmRole.SYSTEM, LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
+            sent.map(LlmMessage::role),
+        )
+        assertContains(sent[1].content, "summary: first fact")
+        assertFalse(sent.any { it.content == "first fact" })
+        assertEquals(listOf("second fact", "answer-2", "current question"), sent.takeLast(3).map(LlmMessage::content))
+        assertEquals(6, agent.historySnapshot().size)
+        val savings = agent.contextSavingsSnapshot()
+        assertEquals(3, savings.mainRequests)
+        assertEquals(2, savings.summarizationRequests)
+        assertEquals(30, savings.compressedMainInputTokens)
+        assertEquals(6, savings.compressedMainOutputTokens)
+        assertEquals(30, savings.summaryTotalTokens)
+        assertEquals(66, savings.compressedTotalTokens)
+        assertTrue(savings.baselineEstimatedInputTokens > 0)
+        assertNotNull(savings.savingPercent)
+    }
+
+    @Test
     fun `agent publishes accumulated streaming markdown and saves only the full answer`() = runBlocking {
         val client = StreamingClient(
             events = listOf(

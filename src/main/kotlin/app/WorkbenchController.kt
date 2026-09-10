@@ -7,9 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerializationException
-import org.example.agent.ConversationHistoryStore
-import org.example.agent.HistoryPersistenceException
-import org.example.agent.NoOpConversationHistoryStore
+import org.example.agent.*
 import org.example.llm.*
 import org.example.tokens.ContextLimitExceededException
 import org.example.tokens.ConversationTokenTotals
@@ -68,6 +66,7 @@ data class WorkbenchState(
     val historyMessages: Map<ResponseVariant, List<LlmMessage>> = emptyMap(),
     val tokenMetrics: Map<ResponseVariant, List<TurnTokenMetrics>> = emptyMap(),
     val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
+    val contextSavings: Map<ResponseVariant, ContextSavingsSnapshot> = emptyMap(),
     val exchanges: List<ConversationExchange> = emptyList(),
     val operation: OperationState = OperationState.Idle,
     val notice: UiNotice? = null,
@@ -83,6 +82,7 @@ class WorkbenchController(
     initialApiKeys: Map<LlmKind, String>,
     initialWarning: String? = null,
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
+    private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -103,9 +103,11 @@ class WorkbenchController(
         onResponse = {
             addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion, tokenMetrics = it.tokenMetrics))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts(),
-                tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot()) }
+                tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
+                contextSavings = promptRunner.contextSavingsSnapshot()) }
         },
         historyStore = historyStore,
+        contextStateStore = contextStateStore,
         clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
     )
     private val _state = MutableStateFlow(
@@ -116,6 +118,7 @@ class WorkbenchController(
             historyMessages = promptRunner.historySnapshot(),
             tokenMetrics = promptRunner.tokenMetricsSnapshot(),
             tokenTotals = promptRunner.tokenTotalsSnapshot(),
+            contextSavings = promptRunner.contextSavingsSnapshot(),
             notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning)
                 .takeIf(List<String>::isNotEmpty)
                 ?.joinToString("\n")
@@ -179,6 +182,7 @@ class WorkbenchController(
             promptRunner.clearHistory()
             publish { it.copy(historyTurnCounts = promptRunner.historyTurnCounts(), historyMessages = promptRunner.historySnapshot(),
                 tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
+                contextSavings = promptRunner.contextSavingsSnapshot(),
                 notice = UiNotice("История обеих веток очищена.", NoticeKind.INFO)) }
             return true
         } catch (_: HistoryPersistenceException) {
@@ -377,7 +381,8 @@ class WorkbenchController(
                     requestClient.set(null)
                     currentJob = null
                     publish { it.copy(operation = OperationState.Idle, historyTurnCounts = promptRunner.historyTurnCounts(),
-                        tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot()) }
+                        tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
+                        contextSavings = promptRunner.contextSavingsSnapshot()) }
                 }
             }
         }

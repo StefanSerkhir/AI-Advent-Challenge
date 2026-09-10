@@ -12,12 +12,13 @@ import java.nio.file.StandardCopyOption
 const val DEFAULT_CONTEXT_STATE_FILE_NAME = ".llm-context-history.json"
 const val DEFAULT_RECENT_MESSAGES_LIMIT = 10
 const val DEFAULT_SUMMARIZATION_BATCH_SIZE = 10
+const val DEFAULT_AGENT_SYSTEM_INSTRUCTIONS = "You are a helpful conversational assistant."
 
 data class ContextCompressionConfig(
     val enabled: Boolean = true,
     val recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
     val summarizationBatchSize: Int = DEFAULT_SUMMARIZATION_BATCH_SIZE,
-    val systemInstructions: String = "You are a helpful conversational assistant.",
+    val systemInstructions: String = DEFAULT_AGENT_SYSTEM_INSTRUCTIONS,
 ) {
     init {
         require(recentMessagesLimit > 0) { "recentMessagesLimit must be positive" }
@@ -33,7 +34,7 @@ data class ContextCompressionConfig(
             summarizationBatchSize = environment["SUMMARIZATION_BATCH_SIZE"]?.toIntOrNull()
                 ?.takeIf { it > 0 } ?: DEFAULT_SUMMARIZATION_BATCH_SIZE,
             systemInstructions = environment["AGENT_SYSTEM_INSTRUCTIONS"]
-                ?.takeIf(String::isNotBlank) ?: "You are a helpful conversational assistant.",
+                ?.takeIf(String::isNotBlank) ?: DEFAULT_AGENT_SYSTEM_INSTRUCTIONS,
         )
     }
 }
@@ -53,6 +54,7 @@ data class ContextUsageStats(
     val summaryInputTokens: Long = 0,
     val summaryOutputTokens: Long = 0,
     val summaryTotalTokens: Long = 0,
+    val baselineEstimatedInputTokens: Long = 0,
 ) {
     val totalInputTokens: Long get() = mainInputTokens + summaryInputTokens
     val totalOutputTokens: Long get() = mainOutputTokens + summaryOutputTokens
@@ -60,11 +62,15 @@ data class ContextUsageStats(
     val averageMainInputTokens: Double get() =
         if (mainRequests == 0) 0.0 else mainInputTokens.toDouble() / mainRequests
 
-    fun withMainUsage(usage: TokenUsage?) = if (usage == null) copy(mainRequests = mainRequests + 1) else copy(
+    fun withMainUsage(usage: TokenUsage?, baselineInputEstimate: Int? = null) = if (usage == null) copy(
+        mainRequests = mainRequests + 1,
+        baselineEstimatedInputTokens = baselineEstimatedInputTokens + (baselineInputEstimate ?: 0),
+    ) else copy(
         mainRequests = mainRequests + 1,
         mainInputTokens = mainInputTokens + usage.promptTokens,
         mainOutputTokens = mainOutputTokens + usage.completionTokens,
         mainTotalTokens = mainTotalTokens + usage.totalTokens,
+        baselineEstimatedInputTokens = baselineEstimatedInputTokens + (baselineInputEstimate ?: 0),
     )
 
     fun withSummaryAttempt() = copy(summarizationRequests = summarizationRequests + 1)
@@ -83,6 +89,21 @@ data class ContextSessionState(
     val pendingMessages: List<SequencedMessage> = emptyList(),
     val nextSequence: Long = 1,
     val stats: ContextUsageStats = ContextUsageStats(),
+)
+
+data class ContextSavingsSnapshot(
+    val mainRequests: Int = 0,
+    val summarizationRequests: Int = 0,
+    val baselineEstimatedInputTokens: Long = 0,
+    val baselineEstimatedTotalTokens: Long = 0,
+    val compressedMainInputTokens: Long = 0,
+    val compressedMainOutputTokens: Long = 0,
+    val compressedMainTotalTokens: Long = 0,
+    val summaryInputTokens: Long = 0,
+    val summaryOutputTokens: Long = 0,
+    val summaryTotalTokens: Long = 0,
+    val compressedTotalTokens: Long = 0,
+    val savingPercent: Double? = null,
 )
 
 interface ContextStateStore {
@@ -154,7 +175,7 @@ fun interface HistorySummarizer {
 
 class LlmHistorySummarizer(
     private val clientProvider: () -> LlmClient,
-    private val options: CompletionOptions = CompletionOptions(temperature = 0.0),
+    private val options: CompletionOptions = CompletionOptions(),
 ) : HistorySummarizer {
     override suspend fun summarize(previousSummary: String, messages: List<LlmMessage>): CompletionResult {
         val rendered = messages.joinToString("\n") { "${it.role.apiValue}: ${it.content}" }
@@ -176,7 +197,7 @@ Keep it compact and structured under: Facts, Goals and requirements, Decisions, 
 Preserve names, identifiers, numbers and changed decisions exactly. Do not invent facts. The returned text must replace the previous summary."""
 
 class ContextManager(
-    private val config: ContextCompressionConfig,
+    private var config: ContextCompressionConfig,
     private val store: ContextStateStore,
     private val summarizer: HistorySummarizer,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -198,7 +219,9 @@ class ContextManager(
 
     suspend fun contextFor(sessionId: String, currentUserMessage: LlmMessage): List<LlmMessage> {
         require(currentUserMessage.role == LlmRole.USER) { "Current message must have user role" }
-        compactAvailableBatches(validSessionId(sessionId))
+        val id = validSessionId(sessionId)
+        rebalanceRawWindow(id)
+        compactAvailableBatches(id)
         val current = state(sessionId)
         return buildList {
             add(LlmMessage(LlmRole.SYSTEM, config.systemInstructions))
@@ -211,12 +234,59 @@ class ContextManager(
         }
     }
 
-    fun recordMainUsage(sessionId: String, usage: TokenUsage?) {
+    fun recordMainUsage(sessionId: String, usage: TokenUsage?, baselineInputEstimate: Int? = null) {
         val current = state(validSessionId(sessionId))
-        store.save(current.copy(stats = current.stats.withMainUsage(usage)))
+        store.save(current.copy(stats = current.stats.withMainUsage(usage, baselineInputEstimate)))
+    }
+
+    fun savings(sessionId: String): ContextSavingsSnapshot {
+        val stats = state(validSessionId(sessionId)).stats
+        val baselineTotal = stats.baselineEstimatedInputTokens + stats.mainOutputTokens
+        val compressedTotal = stats.mainTotalTokens + stats.summaryTotalTokens
+        return ContextSavingsSnapshot(
+            mainRequests = stats.mainRequests,
+            summarizationRequests = stats.summarizationRequests,
+            baselineEstimatedInputTokens = stats.baselineEstimatedInputTokens,
+            baselineEstimatedTotalTokens = baselineTotal,
+            compressedMainInputTokens = stats.mainInputTokens,
+            compressedMainOutputTokens = stats.mainOutputTokens,
+            compressedMainTotalTokens = stats.mainTotalTokens,
+            summaryInputTokens = stats.summaryInputTokens,
+            summaryOutputTokens = stats.summaryOutputTokens,
+            summaryTotalTokens = stats.summaryTotalTokens,
+            compressedTotalTokens = compressedTotal,
+            savingPercent = baselineTotal.takeIf { it > 0 }?.let {
+                (it - compressedTotal).toDouble() / it * 100.0
+            },
+        )
     }
 
     fun clear(sessionId: String) = store.clear(validSessionId(sessionId))
+
+    /** Applies UI settings and rebalances only raw messages; summarized originals stay summarized. */
+    fun configure(value: ContextCompressionConfig) {
+        config = value
+    }
+
+    /** Reconciles durable full-history audit storage with compact state after startup or a partial write. */
+    fun synchronizeRawHistory(sessionId: String, fullHistory: List<LlmMessage>) {
+        val id = validSessionId(sessionId)
+        var existing = store.load(id)
+        var processed = ((existing?.nextSequence ?: 1L) - 1L).toInt()
+        if (processed > fullHistory.size) {
+            store.clear(id)
+            existing = null
+            processed = 0
+        }
+        if (processed >= fullHistory.size) return
+        var sequence = (existing?.nextSequence ?: 1L)
+        val missing = fullHistory.drop(processed).map { message ->
+            require(message.role != LlmRole.SYSTEM) { "Stored dialogue history cannot contain system messages" }
+            SequencedMessage(sequence++, clock(), message)
+        }
+        val current = existing ?: ContextSessionState(id)
+        store.save(current.copy(recentMessages = current.recentMessages + missing, nextSequence = sequence))
+    }
 
     private suspend fun append(sessionId: String, messages: List<LlmMessage>) {
         val id = validSessionId(sessionId)
@@ -239,6 +309,18 @@ class ContextManager(
         // Durable before the LLM call: a failed summary can never discard its input batch.
         store.save(current)
         compactAvailableBatches(id)
+    }
+
+    private fun rebalanceRawWindow(sessionId: String) {
+        if (!config.enabled) return
+        val current = state(sessionId)
+        val raw = (current.pendingMessages + current.recentMessages).sortedBy(SequencedMessage::sequence)
+        val recentCount = minOf(config.recentMessagesLimit, raw.size)
+        val rebalanced = current.copy(
+            pendingMessages = raw.dropLast(recentCount),
+            recentMessages = raw.takeLast(recentCount),
+        )
+        if (rebalanced != current) store.save(rebalanced)
     }
 
     private suspend fun compactAvailableBatches(sessionId: String) {
@@ -298,10 +380,12 @@ class ContextManager(
     val mainRequests: Int, val summarizationRequests: Int,
     val mainInputTokens: Long, val mainOutputTokens: Long, val mainTotalTokens: Long,
     val summaryInputTokens: Long, val summaryOutputTokens: Long, val summaryTotalTokens: Long,
+    val baselineEstimatedInputTokens: Long = 0,
 ) {
     fun toDomain() = ContextUsageStats(mainRequests, summarizationRequests, mainInputTokens, mainOutputTokens,
-        mainTotalTokens, summaryInputTokens, summaryOutputTokens, summaryTotalTokens)
+        mainTotalTokens, summaryInputTokens, summaryOutputTokens, summaryTotalTokens, baselineEstimatedInputTokens)
     companion object { fun fromDomain(value: ContextUsageStats) = StoredContextUsage(value.mainRequests,
         value.summarizationRequests, value.mainInputTokens, value.mainOutputTokens, value.mainTotalTokens,
-        value.summaryInputTokens, value.summaryOutputTokens, value.summaryTotalTokens) }
+        value.summaryInputTokens, value.summaryOutputTokens, value.summaryTotalTokens,
+        value.baselineEstimatedInputTokens) }
 }

@@ -1,6 +1,7 @@
 package org.example.web
 
 import kotlinx.serialization.Serializable
+import org.example.agent.ContextSavingsSnapshot
 import org.example.app.*
 import org.example.llm.LlmKind
 import org.example.llm.LlmModel
@@ -15,6 +16,9 @@ data class SettingsDto(
     val maxTokens: Int, val maxWords: Int, val bulletCount: Int,
     val stopSequence: String?, val historyEnabled: Boolean,
     val contextOverflowPolicy: String = "REJECT",
+    val contextManagementEnabled: Boolean = false,
+    val recentMessagesLimit: Int = 10,
+    val summarizationBatchSize: Int = 10,
 )
 
 @Serializable
@@ -108,6 +112,21 @@ data class TurnTokenMetricsDto(
 @Serializable
 data class TokenConversationDto(val turns: List<TurnTokenMetricsDto>, val totals: ConversationTokenTotalsDto)
 @Serializable
+data class ContextSavingsDto(
+    val mainRequests: Int,
+    val summarizationRequests: Int,
+    val baselineEstimatedInputTokens: Long,
+    val baselineEstimatedTotalTokens: Long,
+    val compressedMainInputTokens: Long,
+    val compressedMainOutputTokens: Long,
+    val compressedMainTotalTokens: Long,
+    val summaryInputTokens: Long,
+    val summaryOutputTokens: Long,
+    val summaryTotalTokens: Long,
+    val compressedTotalTokens: Long,
+    val savingPercent: Double?,
+)
+@Serializable
 data class OutputDto(
     val id: String, val title: String, val kind: String, val content: String?,
     val error: String?, val model: String?, val metrics: MetricsDto, val streaming: Boolean,
@@ -138,19 +157,39 @@ data class StateDto(
     val exchanges: List<ExchangeDto>, val operation: OperationDto?, val notice: NoticeDto?,
     val priceDate: String = MODEL_PRICE_DATE,
     val tokenConversations: Map<String, TokenConversationDto> = emptyMap(),
+    val contextSavings: ContextSavingsDto? = null,
 )
 
-fun AppSettings.toDto() = SettingsDto(llmKind.name, model, responseMode.cliValue, maxTokens, maxWords, bulletCount, stopSequence, historyEnabled, contextOverflowPolicy.name)
+fun AppSettings.toDto() = SettingsDto(
+    llmKind.name, model, responseMode.cliValue, maxTokens, maxWords, bulletCount,
+    stopSequence, historyEnabled, contextOverflowPolicy.name, contextManagementEnabled,
+    recentMessagesLimit, summarizationBatchSize,
+)
 
 fun SettingsDto.toSettings(): AppSettings {
     val kind = LlmKind.entries.firstOrNull { it.name == provider }
         ?: throw ApiProblem(400, "validation", "Неизвестный провайдер.")
     val responseMode = ResponseMode.from(mode)
         ?: throw ApiProblem(400, "validation", "Неизвестный режим.")
-    if (maxTokens <= 0 || maxWords <= 0 || bulletCount <= 0) throw ApiProblem(400, "validation", "Лимиты должны быть целыми числами больше нуля.")
+    if (maxTokens <= 0 || maxWords <= 0 || bulletCount <= 0 || recentMessagesLimit <= 0 || summarizationBatchSize <= 0) {
+        throw ApiProblem(400, "validation", "Лимиты и параметры управления контекстом должны быть целыми числами больше нуля.")
+    }
     val overflowPolicy = runCatching { ContextOverflowPolicy.valueOf(contextOverflowPolicy) }
         .getOrElse { throw ApiProblem(400, "validation", "Неизвестная политика переполнения контекста.") }
-    return AppSettings(kind, model, responseMode, maxTokens, maxWords, bulletCount, stopSequence, historyEnabled, overflowPolicy).also(::validateSettings)
+    return AppSettings(
+        llmKind = kind,
+        model = model,
+        responseMode = responseMode,
+        maxTokens = maxTokens,
+        maxWords = maxWords,
+        bulletCount = bulletCount,
+        stopSequence = stopSequence,
+        historyEnabled = historyEnabled,
+        contextOverflowPolicy = overflowPolicy,
+        contextManagementEnabled = contextManagementEnabled,
+        recentMessagesLimit = recentMessagesLimit,
+        summarizationBatchSize = summarizationBatchSize,
+    ).also(::validateSettings)
 }
 
 val modes = listOf(
@@ -199,6 +238,12 @@ private fun TurnTokenMetrics.toDto(): TurnTokenMetricsDto {
     )
 }
 
+private fun ContextSavingsSnapshot.toDto() = ContextSavingsDto(
+    mainRequests, summarizationRequests, baselineEstimatedInputTokens, baselineEstimatedTotalTokens,
+    compressedMainInputTokens, compressedMainOutputTokens, compressedMainTotalTokens,
+    summaryInputTokens, summaryOutputTokens, summaryTotalTokens, compressedTotalTokens, savingPercent,
+)
+
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
     providers = LlmKind.entries.map { kind -> ProviderDto(kind.name, kind.displayName(), kind in configuredProviders,
@@ -238,4 +283,7 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
             (tokenTotals[variant] ?: ConversationTokenTotals()).toDto(),
         )
     },
+    contextSavings = contextSavings[ResponseVariant.UNRESTRICTED]
+        ?.takeIf { it.mainRequests > 0 }
+        ?.toDto(),
 )

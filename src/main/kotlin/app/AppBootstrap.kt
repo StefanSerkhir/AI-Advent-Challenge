@@ -43,6 +43,15 @@ class AppBootstrap private constructor(
                     true
                 }
             }
+            val contextManagementEnabled = when (config.contextManagementEnabled?.lowercase()) {
+                null -> false
+                "true", "on", "1" -> true
+                "false", "off", "0" -> false
+                else -> {
+                    warnings += "context_management_enabled в .env имеет неверное значение; управление контекстом выключено"
+                    false
+                }
+            }
             val settings = AppSettings(
                 llmKind = llmKind,
                 model = if (responseMode == ResponseMode.MODEL_COMPARISON && configuredLlmKind != LlmKind.OPENAI) {
@@ -66,6 +75,9 @@ class AppBootstrap private constructor(
                         ContextOverflowPolicy.REJECT
                     }
                 } ?: ContextOverflowPolicy.REJECT,
+                contextManagementEnabled = contextManagementEnabled,
+                recentMessagesLimit = positiveInt("recent_messages_limit", config.recentMessagesLimit, 10),
+                summarizationBatchSize = positiveInt("summarization_batch_size", config.summarizationBatchSize, 10),
             )
             val apiKeys = buildMap {
                 config.apiKey?.let { put(configuredLlmKind, it) }

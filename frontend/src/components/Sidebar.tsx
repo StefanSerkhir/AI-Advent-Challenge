@@ -194,6 +194,40 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                 void w.settings({ historyEnabled: e.currentTarget.checked })
               }
             />
+            {mode.id === "unrestricted" && (
+              <>
+                <Switch
+                  label="Управление контекстом"
+                  checked={s.settings.contextManagementEnabled}
+                  disabled={locked || !s.settings.historyEnabled}
+                  onChange={(e) =>
+                    void w.settings({
+                      contextManagementEnabled: e.currentTarget.checked,
+                    })
+                  }
+                />
+                {s.settings.contextManagementEnabled && (
+                  <>
+                    <NumberSetting
+                      label="Последних сообщений без изменений"
+                      value={s.settings.recentMessagesLimit}
+                      disabled={locked || !s.settings.historyEnabled}
+                      onSave={(value) =>
+                        void w.settings({ recentMessagesLimit: value })
+                      }
+                    />
+                    <NumberSetting
+                      label="Сжимать каждые N сообщений"
+                      value={s.settings.summarizationBatchSize}
+                      disabled={locked || !s.settings.historyEnabled}
+                      onSave={(value) =>
+                        void w.settings({ summarizationBatchSize: value })
+                      }
+                    />
+                  </>
+                )}
+              </>
+            )}
             <NativeSelect
               label="Переполнение контекста"
               value={s.settings.contextOverflowPolicy}

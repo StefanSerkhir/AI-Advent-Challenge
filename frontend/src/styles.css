@@ -784,6 +784,11 @@ button {
 .metrics td {
   color: #777e94;
 }
+.context-savings > .micro {
+  margin: 0;
+  padding: 10px 15px 12px;
+  border-top: 1px solid #eceef4;
+}
 .turn-metrics,
 .token-dashboard {
   border: 1px solid #dfe2ef;

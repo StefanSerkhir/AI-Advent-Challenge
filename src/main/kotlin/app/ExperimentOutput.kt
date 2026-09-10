@@ -44,8 +44,9 @@ fun ModelComparisonRun.asOutput(evaluation: Boolean = false) = ExperimentOutput(
 )
 
 fun validateSettings(settings: AppSettings) {
-    require(settings.maxTokens > 0 && settings.maxWords > 0 && settings.bulletCount > 0) {
-        "Лимиты токенов, слов и пунктов должны быть целыми числами больше нуля."
+    require(settings.maxTokens > 0 && settings.maxWords > 0 && settings.bulletCount > 0 &&
+        settings.recentMessagesLimit > 0 && settings.summarizationBatchSize > 0) {
+        "Лимиты и параметры управления контекстом должны быть целыми числами больше нуля."
     }
     require(settings.model.isNotBlank() && settings.model.length <= 200 && settings.model.none { it.isISOControl() }) {
         "Укажите корректную модель."

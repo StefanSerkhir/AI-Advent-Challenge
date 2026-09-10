@@ -66,6 +66,9 @@ test.beforeEach(async ({ page }) => {
         maxWords: 60,
         bulletCount: 3,
         historyEnabled: true,
+        contextManagementEnabled: false,
+        recentMessagesLimit: 10,
+        summarizationBatchSize: 10,
       },
     },
   });
@@ -88,6 +91,11 @@ test("settings are shown only when the selected mode uses them", async ({
   );
   await expect(page.getByLabel("Максимум токенов")).toBeVisible();
   await expect(page.getByLabel("Переполнение контекста")).toBeVisible();
+  await expect(page.getByLabel("Управление контекстом")).not.toBeChecked();
+  await expect(page.getByLabel("Последних сообщений без изменений")).toHaveCount(0);
+  await page.getByLabel("Управление контекстом").click();
+  await expect(page.getByLabel("Последних сообщений без изменений")).toHaveValue("10");
+  await expect(page.getByLabel("Сжимать каждые N сообщений")).toHaveValue("10");
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(
     page.locator(".history-counts").getByText("С ограничениями", {
@@ -98,12 +106,50 @@ test("settings are shown only when the selected mode uses them", async ({
   await setMode(page, "reasoning");
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("История диалога")).toHaveCount(0);
+  await expect(page.getByLabel("Управление контекстом")).toHaveCount(0);
   await expect(page.getByLabel("Максимум токенов")).toHaveCount(0);
 
   await setMode(page, "models");
   await expect(page.getByLabel("Максимум токенов")).toBeVisible();
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
+});
+
+test("simple agent shows live context compression savings", async ({ page }) => {
+  await setMode(page, "unrestricted");
+  const current: State = await (await page.request.get("/api/state")).json();
+  await page.request.put("/api/settings", {
+    headers,
+    data: {
+      expectedSettingsVersion: current.settingsVersion,
+      settings: {
+        ...current.settings,
+        contextManagementEnabled: true,
+        recentMessagesLimit: 2,
+        summarizationBatchSize: 2,
+      },
+    },
+  });
+  await page.reload();
+  await ready(page);
+
+  await send(page, "Факт для будущего summary");
+  await done(page);
+  await send(page, "Второй факт для сжатия");
+  await done(page);
+
+  const table = page.getByTestId("exchange").last().getByTestId("context-savings-table");
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("region", { name: "Таблица экономии от сжатия контекста" })).toBeVisible();
+  await expect(table.locator("tbody tr")).toHaveCount(2);
+  await expect(table.locator("tbody tr").first()).toContainText("Полная история");
+  await expect(table.locator("tbody tr").last()).toContainText("Summary + recent");
+
+  const state: State = await (await page.request.get("/api/state")).json();
+  expect(state.contextSavings?.mainRequests).toBe(2);
+  expect(state.contextSavings?.summarizationRequests).toBe(1);
+  expect(state.contextSavings?.compressedTotalTokens).toBe(600);
+  expect(state.contextSavings?.savingPercent).not.toBeNull();
 });
 
 test("prompt focus uses one clean highlight around the composer", async ({

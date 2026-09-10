@@ -28,6 +28,7 @@ class PromptRunner(
     private val onDelta: (ExperimentOutputDelta) -> Unit = {},
     private val onResponse: (LabeledResponse) -> Unit = {},
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
+    private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
     private val clientProvider: () -> LlmClient,
 ) {
     val historyLoadWarning: String?
@@ -51,6 +52,12 @@ class PromptRunner(
                 initialTurnMetrics = restoredMetrics,
                 persistHistory = { completedHistory -> persist(variant, completedHistory) },
                 persistConversation = { completedHistory, turns -> persist(variant, completedHistory, turns) },
+                contextManager = ContextManager(
+                    ContextCompressionConfig(enabled = false),
+                    contextStateStore,
+                    LlmHistorySummarizer(clientProvider),
+                ),
+                contextSessionId = variant.historyId,
             )
         }
     }
@@ -92,6 +99,9 @@ class PromptRunner(
 
     fun tokenTotalsSnapshot(): Map<ResponseVariant, ConversationTokenTotals> =
         agents.mapValues { it.value.conversationTotals() }
+
+    fun contextSavingsSnapshot(): Map<ResponseVariant, ContextSavingsSnapshot> =
+        agents.mapValues { it.value.contextSavingsSnapshot() }
 
     private fun persist(
         changedVariant: ResponseVariant,
@@ -138,6 +148,9 @@ class PromptRunner(
                 historyEnabled = settings.historyEnabled,
                 model = settings.model,
                 overflowPolicy = settings.contextOverflowPolicy,
+                contextManagementEnabled = settings.responseMode == ResponseMode.UNRESTRICTED && settings.contextManagementEnabled,
+                recentMessagesLimit = settings.recentMessagesLimit,
+                summarizationBatchSize = settings.summarizationBatchSize,
             ),
             onDelta = { content -> onDelta(ExperimentOutputDelta(variant.name, heading, content, tokenMetrics = preparedMetrics)) },
             onMetrics = { metrics ->
