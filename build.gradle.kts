@@ -1,5 +1,3 @@
-import java.io.File
-
 plugins {
     kotlin("jvm") version "2.4.10"
     kotlin("plugin.serialization") version "2.4.10"
@@ -66,4 +64,11 @@ tasks.register<JavaExec>("runWebFixture") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.web.WebFixtureKt"
+}
+tasks.register<JavaExec>("contextBenchmark") {
+    group = "verification"
+    description = "Compare full-history and summary-plus-recent context over one deterministic dialogue"
+    dependsOn(tasks.classes)
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.benchmark.ContextCompressionBenchmarkKt"
 }

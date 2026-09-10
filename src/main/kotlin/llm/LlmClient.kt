@@ -110,6 +110,7 @@ data class TokenUsage(
 )
 
 enum class LlmRole(val apiValue: String) {
+    SYSTEM("system"),
     USER("user"),
     ASSISTANT("assistant"),
 }
