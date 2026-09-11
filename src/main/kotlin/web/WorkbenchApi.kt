@@ -31,6 +31,7 @@ class WorkbenchApi(val controller: WorkbenchController) {
                 variant.name.lowercase() to state.historyMessages[variant].orEmpty().map { HistoryMessageDto(it.role.apiValue, it.content) }
             },
             state.toDto().tokenConversations,
+            state.toDto().context,
         )))
     }
 
@@ -94,6 +95,25 @@ class WorkbenchApi(val controller: WorkbenchController) {
         val state = controller.state.value
         if (state.isRunning && state.exchanges.last().id == id) controller.cancelCurrent()
         else if (state.exchanges.none { it.id == id }) throw ApiProblem(404, "not_found", "Операция не найдена.")
+        controller.state.value.toDto()
+    }
+
+    fun checkpoint(command: ContextMutationCommand): StateDto = synchronized(controller) {
+        requireIdle()
+        requireVersion(command.expectedSettingsVersion)
+        if (!controller.createCheckpoint()) throw ApiProblem(409, "busy", "Операция уже выполняется.")
+        controller.state.value.toDto()
+    }
+
+    fun switchBranch(command: SwitchBranchCommand): StateDto = synchronized(controller) {
+        requireIdle()
+        requireVersion(command.expectedSettingsVersion)
+        if (command.branchId.isBlank() || command.branchId.length > 200) throw ApiProblem(400, "validation", "Некорректный ID ветки.")
+        try {
+            if (!controller.switchBranch(command.branchId)) throw ApiProblem(409, "busy", "Операция уже выполняется.")
+        } catch (_: IllegalArgumentException) {
+            throw ApiProblem(400, "validation", "Неизвестная ветка или стратегия контекста.")
+        }
         controller.state.value.toDto()
     }
 

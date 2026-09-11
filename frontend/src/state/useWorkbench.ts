@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api/client";
-import type { Provider, Settings, StartCommand, State } from "../api/types";
+import {useCallback, useEffect, useRef, useState} from "react";
+import {api, ApiError} from "../api/client";
+import type {Provider, Settings, StartCommand, State} from "../api/types";
 
 export function useWorkbench() {
   const [state, setState] = useState<State | null>(null);
@@ -151,6 +151,14 @@ export function useWorkbench() {
     cancel: () =>
       perform(async () => {
         if (state?.operation) accept(await api.cancel(state.operation.id));
+      }),
+    checkpoint: () =>
+      perform(async () => {
+        if (state) accept(await api.checkpoint(state.settingsVersion));
+      }),
+    switchBranch: (branchId: string) =>
+      perform(async () => {
+        if (state) accept(await api.switchBranch(branchId, state.settingsVersion));
       }),
     clear: (target: "history" | "results" | "notice") =>
       perform(async () => accept(await api.clear(target))),

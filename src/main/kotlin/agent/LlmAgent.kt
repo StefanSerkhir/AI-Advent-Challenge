@@ -10,15 +10,18 @@ data class AgentRequest(
     val historyEnabled: Boolean = true,
     val model: String = "unknown",
     val overflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
-    val contextManagementEnabled: Boolean = false,
+    val contextStrategy: ContextStrategy? = null,
     val recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
-    val summarizationBatchSize: Int = DEFAULT_SUMMARIZATION_BATCH_SIZE,
+    val onContextPrepared: () -> Unit = {},
 )
 
 /** The agent response keeps the provider result, including model and token metadata. */
 data class AgentResponse(
     val completion: CompletionResult,
     val tokenMetrics: TurnTokenMetrics,
+    val contextStrategy: ContextStrategy? = null,
+    val branchId: String? = null,
+    val branchName: String? = null,
 ) {
     val content: String
         get() = completion.content
@@ -60,10 +63,6 @@ class LlmAgent(
     private val completedMetrics = initialTurnMetrics.toMutableList()
     private val runtimeMetrics = mutableListOf<TurnTokenMetrics>()
 
-    init {
-        contextManager?.synchronizeRawHistory(contextSessionId, initialHistory)
-    }
-
     override suspend fun respond(
         request: AgentRequest,
         onDelta: (accumulatedText: String) -> Unit,
@@ -73,20 +72,16 @@ class LlmAgent(
         require(prompt.isNotEmpty()) { "Запрос агенту не может быть пустым." }
 
         val userMessage = LlmMessage(LlmRole.USER, prompt)
-        val baselineInputEstimate = if (request.historyEnabled && request.contextManagementEnabled) {
-            tokenEstimator.estimateMessages(
-                listOf(LlmMessage(LlmRole.SYSTEM, DEFAULT_AGENT_SYSTEM_INSTRUCTIONS)) + history + userMessage,
-            ).tokens
-        } else {
-            null
-        }
+        val preparedContext = if (request.historyEnabled && request.contextStrategy != null) {
+            requireNotNull(contextManager) { "ContextManager is required for a context strategy" }.prepare(
+                contextSessionId,
+                userMessage,
+                ContextConfig(request.contextStrategy, request.recentMessagesLimit),
+            ).also { request.onContextPrepared() }
+        } else null
         val requestHistory = when {
             !request.historyEnabled -> emptyList()
-            request.contextManagementEnabled -> {
-                val manager = requireNotNull(contextManager) { "ContextManager is required when context management is enabled" }
-                manager.configure(request.contextCompressionConfig(enabled = true))
-                manager.contextFor(contextSessionId, userMessage).dropLast(1)
-            }
+            preparedContext != null -> preparedContext.messages.dropLast(1)
             else -> history.toList()
         }
         val profile = profileProvider(request.model)
@@ -109,7 +104,11 @@ class LlmAgent(
         val billedProfile = if (completion.model != null) profileProvider(completion.model) else profile
 
         val assistantMessage = LlmMessage(LlmRole.ASSISTANT, completion.content)
-        val candidateHistory = if (request.historyEnabled) history + userMessage + assistantMessage else history.toList()
+        var committedContext: ContextSessionState? = null
+        val candidateHistory = if (!request.historyEnabled) history.toList() else if (preparedContext != null) {
+            committedContext = requireNotNull(contextManager).commit(preparedContext, assistantMessage)
+            contextManager.activeMessages(contextSessionId, request.contextStrategy!!)
+        } else history + userMessage + assistantMessage
         val baseTurns = if (request.historyEnabled) completedMetrics.toList() else runtimeMetrics.toList()
         val cost = costCalculator.calculate(completion.usage, billedProfile)
         val withoutTotals = prepared.copy(
@@ -138,31 +137,22 @@ class LlmAgent(
         if (request.historyEnabled) {
             val completedHistory = candidateHistory
             val turns = completedMetrics + completed
-            persistConversation?.invoke(completedHistory, turns) ?: persistHistory(completedHistory)
+            try {
+                persistConversation?.invoke(completedHistory, turns) ?: persistHistory(completedHistory)
+            } catch (error: Exception) {
+                if (committedContext != null) runCatching { requireNotNull(contextManager).restore(preparedContext!!.baseState) }
+                throw error
+            }
             history.clear()
             history.addAll(completedHistory)
             completedMetrics.clear()
             completedMetrics.addAll(turns)
-            contextManager?.let { manager ->
-                manager.configure(request.contextCompressionConfig(enabled = request.contextManagementEnabled))
-                if (request.contextManagementEnabled) {
-                    val estimatedBaselineAnchoredToUsage = baselineInputEstimate?.let { fullHistoryEstimate ->
-                        completion.usage?.let { usage ->
-                            (usage.promptTokens + fullHistoryEstimate - preparation.estimatedContextTokens.tokens)
-                                .coerceAtLeast(0)
-                        } ?: fullHistoryEstimate
-                    }
-                    manager.recordMainUsage(contextSessionId, completion.usage, estimatedBaselineAnchoredToUsage)
-                }
-                // The manager saves raw messages before summarizing, so a summary failure cannot lose this exchange.
-                runCatching { manager.addExchange(contextSessionId, userMessage, assistantMessage) }
-            }
         } else {
             runtimeMetrics += completed
         }
 
         onMetrics(completed)
-        return AgentResponse(completion, completed)
+        return AgentResponse(completion, completed, preparedContext?.strategy, preparedContext?.branchId, preparedContext?.branchName)
     }
 
     fun historySnapshot(): List<LlmMessage> = history.toList()
@@ -171,18 +161,24 @@ class LlmAgent(
 
     fun tokenMetricsSnapshot(): List<TurnTokenMetrics> = completedMetrics.toList()
 
-    fun contextSavingsSnapshot(): ContextSavingsSnapshot =
-        contextManager?.savings(contextSessionId) ?: ContextSavingsSnapshot()
-
     fun conversationTotals(): ConversationTokenTotals = aggregateTotals(
         completedMetrics,
         tokenEstimator.estimateMessages(history).tokens,
     )
 
     fun clearHistory() {
+        clearLocalHistory()
+        contextManager?.clear(contextSessionId)
+    }
+
+    fun clearLocalHistory() {
         history.clear()
         completedMetrics.clear()
-        contextManager?.clear(contextSessionId)
+    }
+
+    fun replaceHistory(messages: List<LlmMessage>) {
+        history.clear()
+        history.addAll(messages)
     }
 
     private fun preparedMetrics(
@@ -214,10 +210,3 @@ class LlmAgent(
         )
     }
 }
-
-private fun AgentRequest.contextCompressionConfig(enabled: Boolean) = ContextCompressionConfig(
-    enabled = enabled,
-    recentMessagesLimit = recentMessagesLimit,
-    summarizationBatchSize = summarizationBatchSize,
-    systemInstructions = DEFAULT_AGENT_SYSTEM_INSTRUCTIONS,
-)

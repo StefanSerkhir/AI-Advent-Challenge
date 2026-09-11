@@ -20,9 +20,8 @@ private const val BULLET_COUNT_NAME = "bullet_count"
 private const val STOP_SEQUENCE_NAME = "stop_sequence"
 private const val HISTORY_ENABLED_NAME = "history_enabled"
 private const val CONTEXT_OVERFLOW_POLICY_NAME = "context_overflow_policy"
-private const val CONTEXT_MANAGEMENT_ENABLED_NAME = "context_management_enabled"
+private const val CONTEXT_STRATEGY_NAME = "context_strategy"
 private const val RECENT_MESSAGES_LIMIT_NAME = "recent_messages_limit"
-private const val SUMMARIZATION_BATCH_SIZE_NAME = "summarization_batch_size"
 
 data class LocalConfig(
     val apiKey: String? = null,
@@ -37,9 +36,8 @@ data class LocalConfig(
     val stopSequence: String? = null,
     val historyEnabled: String? = null,
     val contextOverflowPolicy: String? = null,
-    val contextManagementEnabled: String? = null,
+    val contextStrategy: String? = null,
     val recentMessagesLimit: String? = null,
-    val summarizationBatchSize: String? = null,
 ) {
     // Prevent accidental disclosure if the object reaches a logger or assertion message.
     override fun toString(): String = "LocalConfig(" +
@@ -47,8 +45,7 @@ data class LocalConfig(
         "deepSeekApiKey=${deepSeekApiKey.redacted()}, openAiApiKey=${openAiApiKey.redacted()}, " +
         "responseMode=$responseMode, maxTokens=$maxTokens, maxWords=$maxWords, " +
         "bulletCount=$bulletCount, stopSequence=$stopSequence, historyEnabled=$historyEnabled, contextOverflowPolicy=$contextOverflowPolicy, " +
-        "contextManagementEnabled=$contextManagementEnabled, recentMessagesLimit=$recentMessagesLimit, " +
-        "summarizationBatchSize=$summarizationBatchSize)"
+        "contextStrategy=$contextStrategy, recentMessagesLimit=$recentMessagesLimit)"
 }
 
 class LocalConfigStore(
@@ -71,9 +68,8 @@ class LocalConfigStore(
             stopSequence = loadValue(STOP_SEQUENCE_NAME, fileValues),
             historyEnabled = loadValue(HISTORY_ENABLED_NAME, fileValues),
             contextOverflowPolicy = loadValue(CONTEXT_OVERFLOW_POLICY_NAME, fileValues),
-            contextManagementEnabled = loadValue(CONTEXT_MANAGEMENT_ENABLED_NAME, fileValues),
+            contextStrategy = loadValue(CONTEXT_STRATEGY_NAME, fileValues),
             recentMessagesLimit = loadValue(RECENT_MESSAGES_LIMIT_NAME, fileValues),
-            summarizationBatchSize = loadValue(SUMMARIZATION_BATCH_SIZE_NAME, fileValues),
         )
     }
 
@@ -89,9 +85,8 @@ class LocalConfigStore(
             STOP_SEQUENCE_NAME to (settings.stopSequence ?: "off"),
             HISTORY_ENABLED_NAME to settings.historyEnabled.toString(),
             CONTEXT_OVERFLOW_POLICY_NAME to settings.contextOverflowPolicy.name,
-            CONTEXT_MANAGEMENT_ENABLED_NAME to settings.contextManagementEnabled.toString(),
+            CONTEXT_STRATEGY_NAME to settings.contextStrategy.name,
             RECENT_MESSAGES_LIMIT_NAME to settings.recentMessagesLimit.toString(),
-            SUMMARIZATION_BATCH_SIZE_NAME to settings.summarizationBatchSize.toString(),
         )
         apiKeys[LlmKind.DEEPSEEK]?.let { updates[DEEPSEEK_API_KEY_NAME] = it }
         apiKeys[LlmKind.OPENAI]?.let { updates[OPENAI_API_KEY_NAME] = it }
@@ -113,6 +108,7 @@ class LocalConfigStore(
             val replacement = name?.let(remaining::remove)
             when {
                 name == API_KEY_NAME -> null // Migrate the ambiguous legacy key to provider-specific entries.
+                name in setOf("context_management_enabled", "summarization_batch_size") -> null
                 replacement != null -> "$name=${encodeValue(replacement)}"
                 name != null && name in updates -> null // Drop duplicate assignments.
                 else -> line

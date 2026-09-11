@@ -4,6 +4,7 @@ build/
 .env.local
 .env.*.local
 .llm-history.json
+.llm-context-*.json
 /video/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/

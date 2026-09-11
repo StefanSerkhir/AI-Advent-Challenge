@@ -1,7 +1,7 @@
 package org.example.app
 
+import org.example.agent.ContextStrategy
 import org.example.agent.DEFAULT_RECENT_MESSAGES_LIMIT
-import org.example.agent.DEFAULT_SUMMARIZATION_BATCH_SIZE
 import org.example.llm.LlmKind
 import org.example.llm.LlmModels
 import org.example.tokens.ContextOverflowPolicy
@@ -42,16 +42,14 @@ data class AppSettings(
     var stopSequence: String? = DEFAULT_STOP_SEQUENCE,
     var historyEnabled: Boolean = true,
     var contextOverflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
-    var contextManagementEnabled: Boolean = false,
+    var contextStrategy: ContextStrategy = ContextStrategy.SLIDING_WINDOW,
     var recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
-    var summarizationBatchSize: Int = DEFAULT_SUMMARIZATION_BATCH_SIZE,
 ) {
     init {
         require(maxTokens > 0)
         require(maxWords > 0)
         require(bulletCount > 0)
         require(recentMessagesLimit > 0)
-        require(summarizationBatchSize > 0)
         require(model.isNotBlank())
     }
 }

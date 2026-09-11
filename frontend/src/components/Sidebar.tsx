@@ -10,7 +10,7 @@ import {
     IconTrash,
 } from "@tabler/icons-react";
 import type {Workbench} from "../state/useWorkbench";
-import type {Mode, Provider} from "../api/types";
+import type {ContextStrategy, Mode, Provider} from "../api/types";
 
 function NumberSetting({
   label,
@@ -196,35 +196,56 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
             />
             {mode.id === "unrestricted" && (
               <>
-                <Switch
-                  label="Управление контекстом"
-                  checked={s.settings.contextManagementEnabled}
+                <NativeSelect
+                  label="Стратегия контекста"
+                  aria-label="Стратегия контекста"
+                  value={s.settings.contextStrategy}
                   disabled={locked || !s.settings.historyEnabled}
                   onChange={(e) =>
                     void w.settings({
-                      contextManagementEnabled: e.currentTarget.checked,
+                      contextStrategy: e.currentTarget.value as ContextStrategy,
                     })
                   }
+                  data={[
+                    { value: "SLIDING_WINDOW", label: "Скользящее окно (Sliding Window)" },
+                    { value: "STICKY_FACTS", label: "Закреплённые факты (Key-Value)" },
+                    { value: "BRANCHING", label: "Ветвление (Branching)" },
+                  ]}
                 />
-                {s.settings.contextManagementEnabled && (
-                  <>
+                {s.settings.contextStrategy !== "BRANCHING" ? (
                     <NumberSetting
-                      label="Последних сообщений без изменений"
+                      label="Последних сообщений (N)"
                       value={s.settings.recentMessagesLimit}
                       disabled={locked || !s.settings.historyEnabled}
                       onSave={(value) =>
                         void w.settings({ recentMessagesLimit: value })
                       }
                     />
-                    <NumberSetting
-                      label="Сжимать каждые N сообщений"
-                      value={s.settings.summarizationBatchSize}
-                      disabled={locked || !s.settings.historyEnabled}
-                      onSave={(value) =>
-                        void w.settings({ summarizationBatchSize: value })
-                      }
-                    />
-                  </>
+                ) : (
+                  <div className="branch-controls" data-testid="branch-controls">
+                    {!s.context.checkpoint && (
+                      <Button size="xs" variant="light" disabled={locked || !s.settings.historyEnabled}
+                        onClick={() => void w.checkpoint()}>Создать checkpoint</Button>
+                    )}
+                    {s.context.checkpoint && <p className="micro">Checkpoint: <code>{s.context.checkpoint.id}</code></p>}
+                    {s.context.branches.map((branch) => (
+                      <Button key={branch.id} size="xs"
+                        variant={branch.id === s.context.activeBranchId ? "filled" : "default"}
+                        disabled={locked || !s.settings.historyEnabled}
+                        onClick={() => void w.switchBranch(branch.id)}>
+                        {branch.name} · {branch.id.slice(0, 8)}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                {s.settings.contextStrategy === "STICKY_FACTS" && (
+                  <div className="facts-panel" data-testid="facts-panel">
+                    <strong>Текущие facts</strong>
+                    {Object.keys(s.context.facts).length === 0 ? <p className="micro">Пока пусто</p> :
+                      <dl>{Object.entries(s.context.facts).map(([key, value]) =>
+                        <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
+                    <p className="micro">Извлечение: {s.context.factUsage.requests} выз.; {s.context.factUsage.totalTokens} токенов</p>
+                  </div>
                 )}
               </>
             )}

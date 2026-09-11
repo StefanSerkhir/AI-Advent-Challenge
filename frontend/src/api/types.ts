@@ -8,6 +8,7 @@ export type Mode =
   | "models"
   | "tokens";
 export type Provider = "DEEPSEEK" | "OPENAI";
+export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING";
 export interface Settings {
   provider: Provider;
   model: string;
@@ -18,9 +19,8 @@ export interface Settings {
   stopSequence: string | null;
   historyEnabled: boolean;
   contextOverflowPolicy: "REJECT" | "DROP_OLDEST";
-  contextManagementEnabled: boolean;
+  contextStrategy: ContextStrategy;
   recentMessagesLimit: number;
-  summarizationBatchSize: number;
 }
 export interface ProviderInfo {
   id: Provider;
@@ -113,20 +113,6 @@ export interface TokenConversation {
   turns: TurnTokenMetrics[];
   totals: ConversationTokenTotals;
 }
-export interface ContextSavings {
-  mainRequests: number;
-  summarizationRequests: number;
-  baselineEstimatedInputTokens: number;
-  baselineEstimatedTotalTokens: number;
-  compressedMainInputTokens: number;
-  compressedMainOutputTokens: number;
-  compressedMainTotalTokens: number;
-  summaryInputTokens: number;
-  summaryOutputTokens: number;
-  summaryTotalTokens: number;
-  compressedTotalTokens: number;
-  savingPercent: number | null;
-}
 export interface Output {
   id: string;
   title: string;
@@ -137,6 +123,9 @@ export interface Output {
   metrics: Metrics;
   streaming: boolean;
   tokenMetrics: TurnTokenMetrics | null;
+  contextStrategy: ContextStrategy | null;
+  branchId: string | null;
+  branchName: string | null;
 }
 export interface Exchange {
   id: number;
@@ -167,8 +156,18 @@ export interface State {
   notice: { kind: "info" | "error"; message: string } | null;
   priceDate: string;
   tokenConversations: Record<string, TokenConversation>;
-  contextSavings: ContextSavings | null;
+  context: ContextState;
 }
+export interface ContextState {
+  strategy: ContextStrategy;
+  recentMessagesLimit: number;
+  facts: Record<string, string>;
+  factUsage: { requests: number; inputTokens: number; outputTokens: number; totalTokens: number };
+  checkpoint: { id: string; createdAtEpochMillis: number; messages: HistoryMessage[] } | null;
+  branches: { id: string; name: string; messages: HistoryMessage[] }[];
+  activeBranchId: string;
+}
+export interface HistoryMessage { role: "user" | "assistant"; content: string }
 export interface StartCommand {
   requestId: string;
   expectedSettingsVersion: number;
@@ -187,4 +186,5 @@ export interface HistoryDetails {
   counts: State["history"];
   branches: Record<"unrestricted" | "controlled", { role: "user" | "assistant"; content: string }[]>;
   tokenConversations: Record<string, TokenConversation>;
+  context: ContextState;
 }

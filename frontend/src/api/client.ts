@@ -1,4 +1,4 @@
-import type { State, Settings, Provider, StartCommand } from "./types";
+import type {Provider, Settings, StartCommand, State} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -51,6 +51,10 @@ export const api = {
   start: (command: StartCommand) =>
     request<{ operationId: number }>("/operations", "POST", command),
   cancel: (id: number) => request<State>(`/operations/${id}/cancel`, "POST"),
+  checkpoint: (expectedSettingsVersion: number) =>
+    request<State>("/context/checkpoint", "POST", { expectedSettingsVersion }),
+  switchBranch: (branchId: string, expectedSettingsVersion: number) =>
+    request<State>("/context/branch", "POST", { branchId, expectedSettingsVersion }),
   clear: (target: "history" | "results" | "notice") =>
     request<State>(`/${target}`, "DELETE"),
 };

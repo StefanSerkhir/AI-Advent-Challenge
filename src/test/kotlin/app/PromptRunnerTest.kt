@@ -44,9 +44,7 @@ class PromptRunnerTest {
 
             file.writeText("""{"version":1,"branches":[{"id":"unrestricted","messages":[{"role":"user","text":"old"},{"role":"assistant","text":"answer"}]}]}""")
             val legacy = PromptRunner(historyStore = JsonConversationHistoryStore(file), clientProvider = { RecordingLlmClient() })
-            val legacyTurn = legacy.tokenMetricsSnapshot().getValue(ResponseVariant.UNRESTRICTED).single()
-            assertNull(legacyTurn.actualUsage)
-            assertNull(legacyTurn.cumulativeTotals.cumulativeApiInputTokens)
+            assertTrue(legacy.tokenMetricsSnapshot().getValue(ResponseVariant.UNRESTRICTED).isEmpty())
         } finally { directory.toFile().deleteRecursively() }
     }
 
@@ -75,10 +73,12 @@ class PromptRunnerTest {
     fun `a new runtime restores persisted context before its first LLM call`() = runBlocking {
         val directory = createTempDirectory("llm-restart-test")
         val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
         try {
             val firstClient = RecordingLlmClient()
             PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { firstClient },
             ).complete(
                 "Первый вопрос",
@@ -88,6 +88,7 @@ class PromptRunnerTest {
             val secondClient = RecordingLlmClient()
             val secondRuntime = PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { secondClient },
             )
             secondRuntime.complete(
@@ -96,28 +97,27 @@ class PromptRunnerTest {
             )
 
             assertEquals(
-                listOf(LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
+                listOf(LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
                 secondClient.calls.single().messages.map(LlmMessage::role),
             )
-            assertEquals("Первый вопрос", secondClient.calls.single().messages[0].content)
-            assertEquals("answer-1", secondClient.calls.single().messages[1].content)
-            assertEquals("Второй вопрос", secondClient.calls.single().messages[2].content)
+            assertEquals("Первый вопрос", secondClient.calls.single().messages[1].content)
+            assertEquals("answer-1", secondClient.calls.single().messages[2].content)
+            assertEquals("Второй вопрос", secondClient.calls.single().messages[3].content)
         } finally {
             directory.toFile().deleteRecursively()
         }
     }
 
     @Test
-    fun `managed summary is restored and used by the UI agent after restart`() = runBlocking {
+    fun `sliding context is restored and used by the UI agent after restart`() = runBlocking {
         val directory = createTempDirectory("managed-context-restart-test")
         val historyFile = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
         val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
         val settings = AppSettings(
             llmKind = LlmKind.OPENAI,
             responseMode = ResponseMode.UNRESTRICTED,
-            contextManagementEnabled = true,
             recentMessagesLimit = 2,
-            summarizationBatchSize = 2,
+            contextStrategy = ContextStrategy.SLIDING_WINDOW,
         )
         try {
             val firstClient = RecordingLlmClient()
@@ -128,7 +128,7 @@ class PromptRunnerTest {
             )
             first.complete("first", settings)
             first.complete("second", settings)
-            assertEquals(3, firstClient.calls.size) // two main calls + one summary update
+            assertEquals(2, firstClient.calls.size)
 
             val restartedClient = RecordingLlmClient()
             val restarted = PromptRunner(
@@ -138,14 +138,13 @@ class PromptRunnerTest {
             )
             restarted.complete("third", settings)
 
-            val sent = restartedClient.calls.first().messages
+            val sent = restartedClient.calls.single().messages
             assertEquals(
-                listOf(LlmRole.SYSTEM, LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
+                listOf(LlmRole.SYSTEM, LlmRole.ASSISTANT, LlmRole.USER),
                 sent.map(LlmMessage::role),
             )
-            assertContains(sent[1].content, "answer-3")
             assertFalse(sent.any { it.content == "first" })
-            assertEquals(listOf("second", "answer-2", "third"), sent.takeLast(3).map(LlmMessage::content))
+            assertEquals(listOf("answer-2", "third"), sent.takeLast(2).map(LlmMessage::content))
         } finally {
             directory.toFile().deleteRecursively()
         }
@@ -155,10 +154,12 @@ class PromptRunnerTest {
     fun `persisted response branches remain independent`() = runBlocking {
         val directory = createTempDirectory("llm-history-test")
         val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
         try {
             val client = RecordingLlmClient()
             PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { client },
             ).complete("Вопрос", AppSettings(llmKind = LlmKind.OPENAI))
 
@@ -176,11 +177,13 @@ class PromptRunnerTest {
     fun `disabled history neither reads nor changes persisted exchanges`() = runBlocking {
         val directory = createTempDirectory("llm-history-test")
         val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
         val settings = AppSettings(llmKind = LlmKind.OPENAI, responseMode = ResponseMode.UNRESTRICTED)
         try {
             val client = RecordingLlmClient()
             val runner = PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { client },
             )
             runner.complete("Сохрани", settings)
@@ -195,10 +198,11 @@ class PromptRunnerTest {
             val restartedClient = RecordingLlmClient()
             PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { restartedClient },
             ).complete("Продолжи", settings)
             assertEquals(
-                listOf(LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
+                listOf(LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
                 restartedClient.calls.single().messages.map(LlmMessage::role),
             )
         } finally {
@@ -210,10 +214,12 @@ class PromptRunnerTest {
     fun `clear is persisted and a restarted runtime stays empty`() = runBlocking {
         val directory = createTempDirectory("llm-history-test")
         val file = directory.resolve(DEFAULT_HISTORY_FILE_NAME)
+        val contextFile = directory.resolve(DEFAULT_CONTEXT_STATE_FILE_NAME)
         val settings = AppSettings(llmKind = LlmKind.OPENAI, responseMode = ResponseMode.UNRESTRICTED)
         try {
             val runner = PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { RecordingLlmClient() },
             )
             runner.complete("Будет удалено", settings)
@@ -223,9 +229,10 @@ class PromptRunnerTest {
             val restartedClient = RecordingLlmClient()
             PromptRunner(
                 historyStore = JsonConversationHistoryStore(file),
+                contextStateStore = JsonContextStateStore(contextFile),
                 clientProvider = { restartedClient },
             ).complete("После очистки", settings)
-            assertEquals(listOf(LlmRole.USER), restartedClient.calls.single().messages.map(LlmMessage::role))
+            assertEquals(listOf(LlmRole.SYSTEM, LlmRole.USER), restartedClient.calls.single().messages.map(LlmMessage::role))
         } finally {
             directory.toFile().deleteRecursively()
         }
@@ -249,7 +256,7 @@ class PromptRunnerTest {
                 "Новый диалог",
                 AppSettings(llmKind = LlmKind.OPENAI, responseMode = ResponseMode.UNRESTRICTED),
             )
-            assertEquals(listOf(LlmRole.USER), client.calls.single().messages.map(LlmMessage::role))
+            assertEquals(listOf(LlmRole.SYSTEM, LlmRole.USER), client.calls.single().messages.map(LlmMessage::role))
         } finally {
             directory.toFile().deleteRecursively()
         }

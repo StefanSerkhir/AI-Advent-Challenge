@@ -65,10 +65,3 @@ tasks.register<JavaExec>("runWebFixture") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.web.WebFixtureKt"
 }
-tasks.register<JavaExec>("contextBenchmark") {
-    group = "verification"
-    description = "Compare full-history and summary-plus-recent context over one deterministic dialogue"
-    dependsOn(tasks.classes)
-    classpath = sourceSets.main.get().runtimeClasspath
-    mainClass = "org.example.benchmark.ContextCompressionBenchmarkKt"
-}

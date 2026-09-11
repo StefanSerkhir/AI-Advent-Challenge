@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import org.example.agent.JsonContextStateStore
 import org.example.agent.JsonConversationHistoryStore
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
@@ -22,6 +23,7 @@ fun main() {
     val controller = WorkbenchController(AppSettings(LlmKind.OPENAI),
         mapOf(LlmKind.OPENAI to "fixture-openai-key", LlmKind.DEEPSEEK to "fixture-deepseek-key"),
         historyStore = JsonConversationHistoryStore(directory.resolve(".llm-history.json")),
+        contextStateStore = JsonContextStateStore(directory.resolve(".llm-context-state.json")),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -61,6 +63,10 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         val content = when {
+            messages.firstOrNull()?.content?.contains("key-value memory") == true -> {
+                val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
+                if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"
+            }
             "[[stream]]" in prompt -> "# Потоковый заголовок\n\n**Жирный текст**\n\n```kotlin\nval answer = 42\n```"
             "Составь эффективный промпт" in prompt -> "Реши задачу о 100 шкафчиках, проверь число делителей и укажи все полные квадраты."
             "независимый оценщик" in prompt -> """

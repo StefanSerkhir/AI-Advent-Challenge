@@ -1,5 +1,6 @@
 package org.example.app
 
+import org.example.agent.ContextStrategy
 import org.example.llm.CompletionResult
 import org.example.tokens.TurnTokenMetrics
 
@@ -14,6 +15,9 @@ data class ExperimentOutput(
     val estimatedCostUsd: Double? = null,
     val streaming: Boolean = false,
     val tokenMetrics: TurnTokenMetrics? = null,
+    val contextStrategy: ContextStrategy? = null,
+    val branchId: String? = null,
+    val branchName: String? = null,
 )
 
 data class ExperimentOutputDelta(
@@ -45,7 +49,7 @@ fun ModelComparisonRun.asOutput(evaluation: Boolean = false) = ExperimentOutput(
 
 fun validateSettings(settings: AppSettings) {
     require(settings.maxTokens > 0 && settings.maxWords > 0 && settings.bulletCount > 0 &&
-        settings.recentMessagesLimit > 0 && settings.summarizationBatchSize > 0) {
+        settings.recentMessagesLimit > 0) {
         "Лимиты и параметры управления контекстом должны быть целыми числами больше нуля."
     }
     require(settings.model.isNotBlank() && settings.model.length <= 200 && settings.model.none { it.isISOControl() }) {

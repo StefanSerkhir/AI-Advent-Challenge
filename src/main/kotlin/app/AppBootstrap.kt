@@ -1,5 +1,6 @@
 package org.example.app
 
+import org.example.agent.ContextStrategy
 import org.example.config.LocalConfig
 import org.example.llm.LlmKind
 import org.example.llm.LlmModels
@@ -43,14 +44,9 @@ class AppBootstrap private constructor(
                     true
                 }
             }
-            val contextManagementEnabled = when (config.contextManagementEnabled?.lowercase()) {
-                null -> false
-                "true", "on", "1" -> true
-                "false", "off", "0" -> false
-                else -> {
-                    warnings += "context_management_enabled в .env имеет неверное значение; управление контекстом выключено"
-                    false
-                }
+            val contextStrategy = config.contextStrategy?.let(ContextStrategy::from) ?: run {
+                if (config.contextStrategy != null) warnings += "context_strategy в .env не распознана; используется SLIDING_WINDOW"
+                ContextStrategy.SLIDING_WINDOW
             }
             val settings = AppSettings(
                 llmKind = llmKind,
@@ -75,9 +71,8 @@ class AppBootstrap private constructor(
                         ContextOverflowPolicy.REJECT
                     }
                 } ?: ContextOverflowPolicy.REJECT,
-                contextManagementEnabled = contextManagementEnabled,
+                contextStrategy = contextStrategy,
                 recentMessagesLimit = positiveInt("recent_messages_limit", config.recentMessagesLimit, 10),
-                summarizationBatchSize = positiveInt("summarization_batch_size", config.summarizationBatchSize, 10),
             )
             val apiKeys = buildMap {
                 config.apiKey?.let { put(configuredLlmKind, it) }

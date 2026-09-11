@@ -231,6 +231,24 @@ button {
   color: #9297a4;
   margin-top: 8px;
 }
+
+.branch-controls,
+.facts-panel {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.facts-panel {
+  padding: 0.65rem;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-gray-0);
+}
+
+.facts-panel dl,
+.facts-panel dl div { margin: 0; }
+.facts-panel dt { font-weight: 600; }
+.facts-panel dd { margin: 0 0 0.35rem; overflow-wrap: anywhere; }
 .workspace {
   min-width: 0;
   min-height: 0;

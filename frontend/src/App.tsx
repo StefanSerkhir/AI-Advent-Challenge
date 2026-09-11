@@ -226,9 +226,6 @@ export default function App() {
                   priceDate={s.priceDate}
                   showTokenMetrics={e.id === lastUnrestrictedId}
                   tokenConversation={e.id === lastUnrestrictedId ? s.tokenConversations.unrestricted : undefined}
-                  contextSavings={e.id === lastUnrestrictedId && s.settings.contextManagementEnabled
-                    ? s.contextSavings ?? undefined
-                    : undefined}
                 />
               ))
             )}

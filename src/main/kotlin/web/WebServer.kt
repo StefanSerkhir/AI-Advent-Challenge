@@ -70,6 +70,8 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             put("/settings") { call.respondText(api.snapshot(api.settings(call.receive<SettingsCommand>())), ContentType.Application.Json) }
             put("/key") { call.respondText(api.snapshot(api.key(call.receive<KeyCommand>())), ContentType.Application.Json) }
             post("/operations") { call.respond(HttpStatusCode.Accepted, api.start(call.receive<StartCommand>())) }
+            post("/context/checkpoint") { call.respondText(api.snapshot(api.checkpoint(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/context/branch") { call.respondText(api.snapshot(api.switchBranch(call.receive<SwitchBranchCommand>())), ContentType.Application.Json) }
             post("/operations/{id}/cancel") {
                 val id = call.parameters["id"]?.toLongOrNull() ?: throw ApiProblem(400, "validation", "Некорректный номер операции.")
                 call.respondText(api.snapshot(api.cancel(id)), ContentType.Application.Json)

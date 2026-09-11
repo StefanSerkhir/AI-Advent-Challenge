@@ -1,5 +1,6 @@
 package org.example.config
 
+import org.example.agent.ContextStrategy
 import org.example.app.AppBootstrap
 import org.example.app.AppSettings
 import org.example.app.ResponseMode
@@ -42,9 +43,8 @@ class LocalConfigStoreTest {
                     bulletCount = 4,
                     stopSequence = null,
                     historyEnabled = false,
-                    contextManagementEnabled = true,
+                    contextStrategy = ContextStrategy.STICKY_FACTS,
                     recentMessagesLimit = 7,
-                    summarizationBatchSize = 9,
                 ),
                 mapOf(LlmKind.DEEPSEEK to "dummy-key", LlmKind.OPENAI to "other-dummy-key"),
             )
@@ -59,9 +59,8 @@ class LocalConfigStoreTest {
             assertEquals("controlled", reloaded.responseMode)
             assertEquals("450", reloaded.maxTokens)
             assertEquals("off", reloaded.stopSequence)
-            assertEquals("true", reloaded.contextManagementEnabled)
+            assertEquals("STICKY_FACTS", reloaded.contextStrategy)
             assertEquals("7", reloaded.recentMessagesLimit)
-            assertEquals("9", reloaded.summarizationBatchSize)
             assertEquals("other-dummy-key", reloaded.openAiApiKey)
         } finally {
             directory.toFile().deleteRecursively()
@@ -77,9 +76,8 @@ class LocalConfigStoreTest {
             llm_kind=not-a-provider
             max_tokens=-2
             history_enabled=perhaps
-            context_management_enabled=perhaps
+            context_strategy=unknown
             recent_messages_limit=0
-            summarization_batch_size=-4
             """.trimIndent(),
         )
 
@@ -93,14 +91,12 @@ class LocalConfigStoreTest {
             assertEquals(LlmKind.OPENAI, bootstrap.settings.llmKind)
             assertEquals(300, bootstrap.settings.maxTokens)
             assertEquals(true, bootstrap.settings.historyEnabled)
-            assertFalse(bootstrap.settings.contextManagementEnabled)
+            assertEquals(ContextStrategy.SLIDING_WINDOW, bootstrap.settings.contextStrategy)
             assertEquals(10, bootstrap.settings.recentMessagesLimit)
-            assertEquals(10, bootstrap.settings.summarizationBatchSize)
             assertContains(bootstrap.warning.orEmpty(), "max_tokens")
             assertContains(bootstrap.warning.orEmpty(), "history_enabled")
-            assertContains(bootstrap.warning.orEmpty(), "context_management_enabled")
+            assertContains(bootstrap.warning.orEmpty(), "context_strategy")
             assertContains(bootstrap.warning.orEmpty(), "recent_messages_limit")
-            assertContains(bootstrap.warning.orEmpty(), "summarization_batch_size")
             assertNull(config.apiKey)
 
             val invalidProvider = AppBootstrap.from(

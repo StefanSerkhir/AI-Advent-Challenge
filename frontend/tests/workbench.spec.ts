@@ -66,9 +66,8 @@ test.beforeEach(async ({ page }) => {
         maxWords: 60,
         bulletCount: 3,
         historyEnabled: true,
-        contextManagementEnabled: false,
+        contextStrategy: "SLIDING_WINDOW",
         recentMessagesLimit: 10,
-        summarizationBatchSize: 10,
       },
     },
   });
@@ -91,11 +90,8 @@ test("settings are shown only when the selected mode uses them", async ({
   );
   await expect(page.getByLabel("Максимум токенов")).toBeVisible();
   await expect(page.getByLabel("Переполнение контекста")).toBeVisible();
-  await expect(page.getByLabel("Управление контекстом")).not.toBeChecked();
-  await expect(page.getByLabel("Последних сообщений без изменений")).toHaveCount(0);
-  await page.getByLabel("Управление контекстом").click();
-  await expect(page.getByLabel("Последних сообщений без изменений")).toHaveValue("10");
-  await expect(page.getByLabel("Сжимать каждые N сообщений")).toHaveValue("10");
+  await expect(page.getByLabel("Стратегия контекста")).toHaveValue("SLIDING_WINDOW");
+  await expect(page.getByLabel("Последних сообщений (N)")).toHaveValue("10");
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(
     page.locator(".history-counts").getByText("С ограничениями", {
@@ -106,7 +102,7 @@ test("settings are shown only when the selected mode uses them", async ({
   await setMode(page, "reasoning");
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("История диалога")).toHaveCount(0);
-  await expect(page.getByLabel("Управление контекстом")).toHaveCount(0);
+  await expect(page.getByLabel("Стратегия контекста")).toHaveCount(0);
   await expect(page.getByLabel("Максимум токенов")).toHaveCount(0);
 
   await setMode(page, "models");
@@ -115,7 +111,7 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
-test("simple agent shows live context compression savings", async ({ page }) => {
+test("simple agent switches context controls, shows facts and branches", async ({ page }) => {
   await setMode(page, "unrestricted");
   const current: State = await (await page.request.get("/api/state")).json();
   await page.request.put("/api/settings", {
@@ -124,32 +120,31 @@ test("simple agent shows live context compression savings", async ({ page }) => 
       expectedSettingsVersion: current.settingsVersion,
       settings: {
         ...current.settings,
-        contextManagementEnabled: true,
+        contextStrategy: "STICKY_FACTS",
         recentMessagesLimit: 2,
-        summarizationBatchSize: 2,
       },
     },
   });
   await page.reload();
   await ready(page);
 
-  await send(page, "Факт для будущего summary");
+  await expect(page.getByTestId("facts-panel")).toBeVisible();
+  await send(page, "Меня зовут Анна");
   await done(page);
-  await send(page, "Второй факт для сжатия");
-  await done(page);
+  await expect(page.getByTestId("facts-panel")).toContainText("name");
+  await expect(page.getByTestId("facts-panel")).toContainText("Анна");
 
-  const table = page.getByTestId("exchange").last().getByTestId("context-savings-table");
-  await expect(table).toBeVisible();
-  await expect(table.getByRole("region", { name: "Таблица экономии от сжатия контекста" })).toBeVisible();
-  await expect(table.locator("tbody tr")).toHaveCount(2);
-  await expect(table.locator("tbody tr").first()).toContainText("Полная история");
-  await expect(table.locator("tbody tr").last()).toContainText("Summary + recent");
-
-  const state: State = await (await page.request.get("/api/state")).json();
-  expect(state.contextSavings?.mainRequests).toBe(2);
-  expect(state.contextSavings?.summarizationRequests).toBe(1);
-  expect(state.contextSavings?.compressedTotalTokens).toBe(600);
-  expect(state.contextSavings?.savingPercent).not.toBeNull();
+  await page.getByLabel("Стратегия контекста").selectOption("BRANCHING");
+  await ready(page);
+  await expect(page.getByTestId("branch-controls")).toBeVisible();
+  await page.getByRole("button", { name: "Создать checkpoint" }).click();
+  await expect(page.getByRole("button", { name: /Ветка A/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Ветка B/ })).toBeVisible();
+  const branching = ((await (await page.request.get("/api/state")).json()) as State).context;
+  const branchB = branching.branches.find((branch) => branch.name === "Ветка B")!;
+  await page.getByRole("button", { name: /Ветка B/ }).click();
+  await expect.poll(async () => ((await (await page.request.get("/api/state")).json()) as State).context.activeBranchId)
+    .toBe(branchB.id);
 });
 
 test("prompt focus uses one clean highlight around the composer", async ({

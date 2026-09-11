@@ -12,6 +12,9 @@ data class LabeledResponse(
     val completion: CompletionResult,
     val heading: String = variant.heading,
     val tokenMetrics: TurnTokenMetrics? = null,
+    val contextStrategy: ContextStrategy? = null,
+    val branchId: String? = null,
+    val branchName: String? = null,
 ) {
     val content: String
         get() = completion.content
@@ -33,6 +36,7 @@ class PromptRunner(
 ) {
     val historyLoadWarning: String?
     private val agents: Map<ResponseVariant, LlmAgent>
+    private val contextManager = ContextManager(contextStateStore, LlmFactExtractor(clientProvider))
 
     init {
         val (restoredState, warning) = try {
@@ -42,7 +46,8 @@ class PromptRunner(
         }
         historyLoadWarning = warning
         agents = ResponseVariant.entries.associateWith { variant ->
-            val restoredMessages = restoredState.messages[variant.historyId].orEmpty()
+            // Version 1/2 unrestricted history is deliberately not promoted to any new strategy.
+            val restoredMessages = if (variant == ResponseVariant.UNRESTRICTED) emptyList() else restoredState.messages[variant.historyId].orEmpty()
             val restoredMetrics = restoredState.turnMetrics[variant.historyId].orEmpty().ifEmpty {
                 legacyTurnMetrics(variant, restoredMessages)
             }
@@ -52,11 +57,7 @@ class PromptRunner(
                 initialTurnMetrics = restoredMetrics,
                 persistHistory = { completedHistory -> persist(variant, completedHistory) },
                 persistConversation = { completedHistory, turns -> persist(variant, completedHistory, turns) },
-                contextManager = ContextManager(
-                    ContextCompressionConfig(enabled = false),
-                    contextStateStore,
-                    LlmHistorySummarizer(clientProvider),
-                ),
+                contextManager = contextManager.takeIf { variant == ResponseVariant.UNRESTRICTED },
                 contextSessionId = variant.historyId,
             )
         }
@@ -68,11 +69,14 @@ class PromptRunner(
     ): List<LabeledResponse> {
         val variants = settings.responseMode.variants()
         return variants.mapIndexed { index, variant ->
+            val sticky = settings.responseMode == ResponseMode.UNRESTRICTED && settings.historyEnabled &&
+                settings.contextStrategy == ContextStrategy.STICKY_FACTS
             onProgress(
                 PromptProgress(
-                    current = index + 1,
-                    total = variants.size,
+                    current = if (sticky) 1 else index + 1,
+                    total = if (sticky) 2 else variants.size,
                     label = when {
+                        sticky -> "Обновление facts"
                         settings.responseMode == ResponseMode.UNRESTRICTED -> "Агент формирует ответ"
                         variant == ResponseVariant.UNRESTRICTED -> "Ответ без ограничений"
                         variant == ResponseVariant.CONTROLLED -> "Ответ с ограничениями"
@@ -88,8 +92,15 @@ class PromptRunner(
     fun historySnapshot(): Map<ResponseVariant, List<LlmMessage>> = agents.mapValues { it.value.historySnapshot() }
 
     fun clearHistory() {
-        historyStore.clear()
-        agents.values.forEach(LlmAgent::clearHistory)
+        val previousContext = contextManager.state(ResponseVariant.UNRESTRICTED.historyId)
+        contextManager.clear(ResponseVariant.UNRESTRICTED.historyId)
+        try {
+            historyStore.clear()
+        } catch (error: Exception) {
+            runCatching { contextManager.restore(previousContext) }
+            throw error
+        }
+        agents.values.forEach(LlmAgent::clearLocalHistory)
     }
 
     fun historyTurnCounts(): Map<ResponseVariant, Int> = agents.mapValues { it.value.completedTurnCount() }
@@ -100,8 +111,24 @@ class PromptRunner(
     fun tokenTotalsSnapshot(): Map<ResponseVariant, ConversationTokenTotals> =
         agents.mapValues { it.value.conversationTotals() }
 
-    fun contextSavingsSnapshot(): Map<ResponseVariant, ContextSavingsSnapshot> =
-        agents.mapValues { it.value.contextSavingsSnapshot() }
+    fun contextDiagnostics(settings: AppSettings): ContextDiagnostics = contextManager.diagnostics(
+        ResponseVariant.UNRESTRICTED.historyId,
+        ContextConfig(settings.contextStrategy, settings.recentMessagesLimit),
+    )
+
+    fun createCheckpoint(settings: AppSettings): ContextDiagnostics {
+        val diagnostics = contextManager.createCheckpoint(ResponseVariant.UNRESTRICTED.historyId)
+        agents.getValue(ResponseVariant.UNRESTRICTED).replaceHistory(contextManager.activeMessages(
+            ResponseVariant.UNRESTRICTED.historyId, ContextStrategy.BRANCHING))
+        return diagnostics.copy(recentMessagesLimit = settings.recentMessagesLimit)
+    }
+
+    fun switchBranch(branchId: String, settings: AppSettings): ContextDiagnostics {
+        val diagnostics = contextManager.switchBranch(ResponseVariant.UNRESTRICTED.historyId, branchId)
+        agents.getValue(ResponseVariant.UNRESTRICTED).replaceHistory(contextManager.activeMessages(
+            ResponseVariant.UNRESTRICTED.historyId, ContextStrategy.BRANCHING))
+        return diagnostics.copy(recentMessagesLimit = settings.recentMessagesLimit)
+    }
 
     private fun persist(
         changedVariant: ResponseVariant,
@@ -140,6 +167,7 @@ class PromptRunner(
             )
         }
         val heading = if (settings.responseMode == ResponseMode.UNRESTRICTED) "ОТВЕТ АГЕНТА" else variant.heading
+        val sticky = settings.responseMode == ResponseMode.UNRESTRICTED && settings.contextStrategy == ContextStrategy.STICKY_FACTS
         var preparedMetrics: TurnTokenMetrics? = null
         val response = agents.getValue(variant).respond(
             AgentRequest(
@@ -148,9 +176,11 @@ class PromptRunner(
                 historyEnabled = settings.historyEnabled,
                 model = settings.model,
                 overflowPolicy = settings.contextOverflowPolicy,
-                contextManagementEnabled = settings.responseMode == ResponseMode.UNRESTRICTED && settings.contextManagementEnabled,
+                contextStrategy = settings.contextStrategy.takeIf { settings.responseMode == ResponseMode.UNRESTRICTED },
                 recentMessagesLimit = settings.recentMessagesLimit,
-                summarizationBatchSize = settings.summarizationBatchSize,
+                onContextPrepared = {
+                    if (sticky) onProgress(PromptProgress(2, 2, "Агент формирует ответ"))
+                },
             ),
             onDelta = { content -> onDelta(ExperimentOutputDelta(variant.name, heading, content, tokenMetrics = preparedMetrics)) },
             onMetrics = { metrics ->
@@ -166,6 +196,9 @@ class PromptRunner(
             completion = response.completion,
             heading = heading,
             tokenMetrics = response.tokenMetrics,
+            contextStrategy = response.contextStrategy,
+            branchId = response.branchId,
+            branchName = response.branchName,
         )
     }
 

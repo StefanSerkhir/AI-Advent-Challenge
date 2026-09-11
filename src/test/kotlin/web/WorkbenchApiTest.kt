@@ -76,6 +76,23 @@ class WorkbenchApiTest {
     private val base = "http://localhost:8080/api"
 
     @Test
+    fun `branch commands create ids switch active branch and reject unknown branch`() {
+        val c = controller(mode = ResponseMode.UNRESTRICTED)
+        val api = WorkbenchApi(c)
+        try {
+            val initial = c.state.value.toDto()
+            api.settings(SettingsCommand(initial.settingsVersion, initial.settings.copy(contextStrategy = "BRANCHING")))
+            val created = api.checkpoint(ContextMutationCommand(c.state.value.settingsVersion))
+            assertNotNull(created.context.checkpoint)
+            assertEquals(listOf("Ветка A", "Ветка B"), created.context.branches.map { it.name })
+            val target = created.context.branches.last().id
+            val switched = api.switchBranch(SwitchBranchCommand(c.state.value.settingsVersion, target))
+            assertEquals(target, switched.context.activeBranchId)
+            assertFailsWith<ApiProblem> { api.switchBranch(SwitchBranchCommand(c.state.value.settingsVersion, "missing")) }
+        } finally { c.close() }
+    }
+
+    @Test
     fun `settings keys validation persistence and secret-free snapshots`() = testApplication {
         engine { connector { host = "localhost"; port = 8080 } }
         val client = createClient { defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") } }
@@ -97,18 +114,17 @@ class WorkbenchApiTest {
             assertEquals(key, store.load().openAiApiKey)
             val changed = initial.settings.copy(
                 mode = "controlled", maxTokens = 123, maxWords = 12, bulletCount = 2,
-                stopSequence = "DONE", historyEnabled = false, contextManagementEnabled = true,
-                recentMessagesLimit = 4, summarizationBatchSize = 3,
+                stopSequence = "DONE", historyEnabled = false, contextStrategy = "STICKY_FACTS",
+                recentMessagesLimit = 4,
             )
             val state = client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(1, changed))) }.state()
             assertEquals(changed, state.settings)
             assertEquals("123", store.load().maxTokens)
-            assertEquals("true", store.load().contextManagementEnabled)
+            assertEquals("STICKY_FACTS", store.load().contextStrategy)
             assertEquals("4", store.load().recentMessagesLimit)
-            assertEquals("3", store.load().summarizationBatchSize)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(maxTokens = 0)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(recentMessagesLimit = 0)))) }.status)
-            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(summarizationBatchSize = 0)))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(contextStrategy = "UNKNOWN")))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(stopSequence = "\n")))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/key") { localJson("{broken $key}") }.status)
             assertFalse(client.get("$base/state").bodyAsText().contains(key))
@@ -157,6 +173,7 @@ class WorkbenchApiTest {
             assertEquals(HttpStatusCode.Conflict, client.delete("$base/results") { localJson() }.status)
             assertEquals(HttpStatusCode.Conflict, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(0, current.settings))) }.status)
             assertEquals(HttpStatusCode.Conflict, client.put("$base/key") { localJson(apiJson.encodeToString(KeyCommand(0, "OPENAI", "other-key"))) }.status)
+            assertEquals(HttpStatusCode.Conflict, client.post("$base/context/checkpoint") { localJson(apiJson.encodeToString(ContextMutationCommand(0))) }.status)
             val duplicate = client.post("$base/operations") { localJson(apiJson.encodeToString(request)) }
             assertEquals(id, apiJson.decodeFromString<StartReply>(duplicate.bodyAsText()).operationId)
             assertEquals(1, count.get())
@@ -212,7 +229,7 @@ class WorkbenchApiTest {
                 }
             }
             val state = client.get("$base/state").state()
-            assertEquals(HistoryDto(2, 2), state.history)
+            assertEquals(HistoryDto(1, 2), state.history)
             val details = apiJson.decodeFromString<HistoryDetailsDto>(client.get("$base/history").bodyAsText())
             assertEquals(listOf("user", "assistant", "user", "assistant"), details.branches.getValue("controlled").map { it.role })
             assertContains(details.branches.getValue("controlled").first().content, "Требования к ответу")

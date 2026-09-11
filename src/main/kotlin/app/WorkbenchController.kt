@@ -66,7 +66,7 @@ data class WorkbenchState(
     val historyMessages: Map<ResponseVariant, List<LlmMessage>> = emptyMap(),
     val tokenMetrics: Map<ResponseVariant, List<TurnTokenMetrics>> = emptyMap(),
     val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
-    val contextSavings: Map<ResponseVariant, ContextSavingsSnapshot> = emptyMap(),
+    val context: ContextDiagnostics,
     val exchanges: List<ConversationExchange> = emptyList(),
     val operation: OperationState = OperationState.Idle,
     val notice: UiNotice? = null,
@@ -101,10 +101,11 @@ class WorkbenchController(
         onProgress = { reportProgress(it.current, it.total, it.label) },
         onDelta = { publishStreamingOutput(it.asOutput()) },
         onResponse = {
-            addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion, tokenMetrics = it.tokenMetrics))
+            addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion, tokenMetrics = it.tokenMetrics,
+                contextStrategy = it.contextStrategy, branchId = it.branchId, branchName = it.branchName))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts(),
                 tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
-                contextSavings = promptRunner.contextSavingsSnapshot()) }
+                context = promptRunner.contextDiagnostics(it.settings)) }
         },
         historyStore = historyStore,
         contextStateStore = contextStateStore,
@@ -118,7 +119,7 @@ class WorkbenchController(
             historyMessages = promptRunner.historySnapshot(),
             tokenMetrics = promptRunner.tokenMetricsSnapshot(),
             tokenTotals = promptRunner.tokenTotalsSnapshot(),
-            contextSavings = promptRunner.contextSavingsSnapshot(),
+            context = promptRunner.contextDiagnostics(initialSettings),
             notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning)
                 .takeIf(List<String>::isNotEmpty)
                 ?.joinToString("\n")
@@ -146,7 +147,8 @@ class WorkbenchController(
         persistSettings(next.copy(), apiKeys.toMap())
         modelSelections[previous.llmKind] = previous.model
         modelSelections[next.llmKind] = next.model
-        publish { it.copy(settings = next.copy(), settingsVersion = it.settingsVersion + 1, notice = null) }
+        publish { it.copy(settings = next.copy(), settingsVersion = it.settingsVersion + 1,
+            context = promptRunner.contextDiagnostics(next), notice = null) }
     }
 
     fun updateModel(model: String) = updateSettings { it.copy(model = model) }
@@ -182,8 +184,8 @@ class WorkbenchController(
             promptRunner.clearHistory()
             publish { it.copy(historyTurnCounts = promptRunner.historyTurnCounts(), historyMessages = promptRunner.historySnapshot(),
                 tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
-                contextSavings = promptRunner.contextSavingsSnapshot(),
-                notice = UiNotice("История обеих веток очищена.", NoticeKind.INFO)) }
+                context = promptRunner.contextDiagnostics(it.settings),
+                notice = UiNotice("История и состояние всех стратегий очищены.", NoticeKind.INFO)) }
             return true
         } catch (_: HistoryPersistenceException) {
             publish { it.copy(notice = UiNotice(HISTORY_SAVE_ERROR, NoticeKind.ERROR)) }
@@ -195,6 +197,31 @@ class WorkbenchController(
     fun clearResults() {
         if (_state.value.isRunning || closed) return
         publish { it.copy(exchanges = emptyList()) }
+    }
+
+    @Synchronized
+    fun createCheckpoint(): Boolean {
+        if (_state.value.isRunning || closed) return false
+        val settings = _state.value.settings
+        require(settings.responseMode == ResponseMode.UNRESTRICTED && settings.contextStrategy == ContextStrategy.BRANCHING) {
+            "Checkpoint доступен только для стратегии Branching в режиме Простого агента."
+        }
+        val context = promptRunner.createCheckpoint(settings)
+        publish { it.copy(context = context, historyMessages = promptRunner.historySnapshot(),
+            notice = UiNotice("Checkpoint создан; доступны Ветка A и Ветка B.", NoticeKind.INFO)) }
+        return true
+    }
+
+    @Synchronized
+    fun switchBranch(branchId: String): Boolean {
+        if (_state.value.isRunning || closed) return false
+        val settings = _state.value.settings
+        require(settings.responseMode == ResponseMode.UNRESTRICTED && settings.contextStrategy == ContextStrategy.BRANCHING) {
+            "Переключение веток доступно только для стратегии Branching."
+        }
+        val context = promptRunner.switchBranch(branchId, settings)
+        publish { it.copy(context = context, historyMessages = promptRunner.historySnapshot(), notice = null) }
+        return true
     }
 
     @Synchronized
@@ -283,7 +310,8 @@ class WorkbenchController(
         val exchangeId = nextExchangeId.getAndIncrement()
         val total = when (settings.responseMode) {
             ResponseMode.COMPARE -> 2
-            ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED -> 1
+            ResponseMode.CONTROLLED -> 1
+            ResponseMode.UNRESTRICTED -> if (settings.contextStrategy == ContextStrategy.STICKY_FACTS && settings.historyEnabled) 2 else 1
             ResponseMode.REASONING -> TOTAL_REASONING_API_CALLS
             ResponseMode.TEMPERATURE -> TOTAL_TEMPERATURE_API_CALLS
             ResponseMode.MODEL_COMPARISON -> TOTAL_MODEL_COMPARISON_API_CALLS
@@ -382,7 +410,7 @@ class WorkbenchController(
                     currentJob = null
                     publish { it.copy(operation = OperationState.Idle, historyTurnCounts = promptRunner.historyTurnCounts(),
                         tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
-                        contextSavings = promptRunner.contextSavingsSnapshot()) }
+                        context = promptRunner.contextDiagnostics(it.settings)) }
                 }
             }
         }

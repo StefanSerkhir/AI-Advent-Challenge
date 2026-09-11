@@ -10,54 +10,18 @@ import kotlin.test.*
 
 class LlmAgentTest {
     @Test
-    fun `managed context replaces old raw messages with summary in the next agent request`() = runBlocking {
-        val mainCalls = mutableListOf<List<LlmMessage>>()
-        var summaryCalls = 0
-        val client = object : LlmClient {
-            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
-                return if (messages.firstOrNull()?.content == SUMMARY_SYSTEM_PROMPT) {
-                    summaryCalls++
-                    CompletionResult("summary: first fact", "stop", TokenUsage(12, 3, 15), "test-model")
-                } else {
-                    mainCalls += messages
-                    CompletionResult("answer-${mainCalls.size}", "stop", TokenUsage(10, 2, 12), "test-model")
-                }
-            }
-        }
-        val manager = ContextManager(
-            ContextCompressionConfig(enabled = false),
-            InMemoryContextStateStore(),
-            LlmHistorySummarizer(clientProvider = { client }),
-        )
+    fun `sliding strategy controls request and persistent agent memory`() = runBlocking {
+        val client = RecordingClient()
+        val manager = ContextManager(InMemoryContextStateStore(), FactExtractor { _, _ -> FactPatch() })
         val agent = LlmAgent(contextManager = manager, contextSessionId = "ui-agent", clientProvider = { client })
-        val request: (String) -> AgentRequest = { prompt ->
-            AgentRequest(prompt, contextManagementEnabled = true, recentMessagesLimit = 2, summarizationBatchSize = 2)
-        }
+        val request: (String) -> AgentRequest = { AgentRequest(it, contextStrategy = ContextStrategy.SLIDING_WINDOW, recentMessagesLimit = 2) }
 
-        agent.respond(request("first fact"))
-        agent.respond(request("second fact"))
-        assertEquals(1, summaryCalls)
-        agent.respond(request("current question"))
+        agent.respond(request("first"))
+        agent.respond(request("second"))
 
-        assertEquals(2, summaryCalls)
-        val sent = mainCalls.last()
-        assertEquals(
-            listOf(LlmRole.SYSTEM, LlmRole.SYSTEM, LlmRole.USER, LlmRole.ASSISTANT, LlmRole.USER),
-            sent.map(LlmMessage::role),
-        )
-        assertContains(sent[1].content, "summary: first fact")
-        assertFalse(sent.any { it.content == "first fact" })
-        assertEquals(listOf("second fact", "answer-2", "current question"), sent.takeLast(3).map(LlmMessage::content))
-        assertEquals(6, agent.historySnapshot().size)
-        val savings = agent.contextSavingsSnapshot()
-        assertEquals(3, savings.mainRequests)
-        assertEquals(2, savings.summarizationRequests)
-        assertEquals(30, savings.compressedMainInputTokens)
-        assertEquals(6, savings.compressedMainOutputTokens)
-        assertEquals(30, savings.summaryTotalTokens)
-        assertEquals(66, savings.compressedTotalTokens)
-        assertTrue(savings.baselineEstimatedInputTokens > 0)
-        assertNotNull(savings.savingPercent)
+        assertEquals(listOf(LlmRole.SYSTEM, LlmRole.ASSISTANT, LlmRole.USER), client.calls.last().messages.map { it.role })
+        assertEquals(listOf("Ответ от API", "second"), client.calls.last().messages.takeLast(2).map { it.content })
+        assertEquals(listOf("second", "Ответ от API"), agent.historySnapshot().map { it.content })
     }
 
     @Test
@@ -122,6 +86,29 @@ class LlmAgentTest {
     }
 
     @Test
+    fun `sticky facts and raw history remain unchanged when main stream fails`() = runBlocking {
+        val manager = ContextManager(InMemoryContextStateStore(), FactExtractor { _, _ ->
+            FactPatch(mapOf("goal" to "release"), usage = TokenUsage(3, 2, 5))
+        })
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")
+            override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
+                emit(TextDelta("partial")); throw LlmApiException("failed")
+            }
+        }
+        val agent = LlmAgent(contextManager = manager, contextSessionId = "s", clientProvider = { client })
+
+        assertFailsWith<LlmApiException> {
+            agent.respond(AgentRequest("remember goal", contextStrategy = ContextStrategy.STICKY_FACTS, recentMessagesLimit = 2))
+        }
+
+        assertTrue(manager.state("s").stickyFacts.isEmpty())
+        assertTrue(manager.state("s").stickyMessages.isEmpty())
+        assertEquals(1, manager.state("s").factUsage.requests)
+        assertTrue(agent.historySnapshot().isEmpty())
+    }
+
+    @Test
     fun `agent does not persist or remember a cancelled stream`() = runBlocking {
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) =
@@ -140,6 +127,28 @@ class LlmAgentTest {
         }
 
         assertEquals(0, persistenceCalls)
+        assertTrue(agent.historySnapshot().isEmpty())
+    }
+
+    @Test
+    fun `cancelled sticky request does not commit candidate facts`() = runBlocking {
+        val manager = ContextManager(InMemoryContextStateStore(), FactExtractor { _, _ -> FactPatch(mapOf("name" to "Анна")) })
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")
+            override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
+                emit(TextDelta("часть")); awaitCancellation()
+            }
+        }
+        val agent = LlmAgent(contextManager = manager, contextSessionId = "s", clientProvider = { client })
+
+        assertFailsWith<CancellationException> {
+            kotlinx.coroutines.withTimeout(100) {
+                agent.respond(AgentRequest("Меня зовут Анна", contextStrategy = ContextStrategy.STICKY_FACTS))
+            }
+        }
+
+        assertTrue(manager.state("s").stickyFacts.isEmpty())
+        assertTrue(manager.state("s").stickyMessages.isEmpty())
         assertTrue(agent.historySnapshot().isEmpty())
     }
 
