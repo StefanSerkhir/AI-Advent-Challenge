@@ -1,5 +1,6 @@
 package org.example.app
 
+import org.example.agent.AssistantMemoryDiagnostics
 import org.example.agent.ContextStrategy
 import org.example.llm.CompletionResult
 import org.example.tokens.TurnTokenMetrics
@@ -18,6 +19,7 @@ data class ExperimentOutput(
     val contextStrategy: ContextStrategy? = null,
     val branchId: String? = null,
     val branchName: String? = null,
+    val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
 )
 
 data class ExperimentOutputDelta(
@@ -54,6 +56,9 @@ fun validateSettings(settings: AppSettings) {
     }
     require(settings.model.isNotBlank() && settings.model.length <= 200 && settings.model.none { it.isISOControl() }) {
         "Укажите корректную модель."
+    }
+    require(settings.contextStrategy != ContextStrategy.MEMORY_LAYERS || settings.recentMessagesLimit >= 2) {
+        "Для слоёв памяти лимит краткосрочного диалога должен быть не меньше двух сообщений."
     }
     require(settings.stopSequence == null || settings.stopSequence!!.let {
         it.isNotBlank() && it.length <= 4096 && it.none(Char::isISOControl) && !it.equals("off", ignoreCase = true)

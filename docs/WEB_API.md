@@ -15,7 +15,13 @@
 | POST | `/api/context/branch` | `{ expectedSettingsVersion, branchId }` → переключает активную ветку |
 | POST | `/api/operations/{id}/cancel` | `{}` → текущий снимок; окончание отмены приходит по SSE |
 | GET | `/api/history` | Controlled/compare history и состояние стратегии: facts, checkpoint, branch ID/сообщения, activeBranchId |
-| DELETE | `/api/history` | `{}` → очищает обычную историю и состояние всех трёх стратегий |
+| GET | `/api/assistant/memory` | Три секции памяти `MEMORY_LAYERS`, записи, счётчики и флаги включения |
+| POST / PUT / DELETE | `/api/assistant/memory` | Добавить / изменить / удалить запись с `{ expectedSettingsVersion, layer, ... }` |
+| POST | `/api/assistant/memory/clear` | `{ expectedSettingsVersion, layer }` → очистить ровно один слой |
+| PUT | `/api/assistant/memory/enabled` | `{ expectedSettingsVersion, layer, enabled }` → включить слой без удаления |
+| POST | `/api/assistant/dialogue/new` | Очистить только `SHORT_TERM` |
+| POST | `/api/assistant/task/complete` | Очистить только `WORKING` |
+| DELETE | `/api/history` | `{}` → очищает обычную историю и состояния трёх прежних стратегий; слои памяти не затрагивает |
 | DELETE | `/api/results` | `{}` → снимок без карточек; история сохранена |
 | DELETE | `/api/notice` | `{}` → снимок без уведомления |
 | GET | `/api/events` | SSE `event: state`, `id: revision`, `data: StateDto`; heartbeat каждые 15 секунд |
@@ -28,8 +34,8 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 
 ## Согласованность
 
-`revision` монотонно растёт при любом изменении снимка; `settingsVersion` — только
-при сохранении настроек/ключа. Клиент передаёт последнюю версию настроек и при
+`revision` монотонно растёт при любом изменении снимка; `settingsVersion` — при
+сохранении настроек/ключа и каждой мутации памяти. Клиент передаёт последнюю версию и при
 `409 stale_settings` получает свежий снимок, после чего пользователь повторяет
 действие. Команды проверяются и выполняются под общим монитором контроллера.
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
@@ -61,8 +67,9 @@ context-state откатывается. При ошибке или отмене 
 аналогично очищает память только после успешной записи пустого снимка; при ошибке
 возвращает `500 persistence`.
 
-В `settings` стратегия передаётся как `SLIDING_WINDOW`, `STICKY_FACTS` или
-`BRANCHING`, а N — как положительный `recentMessagesLimit`. Неизвестные значения
+В `settings` стратегия передаётся как `SLIDING_WINDOW`, `STICKY_FACTS`,
+`BRANCHING` или `MEMORY_LAYERS`, а N — как положительный `recentMessagesLimit`
+(не меньше 2 для полного short-term обмена). Неизвестные значения
 и неположительный N дают `400 validation`. Sticky Facts публикует отдельный этап
 «Обновление facts» и учитывает usage этого вызова в `context.factUsage`.
 

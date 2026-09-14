@@ -1,8 +1,7 @@
 package org.example.web
 
 import kotlinx.serialization.Serializable
-import org.example.agent.ContextDiagnostics
-import org.example.agent.ContextStrategy
+import org.example.agent.*
 import org.example.app.*
 import org.example.llm.LlmKind
 import org.example.llm.LlmMessage
@@ -34,6 +33,16 @@ data class StartReply(val operationId: Long)
 data class ContextMutationCommand(val expectedSettingsVersion: Long)
 @Serializable
 data class SwitchBranchCommand(val expectedSettingsVersion: Long, val branchId: String)
+@Serializable
+data class MemoryAddCommand(val expectedSettingsVersion: Long, val layer: String, val text: String)
+@Serializable
+data class MemoryUpdateCommand(val expectedSettingsVersion: Long, val layer: String, val id: String, val text: String)
+@Serializable
+data class MemoryDeleteCommand(val expectedSettingsVersion: Long, val layer: String, val id: String)
+@Serializable
+data class MemoryLayerCommand(val expectedSettingsVersion: Long, val layer: String)
+@Serializable
+data class MemoryEnabledCommand(val expectedSettingsVersion: Long, val layer: String, val enabled: Boolean)
 @Serializable
 data class ErrorDto(val code: String, val message: String)
 @Serializable
@@ -124,6 +133,7 @@ data class OutputDto(
     val contextStrategy: String? = null,
     val branchId: String? = null,
     val branchName: String? = null,
+    val assistantMemoryDiagnostics: AssistantMemoryDiagnosticsDto? = null,
 )
 @Serializable
 data class ExchangeDto(
@@ -152,6 +162,23 @@ data class ContextDto(
     val activeBranchId: String,
 )
 @Serializable
+data class MemoryEntryDto(
+    val id: String,
+    val text: String,
+    val role: String,
+    val pairId: String?,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+)
+@Serializable
+data class MemoryLayerDto(val layer: String, val enabled: Boolean, val count: Int, val entries: List<MemoryEntryDto>)
+@Serializable
+data class AssistantMemoryDto(val layers: List<MemoryLayerDto>)
+@Serializable
+data class MemoryLayerUsageDto(val layer: String, val enabled: Boolean, val usedCount: Int, val usedEntryIds: List<String>)
+@Serializable
+data class AssistantMemoryDiagnosticsDto(val layers: List<MemoryLayerUsageDto>)
+@Serializable
 data class HistoryDetailsDto(
     val counts: HistoryDto,
     val branches: Map<String, List<HistoryMessageDto>>,
@@ -168,6 +195,7 @@ data class StateDto(
     val priceDate: String = MODEL_PRICE_DATE,
     val tokenConversations: Map<String, TokenConversationDto> = emptyMap(),
     val context: ContextDto,
+    val assistantMemory: AssistantMemoryDto,
 )
 
 fun AppSettings.toDto() = SettingsDto(
@@ -260,6 +288,15 @@ private fun ContextDiagnostics.toDto() = ContextDto(
     activeBranchId,
 )
 
+private fun MemoryEntry.toDto() = MemoryEntryDto(id, text, role.name, pairId, createdAtEpochMillis, updatedAtEpochMillis)
+fun AssistantMemoryState.toDto() = AssistantMemoryDto(MemoryLayer.entries.map { layer ->
+    val entries = entries(layer)
+    MemoryLayerDto(layer.name, settings.enabled(layer), entries.size, entries.map(MemoryEntry::toDto))
+})
+private fun AssistantMemoryDiagnostics.toDto() = AssistantMemoryDiagnosticsDto(layers.map {
+    MemoryLayerUsageDto(it.layer.name, it.enabled, it.usedCount, it.usedEntryIds)
+})
+
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
     providers = LlmKind.entries.map { kind -> ProviderDto(kind.name, kind.displayName(), kind in configuredProviders,
@@ -283,7 +320,8 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                         metrics?.completionTokens, metrics?.finishReason, usage?.promptTokens, usage?.reasoningTokens,
                         usage?.totalTokens, output.elapsedMillis, output.estimatedCostUsd,
                         usage?.cachedPromptTokens, usage?.cacheWritePromptTokens), output.streaming,
-                    output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName)
+                    output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName,
+                    output.assistantMemoryDiagnostics?.toDto())
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null,
             (exchange.outcome as? ExchangeOutcome.Failed)?.code,
@@ -298,6 +336,7 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
             tokenMetrics[variant].orEmpty().map { it.toDto() },
             (tokenTotals[variant] ?: ConversationTokenTotals()).toDto(),
         )
-    },
+    } + ("assistant" to TokenConversationDto(assistantTokenMetrics.map { it.toDto() }, assistantTokenTotals.toDto())),
     context = context.toDto(),
+    assistantMemory = assistantMemory.toDto(),
 )

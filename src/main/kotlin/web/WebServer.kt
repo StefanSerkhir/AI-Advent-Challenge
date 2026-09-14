@@ -66,12 +66,20 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
     routing {
         route("/api") {
             get("/state") { call.respondText(api.snapshot(), ContentType.Application.Json) }
+            get("/assistant/memory") { call.respondText(api.memory(), ContentType.Application.Json) }
             get("/settings") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             put("/settings") { call.respondText(api.snapshot(api.settings(call.receive<SettingsCommand>())), ContentType.Application.Json) }
             put("/key") { call.respondText(api.snapshot(api.key(call.receive<KeyCommand>())), ContentType.Application.Json) }
             post("/operations") { call.respond(HttpStatusCode.Accepted, api.start(call.receive<StartCommand>())) }
             post("/context/checkpoint") { call.respondText(api.snapshot(api.checkpoint(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/context/branch") { call.respondText(api.snapshot(api.switchBranch(call.receive<SwitchBranchCommand>())), ContentType.Application.Json) }
+            post("/assistant/memory") { call.respondText(api.snapshot(api.addMemory(call.receive<MemoryAddCommand>())), ContentType.Application.Json) }
+            put("/assistant/memory") { call.respondText(api.snapshot(api.updateMemory(call.receive<MemoryUpdateCommand>())), ContentType.Application.Json) }
+            delete("/assistant/memory") { call.respondText(api.snapshot(api.deleteMemory(call.receive<MemoryDeleteCommand>())), ContentType.Application.Json) }
+            post("/assistant/memory/clear") { call.respondText(api.snapshot(api.clearMemory(call.receive<MemoryLayerCommand>())), ContentType.Application.Json) }
+            put("/assistant/memory/enabled") { call.respondText(api.snapshot(api.setMemoryEnabled(call.receive<MemoryEnabledCommand>())), ContentType.Application.Json) }
+            post("/assistant/dialogue/new") { call.respondText(api.snapshot(api.newDialogue(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task/complete") { call.respondText(api.snapshot(api.completeTask(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/operations/{id}/cancel") {
                 val id = call.parameters["id"]?.toLongOrNull() ?: throw ApiProblem(400, "validation", "Некорректный номер операции.")
                 call.respondText(api.snapshot(api.cancel(id)), ContentType.Application.Json)

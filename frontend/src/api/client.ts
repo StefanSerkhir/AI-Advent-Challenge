@@ -1,4 +1,4 @@
-import type {Provider, Settings, StartCommand, State} from "./types";
+import type {MemoryLayer, Provider, Settings, StartCommand, State} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -55,6 +55,20 @@ export const api = {
     request<State>("/context/checkpoint", "POST", { expectedSettingsVersion }),
   switchBranch: (branchId: string, expectedSettingsVersion: number) =>
     request<State>("/context/branch", "POST", { branchId, expectedSettingsVersion }),
+  addMemory: (layer: MemoryLayer, text: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/memory", "POST", { layer, text, expectedSettingsVersion }),
+  updateMemory: (layer: MemoryLayer, id: string, text: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/memory", "PUT", { layer, id, text, expectedSettingsVersion }),
+  deleteMemory: (layer: MemoryLayer, id: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/memory", "DELETE", { layer, id, expectedSettingsVersion }),
+  clearMemory: (layer: MemoryLayer, expectedSettingsVersion: number) =>
+    request<State>("/assistant/memory/clear", "POST", { layer, expectedSettingsVersion }),
+  setMemoryEnabled: (layer: MemoryLayer, enabled: boolean, expectedSettingsVersion: number) =>
+    request<State>("/assistant/memory/enabled", "PUT", { layer, enabled, expectedSettingsVersion }),
+  newDialogue: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/dialogue/new", "POST", { expectedSettingsVersion }),
+  completeTask: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task/complete", "POST", { expectedSettingsVersion }),
   clear: (target: "history" | "results" | "notice") =>
     request<State>(`/${target}`, "DELETE"),
 };

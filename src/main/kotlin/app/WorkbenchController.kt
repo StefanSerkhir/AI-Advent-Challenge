@@ -67,6 +67,9 @@ data class WorkbenchState(
     val tokenMetrics: Map<ResponseVariant, List<TurnTokenMetrics>> = emptyMap(),
     val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
     val context: ContextDiagnostics,
+    val assistantMemory: AssistantMemoryState = AssistantMemoryState(),
+    val assistantTokenMetrics: List<TurnTokenMetrics> = emptyList(),
+    val assistantTokenTotals: ConversationTokenTotals = ConversationTokenTotals(scope = "assistant_memory"),
     val exchanges: List<ConversationExchange> = emptyList(),
     val operation: OperationState = OperationState.Idle,
     val notice: UiNotice? = null,
@@ -83,6 +86,7 @@ class WorkbenchController(
     initialWarning: String? = null,
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
     private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
+    assistantMemoryStore: AssistantMemoryStore = InMemoryAssistantMemoryStore(),
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -97,6 +101,13 @@ class WorkbenchController(
     private val nextExchangeId = AtomicLong(1)
     private val lastStreamPublishNanos = mutableMapOf<String, Long>()
     private val latestStreamingOutputs = mutableMapOf<String, ExperimentOutput>()
+    private val assistantMemoryManager = AssistantMemoryManager(
+        store = assistantMemoryStore,
+        sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
+    )
+    private val assistantAgent = AssistantAgent(assistantMemoryManager) {
+        requestClient.get() ?: error("Клиент запроса не инициализирован")
+    }
     private val promptRunner: PromptRunner = PromptRunner(
         onProgress = { reportProgress(it.current, it.total, it.label) },
         onDelta = { publishStreamingOutput(it.asOutput()) },
@@ -120,7 +131,10 @@ class WorkbenchController(
             tokenMetrics = promptRunner.tokenMetricsSnapshot(),
             tokenTotals = promptRunner.tokenTotalsSnapshot(),
             context = promptRunner.contextDiagnostics(initialSettings),
-            notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning)
+            assistantMemory = assistantMemoryManager.state(),
+            assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
+            assistantTokenTotals = assistantAgent.tokenTotalsSnapshot(),
+            notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning, assistantMemoryManager.loadWarning)
                 .takeIf(List<String>::isNotEmpty)
                 ?.joinToString("\n")
                 ?.let { UiNotice(it, NoticeKind.ERROR) },
@@ -222,6 +236,64 @@ class WorkbenchController(
         val context = promptRunner.switchBranch(branchId, settings)
         publish { it.copy(context = context, historyMessages = promptRunner.historySnapshot(), notice = null) }
         return true
+    }
+
+    @Synchronized
+    fun addMemory(layer: MemoryLayer, text: String): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.add(layer, text)
+        "Запись добавлена в слой ${layer.name}."
+    }
+
+    @Synchronized
+    fun updateMemory(layer: MemoryLayer, id: String, text: String): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.update(layer, id, text)
+        "Запись обновлена."
+    }
+
+    @Synchronized
+    fun deleteMemory(layer: MemoryLayer, id: String): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.delete(layer, id)
+        "Запись удалена."
+    }
+
+    @Synchronized
+    fun clearMemory(layer: MemoryLayer): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.clear(layer)
+        "Слой ${layer.name} очищен."
+    }
+
+    @Synchronized
+    fun newAssistantDialogue(): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.newDialogue()
+        "Начат новый диалог; очищена только краткосрочная память."
+    }
+
+    @Synchronized
+    fun completeAssistantTask(): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.completeTask()
+        "Текущая задача завершена; очищена только рабочая память."
+    }
+
+    @Synchronized
+    fun setMemoryEnabled(layer: MemoryLayer, enabled: Boolean): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.setEnabled(layer, enabled)
+        if (enabled) "Слой ${layer.name} будет учтён в следующем ответе." else "Слой ${layer.name} исключён из следующего ответа; данные сохранены."
+    }
+
+    private inline fun mutateAssistantMemory(action: () -> String): Boolean {
+        if (_state.value.isRunning || closed) return false
+        return try {
+            val notice = action()
+            publish { it.copy(
+                assistantMemory = assistantMemoryManager.state(),
+                settingsVersion = it.settingsVersion + 1,
+                notice = UiNotice(notice, NoticeKind.INFO),
+            ) }
+            true
+        } catch (_: AssistantMemoryPersistenceException) {
+            publish { it.copy(notice = UiNotice(ASSISTANT_MEMORY_SAVE_ERROR, NoticeKind.ERROR)) }
+            false
+        }
     }
 
     @Synchronized
@@ -343,7 +415,50 @@ class WorkbenchController(
                 }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
-                        RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))
+                        if (settings.responseMode == ResponseMode.UNRESTRICTED &&
+                            settings.contextStrategy == ContextStrategy.MEMORY_LAYERS) {
+                            reportProgress(1, 1, "Агент формирует ответ со слоями памяти")
+                            var preparedMetrics: TurnTokenMetrics? = null
+                            val response = assistantAgent.respond(
+                                prompt = normalizedPrompt,
+                                model = settings.model,
+                                maxTokens = settings.maxTokens,
+                                overflowPolicy = settings.contextOverflowPolicy,
+                                shortTermMessageLimit = settings.recentMessagesLimit,
+                                onDelta = { content -> publishStreamingOutput(ExperimentOutputDelta(
+                                    "assistant", "ОТВЕТ АГЕНТА", content, tokenMetrics = preparedMetrics,
+                                ).asOutput()) },
+                                onMetrics = { metrics ->
+                                    preparedMetrics = metrics
+                                    if (metrics.actualUsage == null) publishStreamingOutput(ExperimentOutputDelta(
+                                        "assistant", "ОТВЕТ АГЕНТА", "", tokenMetrics = metrics,
+                                    ).asOutput())
+                                },
+                            )
+                            addOutput(ExperimentOutput(
+                                id = "assistant",
+                                title = "ОТВЕТ АГЕНТА",
+                                completion = response.completion,
+                                tokenMetrics = response.tokenMetrics,
+                                contextStrategy = ContextStrategy.MEMORY_LAYERS,
+                                assistantMemoryDiagnostics = response.memoryDiagnostics,
+                            ))
+                            publish { it.copy(
+                                assistantMemory = assistantMemoryManager.state(),
+                                assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
+                                assistantTokenTotals = assistantAgent.tokenTotalsSnapshot(),
+                            ) }
+                            RequestResult.Responses(listOf(LabeledResponse(
+                                variant = ResponseVariant.UNRESTRICTED,
+                                completion = response.completion,
+                                heading = "ОТВЕТ АГЕНТА",
+                                tokenMetrics = response.tokenMetrics,
+                                contextStrategy = ContextStrategy.MEMORY_LAYERS,
+                                assistantMemoryDiagnostics = response.memoryDiagnostics,
+                            )))
+                        } else {
+                            RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))
+                        }
 
                     ResponseMode.REASONING -> RequestResult.Reasoning(
                         ReasoningRunner(
@@ -384,6 +499,7 @@ class WorkbenchController(
                         }
                         RequestResult.TokensContext(report)
                     }
+
                 }
                 when (result) {
                     is RequestResult.Reasoning -> addOutput(ExperimentOutput("evaluation", "Сравнение и оценка точности", result.report.evaluation, kind = "evaluation"))
@@ -410,7 +526,10 @@ class WorkbenchController(
                     currentJob = null
                     publish { it.copy(operation = OperationState.Idle, historyTurnCounts = promptRunner.historyTurnCounts(),
                         tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
-                        context = promptRunner.contextDiagnostics(it.settings)) }
+                        context = promptRunner.contextDiagnostics(it.settings),
+                        assistantMemory = assistantMemoryManager.state(),
+                        assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
+                        assistantTokenTotals = assistantAgent.tokenTotalsSnapshot()) }
                 }
             }
         }
@@ -506,6 +625,7 @@ private const val STREAM_PUBLISH_INTERVAL_NANOS = 50_000_000L
 internal fun userFacingError(error: Throwable, secrets: Collection<String> = emptyList()): String {
     val message = when (error) {
         is HistoryPersistenceException -> HISTORY_SAVE_ERROR
+        is AssistantMemoryPersistenceException -> ASSISTANT_MEMORY_SAVE_ERROR
         is LlmApiException -> error.message ?: "Провайдер вернул ошибку."
         is HttpRequestTimeoutException -> "Превышено время ожидания ответа. Попробуйте ещё раз."
         is SerializationException -> "Провайдер вернул ответ в неожиданном формате. Попробуйте ещё раз."
@@ -520,6 +640,9 @@ internal fun userFacingError(error: Throwable, secrets: Collection<String> = emp
 
 private const val HISTORY_SAVE_ERROR =
     "Не удалось сохранить историю диалога. Новые сообщения не добавлены; проверьте права доступа к файлу."
+
+private const val ASSISTANT_MEMORY_SAVE_ERROR =
+    "Не удалось сохранить память ассистента. Новая пара не добавлена; проверьте права доступа к файлу."
 
 fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "DeepSeek"

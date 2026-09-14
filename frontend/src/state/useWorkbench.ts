@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {api, ApiError} from "../api/client";
-import type {Provider, Settings, StartCommand, State} from "../api/types";
+import type {MemoryLayer, Provider, Settings, StartCommand, State} from "../api/types";
 
 export function useWorkbench() {
   const [state, setState] = useState<State | null>(null);
@@ -160,6 +160,32 @@ export function useWorkbench() {
       perform(async () => {
         if (state) accept(await api.switchBranch(branchId, state.settingsVersion));
       }),
+    addMemory: (layer: MemoryLayer, text: string) =>
+      perform(async () => {
+        if (state) accept(await api.addMemory(layer, text, state.settingsVersion));
+      }),
+    updateMemory: (layer: MemoryLayer, id: string, text: string) =>
+      perform(async () => {
+        if (state) accept(await api.updateMemory(layer, id, text, state.settingsVersion));
+      }),
+    deleteMemory: (layer: MemoryLayer, id: string) =>
+      perform(async () => {
+        if (state) accept(await api.deleteMemory(layer, id, state.settingsVersion));
+      }),
+    clearMemory: (layer: MemoryLayer) =>
+      perform(async () => {
+        if (state) accept(await api.clearMemory(layer, state.settingsVersion));
+      }),
+    setMemoryEnabled: (layer: MemoryLayer, enabled: boolean) =>
+      perform(async () => {
+        if (state) accept(await api.setMemoryEnabled(layer, enabled, state.settingsVersion));
+      }),
+    newDialogue: () => perform(async () => {
+      if (state) accept(await api.newDialogue(state.settingsVersion));
+    }),
+    completeTask: () => perform(async () => {
+      if (state) accept(await api.completeTask(state.settingsVersion));
+    }),
     clear: (target: "history" | "results" | "notice") =>
       perform(async () => accept(await api.clear(target))),
   };

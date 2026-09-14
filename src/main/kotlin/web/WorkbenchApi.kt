@@ -1,6 +1,7 @@
 package org.example.web
 
 import kotlinx.serialization.json.*
+import org.example.agent.MemoryLayer
 import org.example.app.ResponseMode
 import org.example.app.ResponseVariant
 import org.example.app.TokenDemoScenario
@@ -34,6 +35,8 @@ class WorkbenchApi(val controller: WorkbenchController) {
             state.toDto().context,
         )))
     }
+
+    fun memory(): String = safeJson(apiJson.encodeToJsonElement(controller.state.value.assistantMemory.toDto()))
 
     private val requests = mutableMapOf<String, Pair<StartCommand, Long>>()
 
@@ -113,6 +116,51 @@ class WorkbenchApi(val controller: WorkbenchController) {
             if (!controller.switchBranch(command.branchId)) throw ApiProblem(409, "busy", "Операция уже выполняется.")
         } catch (_: IllegalArgumentException) {
             throw ApiProblem(400, "validation", "Неизвестная ветка или стратегия контекста.")
+        }
+        controller.state.value.toDto()
+    }
+
+    fun addMemory(command: MemoryAddCommand): StateDto = memoryMutation(command.expectedSettingsVersion, command.layer) { layer ->
+        controller.addMemory(layer, command.text)
+    }
+
+    fun updateMemory(command: MemoryUpdateCommand): StateDto = memoryMutation(command.expectedSettingsVersion, command.layer) { layer ->
+        controller.updateMemory(layer, command.id, command.text)
+    }
+
+    fun deleteMemory(command: MemoryDeleteCommand): StateDto = memoryMutation(command.expectedSettingsVersion, command.layer) { layer ->
+        controller.deleteMemory(layer, command.id)
+    }
+
+    fun clearMemory(command: MemoryLayerCommand): StateDto = memoryMutation(command.expectedSettingsVersion, command.layer) { layer ->
+        controller.clearMemory(layer)
+    }
+
+    fun setMemoryEnabled(command: MemoryEnabledCommand): StateDto = memoryMutation(command.expectedSettingsVersion, command.layer) { layer ->
+        controller.setMemoryEnabled(layer, command.enabled)
+    }
+
+    fun newDialogue(command: ContextMutationCommand): StateDto = memoryAction(command.expectedSettingsVersion) {
+        controller.newAssistantDialogue()
+    }
+
+    fun completeTask(command: ContextMutationCommand): StateDto = memoryAction(command.expectedSettingsVersion) {
+        controller.completeAssistantTask()
+    }
+
+    private fun memoryMutation(expectedVersion: Long, rawLayer: String, action: (MemoryLayer) -> Boolean): StateDto {
+        val layer = MemoryLayer.from(rawLayer)
+            ?: throw ApiProblem(400, "validation", "Неизвестный слой памяти.")
+        return memoryAction(expectedVersion) { action(layer) }
+    }
+
+    private fun memoryAction(expectedVersion: Long, action: () -> Boolean): StateDto = synchronized(controller) {
+        requireIdle()
+        requireVersion(expectedVersion)
+        try {
+            if (!action()) throw ApiProblem(500, "persistence", controller.state.value.notice?.message ?: "Не удалось изменить память.")
+        } catch (error: IllegalArgumentException) {
+            throw ApiProblem(400, "validation", error.message ?: "Некорректная операция с памятью.")
         }
         controller.state.value.toDto()
     }

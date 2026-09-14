@@ -2,12 +2,12 @@ import {useState} from "react";
 import {ActionIcon, Alert, Badge, Button, Tooltip,} from "@mantine/core";
 import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
 import type {
-  ConversationTokenTotals,
-  Exchange,
-  ModeInfo,
-  Output,
-  TokenConversation,
-  TurnTokenMetrics
+    ConversationTokenTotals,
+    Exchange,
+    ModeInfo,
+    Output,
+    TokenConversation,
+    TurnTokenMetrics
 } from "../api/types";
 import {Markdown} from "./Markdown";
 
@@ -31,6 +31,7 @@ const strategyTitle = (strategy: NonNullable<Output["contextStrategy"]>) => ({
   SLIDING_WINDOW: "Скользящее окно",
   STICKY_FACTS: "Закреплённые факты",
   BRANCHING: "Ветвление",
+  MEMORY_LAYERS: "Слои памяти",
 })[strategy];
 
 const thinkingOutput: Output = {
@@ -58,6 +59,7 @@ const thinkingOutput: Output = {
   contextStrategy: null,
   branchId: null,
   branchName: null,
+  assistantMemoryDiagnostics: null,
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -101,6 +103,16 @@ function ResponseCard({ output }: { output: Output }) {
         )}
       </div>
       {output.model && <div className="model-label">{output.model}</div>}
+      {output.assistantMemoryDiagnostics && <div className="memory-diagnostics" data-testid="memory-diagnostics">
+        <strong>Память этого вызова</strong>
+        {output.assistantMemoryDiagnostics.layers.map((layer) => <div key={layer.layer}>
+          <span>{{SHORT_TERM: "Краткосрочная", WORKING: "Рабочая", LONG_TERM: "Долговременная"}[layer.layer]}</span>
+          <Badge size="xs" variant="light" color={layer.enabled ? "teal" : "gray"}>
+            {layer.enabled ? `использовано: ${layer.usedCount}` : "исключена"}
+          </Badge>
+          {layer.usedEntryIds.length > 0 && <code title={layer.usedEntryIds.join(", ")}>{layer.usedEntryIds.map((id) => id.slice(0, 8)).join(", ")}</code>}
+        </div>)}
+      </div>}
       {output.error ? (
         <Alert
           color="red"
@@ -406,7 +418,7 @@ export function ExchangeView({
   const displayedTokenConversation = e.mode === "tokens"
     ? responseConversation
     : e.mode === "unrestricted" && showTokenMetrics
-      ? (responseTurns.at(-1)?.cumulativeTotals.scope === "runtime_without_history"
+      ? (["runtime_without_history", "assistant_memory"].includes(responseTurns.at(-1)?.cumulativeTotals.scope ?? "")
         ? responseConversation
         : mergedSavedConversation ?? responseConversation)
       : undefined;

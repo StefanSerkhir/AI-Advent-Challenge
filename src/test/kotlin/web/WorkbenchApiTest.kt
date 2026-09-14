@@ -41,6 +41,48 @@ class WorkbenchApiTest {
     }
 
     @Test
+    fun `memory layers strategy uses unrestricted wire mode and versioned API commands`() = runBlocking {
+        val calls = mutableListOf<List<LlmMessage>>()
+        val c = controller(mode = ResponseMode.UNRESTRICTED) { model, messages, _ ->
+            calls += messages
+            CompletionResult("answer", "stop", TokenUsage(10, 2, 12), model)
+        }
+        val api = WorkbenchApi(c)
+        try {
+            val initial = c.state.value.toDto()
+            val configured = api.settings(SettingsCommand(initial.settingsVersion,
+                initial.settings.copy(contextStrategy = "MEMORY_LAYERS", recentMessagesLimit = 4)))
+            assertEquals("unrestricted", configured.settings.mode)
+            assertEquals("MEMORY_LAYERS", configured.settings.contextStrategy)
+
+            val working = api.addMemory(MemoryAddCommand(configured.settingsVersion, "WORKING", "Только кратко"))
+            val longTerm = api.addMemory(MemoryAddCommand(working.settingsVersion, "LONG_TERM", "Имя: Анна"))
+            assertFailsWith<ApiProblem> { api.addMemory(MemoryAddCommand(working.settingsVersion, "WORKING", "stale")) }
+            assertFailsWith<ApiProblem> { api.addMemory(MemoryAddCommand(longTerm.settingsVersion, "UNKNOWN", "bad")) }
+
+            api.start(command(longTerm.settingsVersion, "Текущий вопрос"))
+            c.awaitCurrentRequest()
+            val after = c.state.value.toDto()
+            assertEquals("unrestricted", after.exchanges.last().mode)
+            assertEquals("MEMORY_LAYERS", after.exchanges.last().outputs.single().contextStrategy)
+            assertEquals(2, after.assistantMemory.layers.first { it.layer == "SHORT_TERM" }.count)
+            val diagnostics = after.exchanges.last().outputs.single().assistantMemoryDiagnostics!!
+            assertEquals(1, diagnostics.layers.first { it.layer == "WORKING" }.usedCount)
+            assertEquals(1, diagnostics.layers.first { it.layer == "LONG_TERM" }.usedCount)
+            assertContains(calls.single()[1].content, "LONG_TERM")
+            assertContains(calls.single()[2].content, "WORKING")
+            assertEquals("Текущий вопрос", calls.single().last().content)
+
+            val newDialogue = api.newDialogue(ContextMutationCommand(after.settingsVersion))
+            assertEquals(0, newDialogue.assistantMemory.layers.first { it.layer == "SHORT_TERM" }.count)
+            assertEquals(1, newDialogue.assistantMemory.layers.first { it.layer == "WORKING" }.count)
+            val completed = api.completeTask(ContextMutationCommand(newDialogue.settingsVersion))
+            assertEquals(0, completed.assistantMemory.layers.first { it.layer == "WORKING" }.count)
+            assertEquals(1, completed.assistantMemory.layers.first { it.layer == "LONG_TERM" }.count)
+        } finally { c.close() }
+    }
+
+    @Test
     fun `token demos need no key and expose short long and overflow metrics`() = runBlocking {
         val c = controller(mode = ResponseMode.TOKENS_CONTEXT, keys = emptyMap())
         val api = WorkbenchApi(c)

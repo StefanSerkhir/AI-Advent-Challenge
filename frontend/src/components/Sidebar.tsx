@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import type {Workbench} from "../state/useWorkbench";
 import type {ContextStrategy, Mode, Provider} from "../api/types";
+import {MemoryLayers} from "./MemoryLayers";
 
 function NumberSetting({
   label,
@@ -186,21 +187,21 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
             <div className="section-label">
               <IconHistory size={16} /> Контекст
             </div>
-            <Switch
+            {!(mode.id === "unrestricted" && s.settings.contextStrategy === "MEMORY_LAYERS") && <Switch
               label="История диалога"
               checked={s.settings.historyEnabled}
               disabled={locked}
               onChange={(e) =>
                 void w.settings({ historyEnabled: e.currentTarget.checked })
               }
-            />
+            />}
             {mode.id === "unrestricted" && (
               <>
                 <NativeSelect
                   label="Стратегия контекста"
                   aria-label="Стратегия контекста"
                   value={s.settings.contextStrategy}
-                  disabled={locked || !s.settings.historyEnabled}
+                  disabled={locked || (!s.settings.historyEnabled && s.settings.contextStrategy !== "MEMORY_LAYERS")}
                   onChange={(e) =>
                     void w.settings({
                       contextStrategy: e.currentTarget.value as ContextStrategy,
@@ -210,9 +211,10 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                     { value: "SLIDING_WINDOW", label: "Скользящее окно (Sliding Window)" },
                     { value: "STICKY_FACTS", label: "Закреплённые факты (Key-Value)" },
                     { value: "BRANCHING", label: "Ветвление (Branching)" },
+                    { value: "MEMORY_LAYERS", label: "Слои памяти" },
                   ]}
                 />
-                {s.settings.contextStrategy !== "BRANCHING" ? (
+                {s.settings.contextStrategy !== "BRANCHING" && s.settings.contextStrategy !== "MEMORY_LAYERS" && (
                     <NumberSetting
                       label="Последних сообщений (N)"
                       value={s.settings.recentMessagesLimit}
@@ -221,7 +223,8 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                         void w.settings({ recentMessagesLimit: value })
                       }
                     />
-                ) : (
+                )}
+                {s.settings.contextStrategy === "BRANCHING" && (
                   <div className="branch-controls" data-testid="branch-controls">
                     {!s.context.checkpoint && (
                       <Button size="xs" variant="light" disabled={locked || !s.settings.historyEnabled}
@@ -247,6 +250,17 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                     <p className="micro">Извлечение: {s.context.factUsage.requests} выз.; {s.context.factUsage.totalTokens} токенов</p>
                   </div>
                 )}
+                {s.settings.contextStrategy === "MEMORY_LAYERS" && (
+                  <>
+                    <NumberSetting
+                      label="Сообщений в краткосрочной памяти"
+                      value={s.settings.recentMessagesLimit}
+                      disabled={locked}
+                      onSave={(value) => void w.settings({ recentMessagesLimit: value })}
+                    />
+                    <MemoryLayers workbench={w} locked={locked}/>
+                  </>
+                )}
               </>
             )}
             <NativeSelect
@@ -259,7 +273,7 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
               ]}
               onChange={(e) => void w.settings({ contextOverflowPolicy: e.currentTarget.value as "REJECT" | "DROP_OLDEST" })}
             />
-            <div className="history-counts">
+            {s.settings.contextStrategy !== "MEMORY_LAYERS" && <div className="history-counts">
               {mode.id !== "controlled" && (
                 <span>
                   Простой агент <b>{s.history.unrestricted}</b>
@@ -270,8 +284,8 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                   С ограничениями <b>{s.history.controlled}</b>
                 </span>
               )}
-            </div>
-            <Tooltip label="Удаляет сохранённый контекст диалоговых режимов. Ответы останутся на экране.">
+            </div>}
+            {s.settings.contextStrategy !== "MEMORY_LAYERS" && <Tooltip label="Удаляет сохранённый контекст диалоговых режимов. Ответы останутся на экране.">
               <Button
                 fullWidth
                 variant="subtle"
@@ -283,7 +297,7 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
               >
                 Очистить историю
               </Button>
-            </Tooltip>
+            </Tooltip>}
           </section>
         </>
       )}

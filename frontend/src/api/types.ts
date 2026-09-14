@@ -8,7 +8,8 @@ export type Mode =
   | "models"
   | "tokens";
 export type Provider = "DEEPSEEK" | "OPENAI";
-export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING";
+export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | "MEMORY_LAYERS";
+export type MemoryLayer = "SHORT_TERM" | "WORKING" | "LONG_TERM";
 export interface Settings {
   provider: Provider;
   model: string;
@@ -126,6 +127,7 @@ export interface Output {
   contextStrategy: ContextStrategy | null;
   branchId: string | null;
   branchName: string | null;
+  assistantMemoryDiagnostics: AssistantMemoryDiagnostics | null;
 }
 export interface Exchange {
   id: number;
@@ -157,6 +159,7 @@ export interface State {
   priceDate: string;
   tokenConversations: Record<string, TokenConversation>;
   context: ContextState;
+  assistantMemory: AssistantMemoryState;
 }
 export interface ContextState {
   strategy: ContextStrategy;
@@ -168,6 +171,24 @@ export interface ContextState {
   activeBranchId: string;
 }
 export interface HistoryMessage { role: "user" | "assistant"; content: string }
+export interface MemoryEntry {
+  id: string;
+  text: string;
+  role: "USER" | "ASSISTANT" | "NOTE";
+  pairId: string | null;
+  createdAtEpochMillis: number;
+  updatedAtEpochMillis: number;
+}
+export interface MemoryLayerState {
+  layer: MemoryLayer;
+  enabled: boolean;
+  count: number;
+  entries: MemoryEntry[];
+}
+export interface AssistantMemoryState { layers: MemoryLayerState[] }
+export interface AssistantMemoryDiagnostics {
+  layers: { layer: MemoryLayer; enabled: boolean; usedCount: number; usedEntryIds: string[] }[];
+}
 export interface StartCommand {
   requestId: string;
   expectedSettingsVersion: number;

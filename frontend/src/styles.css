@@ -249,6 +249,69 @@ button {
 .facts-panel dl div { margin: 0; }
 .facts-panel dt { font-weight: 600; }
 .facts-panel dd { margin: 0 0 0.35rem; overflow-wrap: anywhere; }
+.memory-layers {
+  display: grid;
+  gap: 10px;
+}
+.memory-layer {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fafbfc;
+}
+.memory-layer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.memory-entries {
+  display: grid;
+  gap: 5px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.memory-entry {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: white;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.memory-add {
+  display: grid;
+  gap: 7px;
+  padding-top: 3px;
+}
+.memory-diagnostics {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid #e2e4ef;
+  border-radius: 8px;
+  background: #fafaff;
+  font-size: 11px;
+}
+.memory-diagnostics > div {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) auto 1fr;
+  align-items: center;
+  gap: 7px;
+}
+.memory-diagnostics code {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .workspace {
   min-width: 0;
   min-height: 0;

@@ -3,6 +3,7 @@ package org.example.web
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import kotlinx.coroutines.runBlocking
+import org.example.agent.JsonAssistantMemoryStore
 import org.example.agent.JsonContextStateStore
 import org.example.agent.JsonConversationHistoryStore
 import org.example.app.AppBootstrap
@@ -23,6 +24,7 @@ fun main() {
         initialWarning = if (loaded.isFailure) "Не удалось прочитать .env; используются настройки по умолчанию." else bootstrap.warning,
         historyStore = JsonConversationHistoryStore(),
         contextStateStore = JsonContextStateStore(),
+        assistantMemoryStore = JsonAssistantMemoryStore(),
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort)) }

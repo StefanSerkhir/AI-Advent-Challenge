@@ -73,6 +73,18 @@ test.beforeEach(async ({ page }) => {
   });
   await page.request.delete("/api/results", { headers, data: {} });
   await page.request.delete("/api/history", { headers, data: {} });
+  for (const layer of ["SHORT_TERM", "WORKING", "LONG_TERM"] as const) {
+    const memoryState: State = await (await page.request.get("/api/state")).json();
+    await page.request.post("/api/assistant/memory/clear", {
+      headers,
+      data: {expectedSettingsVersion: memoryState.settingsVersion, layer},
+    });
+    const enabledState: State = await (await page.request.get("/api/state")).json();
+    await page.request.put("/api/assistant/memory/enabled", {
+      headers,
+      data: {expectedSettingsVersion: enabledState.settingsVersion, layer, enabled: true},
+    });
+  }
   await page.request.delete("/api/notice", { headers, data: {} });
   await page.goto("/");
   await ready(page);
@@ -145,6 +157,51 @@ test("simple agent switches context controls, shows facts and branches", async (
   await page.getByRole("button", { name: /Ветка B/ }).click();
   await expect.poll(async () => ((await (await page.request.get("/api/state")).json()) as State).context.activeBranchId)
     .toBe(branchB.id);
+});
+
+test("simple agent memory layers are managed independently and diagnose each call", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");
+  await expect(page.getByTestId("memory-layers")).toBeVisible();
+  await expect(page.getByTestId("branch-controls")).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Создать checkpoint"})).toHaveCount(0);
+  await expect(page.locator(".memory-layer")).toHaveCount(3);
+
+  await page.getByLabel("Добавить в слой").selectOption("WORKING");
+  await page.getByLabel("Текст записи").fill("Отвечай только кратко");
+  await page.getByRole("button", {name: "Добавить запись"}).click();
+  await expect(page.locator('[data-layer="WORKING"]')).toContainText("Отвечай только кратко");
+  await page.getByLabel("Добавить в слой").selectOption("LONG_TERM");
+  await page.getByLabel("Текст записи").fill("Меня зовут Анна");
+  await page.getByRole("button", {name: "Добавить запись"}).click();
+  await expect(page.locator('[data-layer="LONG_TERM"]')).toContainText("Меня зовут Анна");
+  await page.reload();
+  await ready(page);
+  await expect(page.getByLabel("Стратегия контекста")).toHaveValue("MEMORY_LAYERS");
+  await expect(page.locator('[data-layer="LONG_TERM"]')).toContainText("Меня зовут Анна");
+
+  await send(page, "Запомни фразу полярная звезда");
+  await done(page);
+  const exchange = page.getByTestId("exchange").last();
+  await expect(exchange.getByTestId("memory-diagnostics")).toContainText("Рабочая");
+  await expect(exchange.getByTestId("memory-diagnostics")).toContainText("Долговременная");
+  await expect(page.locator('[data-layer="SHORT_TERM"] .memory-entry')).toHaveCount(2);
+
+  const working = page.locator('[data-layer="WORKING"]');
+  await working.getByLabel("Учитывать в ответе").uncheck();
+  await expect(working).toContainText("Отвечай только кратко");
+  await send(page, "Следующий вопрос");
+  await done(page);
+  await expect(page.getByTestId("exchange").last().getByTestId("memory-diagnostics")).toContainText("исключена");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", {name: "Новый диалог"}).click();
+  await expect(page.locator('[data-layer="SHORT_TERM"] .memory-entry')).toHaveCount(0);
+  await expect(page.locator('[data-layer="WORKING"]')).toContainText("Отвечай только кратко");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", {name: "Завершить задачу"}).click();
+  await expect(page.locator('[data-layer="WORKING"] .memory-entry')).toHaveCount(0);
+  await expect(page.locator('[data-layer="LONG_TERM"]')).toContainText("Меня зовут Анна");
 });
 
 test("prompt focus uses one clean highlight around the composer", async ({

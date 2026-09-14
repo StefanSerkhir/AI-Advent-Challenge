@@ -370,6 +370,8 @@ export default function App() {
                   ·{" "}
                   {mode.independentContext
                     ? "Независимые контексты"
+                    : s.settings.mode === "unrestricted" && s.settings.contextStrategy === "MEMORY_LAYERS"
+                      ? "Слои памяти"
                     : s.settings.historyEnabled
                       ? "История включена"
                       : "Без истории"}

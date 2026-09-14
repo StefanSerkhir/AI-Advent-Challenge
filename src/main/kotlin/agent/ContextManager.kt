@@ -16,7 +16,7 @@ const val DEFAULT_RECENT_MESSAGES_LIMIT = 10
 const val DEFAULT_AGENT_SYSTEM_INSTRUCTIONS = "You are a helpful conversational assistant."
 
 enum class ContextStrategy {
-    SLIDING_WINDOW, STICKY_FACTS, BRANCHING;
+    SLIDING_WINDOW, STICKY_FACTS, BRANCHING, MEMORY_LAYERS;
     companion object { fun from(value: String) = entries.firstOrNull { it.name.equals(value, true) } }
 }
 
@@ -206,6 +206,7 @@ class ContextManager(
                     listOf(LlmMessage(LlmRole.SYSTEM, config.systemInstructions)) + before.branching.activeMessages() + currentUserMessage,
                     branch.id, branch.name)
             }
+            ContextStrategy.MEMORY_LAYERS -> error("MEMORY_LAYERS uses AssistantMemoryManager, not ContextManager")
         }
     }
 
@@ -223,6 +224,7 @@ class ContextManager(
                     if (branch.id == branching.activeBranchId) branch.copy(messages = branch.messages + prepared.currentUserMessage + assistantMessage) else branch
                 }))
             }
+            ContextStrategy.MEMORY_LAYERS -> error("MEMORY_LAYERS uses AssistantMemoryManager, not ContextManager")
         }
         store.save(committed); return committed
     }
@@ -232,6 +234,7 @@ class ContextManager(
         ContextStrategy.SLIDING_WINDOW -> state(sessionId).slidingMessages
         ContextStrategy.STICKY_FACTS -> state(sessionId).stickyMessages
         ContextStrategy.BRANCHING -> state(sessionId).branching.activeMessages()
+        ContextStrategy.MEMORY_LAYERS -> error("MEMORY_LAYERS uses AssistantMemoryManager, not ContextManager")
     }
     fun diagnostics(sessionId: String, config: ContextConfig): ContextDiagnostics {
         val current = state(sessionId)
