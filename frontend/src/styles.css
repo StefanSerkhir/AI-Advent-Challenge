@@ -253,6 +253,14 @@ button {
   display: grid;
   gap: 10px;
 }
+.assistant-profile {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--mantine-color-indigo-2);
+  border-radius: 9px;
+  background: var(--mantine-color-indigo-0);
+}
 .memory-layer {
   display: grid;
   gap: 7px;

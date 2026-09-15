@@ -55,6 +55,7 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
 
     override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
         val prompt = messages.last().content
+        val assistantProfile = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
         delay(
             when {
                 "[[slow]]" in prompt -> 2500
@@ -69,6 +70,11 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                 val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
                 if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"
             }
+            "Ответь таблицей" in prompt -> "| Формат | Ответ |\n|---|---|\n| Явный запрос | Таблица |"
+            "\"responseFormat\":\"Маркированный список\"" in assistantProfile ->
+                "- Резервная копия хранит запасной набор данных.\n- Проверяйте восстановление регулярно."
+            "\"responseStyle\":\"Подробно, с техническими терминами\"" in assistantProfile ->
+                "Резервное копирование — это связный технический процесс: полная и инкрементальная стратегия создают точки восстановления, а проверка целостности и retention policy управляют жизненным циклом копий."
             "[[stream]]" in prompt -> "# Потоковый заголовок\n\n**Жирный текст**\n\n```kotlin\nval answer = 42\n```"
             "Составь эффективный промпт" in prompt -> "Реши задачу о 100 шкафчиках, проверь число делителей и укажи все полные квадраты."
             "независимый оценщик" in prompt -> """

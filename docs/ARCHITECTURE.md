@@ -126,6 +126,12 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 `MEMORY_LAYERS` состоит из собственных моделей и сервисов в `AssistantMemoryManager.kt` и отдельного request pipeline в `AssistantAgent.kt`.
 
+`AssistantProfile` — отдельная доменная модель одного активного профиля, а не набор
+`LONG_TERM`-записей. Она содержит собственную версию, обращение, сведения о
+пользователе, стиль, формат и ограничения. Пустой профиль нейтрален; обновление
+возможно только явной командой и проходит нормализацию, ограничения длины,
+проверку управляющих символов и проверку известных API-ключей.
+
 | Слой | Наполнение | Очистка | Назначение |
 | --- | --- | --- | --- |
 | `SHORT_TERM` | Только атомарно сохранённые успешные пары user/assistant | «Новый диалог» или явная очистка | Недавний диалог; ограничивается `recentMessagesLimit` |
@@ -136,13 +142,21 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 Сборка запроса выполняется так:
 
-1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`;
+1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`; непустой профиль
+   добавляется в неё как детерминированный JSON-блок недоверенных данных;
 2. включённый непустой `LONG_TERM`;
 3. включённый непустой `WORKING`;
 4. включённый непустой `SHORT_TERM`;
 5. текущий prompt пользователя.
 
-Memory blocks помечаются как недоверенные пользовательские данные. `AssistantAgent` затем передаёт сообщения в общий `ContextPreparer`, который применяет budget и overflow policy. При `DROP_OLDEST` диагностика short-term корректируется до записей, реально оставшихся в активном запросе.
+Порядок приоритетов зафиксирован в system instructions: безопасность и системные
+правила → явные требования текущего prompt → профиль → остальные слои. Поэтому
+текущий запрос может временно переопределить стиль/формат, не изменяя профиль.
+Profile и memory blocks помечаются как недоверенные пользовательские данные.
+Переключатели слоёв не влияют на профиль. `AssistantAgent` затем передаёт сообщения
+в общий `ContextPreparer`, который применяет budget и overflow policy. При
+`DROP_OLDEST` диагностика short-term корректируется до записей, реально оставшихся
+в активном запросе.
 
 Успешный жизненный цикл ответа:
 
@@ -165,7 +179,11 @@ sequenceDiagram
 
 Пара не считается завершённой до успешного сохранения. Ошибка провайдера, отмена, отсутствие финального streaming event, неверный usage или ошибка persistence не должны оставлять половину пары.
 
-`AssistantMemoryDiagnostics` записывается вместе с конкретным output и содержит для каждого слоя `enabled`, `usedCount` и `usedEntryIds`. Это диагностика фактически подготовленного/сокращённого запроса, а не текущего состояния sidebar после ответа.
+`AssistantMemoryDiagnostics` записывается вместе с конкретным output и содержит
+`profileApplied`, `profileVersion`, безопасное число заполненных полей, а для
+каждого слоя — `enabled`, `usedCount` и `usedEntryIds`. Полные поля профиля не
+дублируются. Это диагностика фактически подготовленного/сокращённого запроса, а не
+текущего состояния sidebar после ответа.
 
 ## Постоянное состояние
 
@@ -176,7 +194,7 @@ sequenceDiagram
 | `.env` | `LocalConfigStore` | Провайдер, модель, API-ключи и настройки UI/ответа |
 | `.llm-history.json` | `JsonConversationHistoryStore` | Обычные завершённые exchanges и token metrics |
 | `.llm-context-state.json` | `JsonContextStateStore` | Состояния `SLIDING_WINDOW`, `STICKY_FACTS`, `BRANCHING` |
-| `.llm-assistant-memory.json` | `JsonAssistantMemoryStore` | Три слоя, записи, роли/пары, timestamps и enable flags |
+| `.llm-assistant-memory.json` | `JsonAssistantMemoryStore` | v2: профиль и три слоя, записи, роли/пары, timestamps и enable flags; v1 читается с явной миграцией в пустой профиль |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 
@@ -186,6 +204,7 @@ JSON stores используют UTF-8, номер версии, temporary file 
 - memory endpoint очищает ровно выбранный слой;
 - «Новый диалог» очищает только `SHORT_TERM`;
 - «Завершить задачу» очищает только `WORKING`;
+- обе команды сохраняют профиль; очистка профиля — явное сохранение пяти пустых полей;
 - очистка карточек результатов не затрагивает историю и память.
 
 ## HTTP API и согласованность

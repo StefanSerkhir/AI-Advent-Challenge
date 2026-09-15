@@ -138,6 +138,109 @@ class AssistantMemoryManagerTest {
     }
 
     @Test
+    fun `profile is neutral by default and is attached even when every memory layer is disabled`() = runBlocking {
+        val manager = AssistantMemoryManager(InMemoryAssistantMemoryStore())
+        val neutralClient = RecordingAssistantClient()
+        val neutral = AssistantAgent(manager, clientProvider = { neutralClient }).respond(
+            "Нейтральный вопрос", "unknown", 100, org.example.tokens.ContextOverflowPolicy.REJECT, 10,
+        )
+        assertFalse(neutral.memoryDiagnostics.profileApplied)
+        assertFalse(neutralClient.calls.single().first().content.contains("USER PROFILE DATA"))
+
+        manager.newDialogue()
+        MemoryLayer.entries.forEach { manager.setEnabled(it, false) }
+        val saved = manager.saveProfile(AssistantProfileDraft(
+            preferredName = "  Анна  ",
+            about = "Разрабатывает JVM-сервисы",
+            responseStyle = "Кратко, без англицизмов",
+            responseFormat = "Маркированный список",
+            constraints = "Не предлагать платные сервисы",
+        ))
+        assertEquals(1, saved.version)
+        assertEquals("Анна", saved.preferredName)
+        val personalizedClient = RecordingAssistantClient()
+        val personalized = AssistantAgent(manager, clientProvider = { personalizedClient }).respond(
+            "Объясни подход", "unknown", 100, org.example.tokens.ContextOverflowPolicy.REJECT, 10,
+        )
+
+        val messages = personalizedClient.calls.single()
+        assertContains(messages.first().content, "USER PROFILE DATA")
+        assertContains(messages.first().content, "\"responseFormat\":\"Маркированный список\"")
+        assertEquals("Объясни подход", messages.last().content)
+        assertEquals(1, messages.count { it.content == "Объясни подход" })
+        assertTrue(personalized.memoryDiagnostics.profileApplied)
+        assertEquals(1, personalized.memoryDiagnostics.profileVersion)
+        assertEquals(5, personalized.memoryDiagnostics.profileFieldCount)
+        assertTrue(personalized.memoryDiagnostics.layers.all { !it.enabled && it.usedCount == 0 })
+        assertEquals(listOf("Объясни подход", "Готовый ответ"), manager.state().shortTerm.map { it.text })
+        assertTrue(manager.state().shortTerm.none { "Маркированный список" in it.text })
+        manager.newDialogue()
+        manager.completeTask()
+        assertEquals(saved, manager.state().profile)
+    }
+
+    @Test
+    fun `profile persists in v2 and v1 migration preserves layers and flags`() {
+        val directory = Files.createTempDirectory("assistant-profile")
+        try {
+            val file = directory.resolve("memory.json")
+            val first = AssistantMemoryManager(JsonAssistantMemoryStore(file), clock = { 42 })
+            first.add(MemoryLayer.LONG_TERM, "Стабильный факт")
+            first.setEnabled(MemoryLayer.WORKING, false)
+            first.saveProfile(AssistantProfileDraft("Анна", "Kotlin-разработчик", "Кратко", "Списком", "Без англицизмов"))
+
+            val restored = AssistantMemoryManager(JsonAssistantMemoryStore(file))
+            assertEquals(first.state().profile, restored.state().profile)
+            assertContains(Files.readString(file), "\"version\": 2")
+
+            Files.writeString(file, """
+                {
+                  "version": 1,
+                  "shortTerm": [],
+                  "working": [],
+                  "longTerm": [{
+                    "id": "legacy-long", "text": "Факт из v1", "role": "NOTE", "pairId": null,
+                    "createdAtEpochMillis": 10, "updatedAtEpochMillis": 10
+                  }],
+                  "settings": {"shortTermEnabled": false, "workingEnabled": true, "longTermEnabled": false}
+                }
+            """.trimIndent())
+            val migrated = AssistantMemoryManager(JsonAssistantMemoryStore(file))
+            assertEquals("Факт из v1", migrated.state().longTerm.single().text)
+            assertFalse(migrated.state().settings.shortTermEnabled)
+            assertTrue(migrated.state().settings.workingEnabled)
+            assertFalse(migrated.state().settings.longTermEnabled)
+            assertTrue(migrated.state().profile.isEmpty)
+            assertEquals(0, migrated.state().profile.version)
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `two profiles differ and explicit current format wins without changing profile`() = runBlocking {
+        val manager = AssistantMemoryManager(InMemoryAssistantMemoryStore())
+        val client = ProfileAwareAssistantClient()
+        val agent = AssistantAgent(manager, clientProvider = { client })
+        val profileA = AssistantProfileDraft(responseStyle = "Кратко, без англицизмов", responseFormat = "Маркированный список")
+        manager.saveProfile(profileA)
+        val answerA = agent.respond("Объясни резервное копирование", "unknown", 100,
+            org.example.tokens.ContextOverflowPolicy.REJECT, 10).completion.content
+        manager.newDialogue()
+        val profileB = AssistantProfileDraft(responseStyle = "Подробно, с техническими терминами", responseFormat = "Связный текст")
+        manager.saveProfile(profileB)
+        val answerB = agent.respond("Объясни резервное копирование", "unknown", 100,
+            org.example.tokens.ContextOverflowPolicy.REJECT, 10).completion.content
+        val override = agent.respond("Ответь таблицей: объясни резервное копирование", "unknown", 100,
+            org.example.tokens.ContextOverflowPolicy.REJECT, 10).completion.content
+
+        assertEquals("- Краткий пункт\n- Без заимствований", answerA)
+        assertContains(answerB, "инкрементальная стратегия")
+        assertContains(override, "| Формат |")
+        assertEquals(profileB.responseFormat, manager.state().profile.responseFormat)
+    }
+
+    @Test
     fun `validation rejects blank oversized unknown and manual short term operations`() {
         val manager = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         assertFailsWith<IllegalArgumentException> { manager.add(MemoryLayer.WORKING, " ") }
@@ -152,8 +255,48 @@ class AssistantMemoryManagerTest {
         )
         assertFailsWith<IllegalArgumentException> { protected.add(MemoryLayer.WORKING, "token configured-secret") }
         assertFailsWith<IllegalArgumentException> { protected.commitShortTermPair("configured-secret", "answer", 2) }
+        assertFailsWith<IllegalArgumentException> {
+            protected.saveProfile(AssistantProfileDraft(about = "token configured-secret"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            manager.saveProfile(AssistantProfileDraft(preferredName = "строка\nвторая"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            manager.saveProfile(AssistantProfileDraft(responseStyle = "x".repeat(MAX_PROFILE_PREFERENCE_LENGTH + 1)))
+        }
         assertTrue(protected.state().working.isEmpty())
         assertTrue(protected.state().shortTerm.isEmpty())
+        assertTrue(protected.state().profile.isEmpty)
+
+        val directory = Files.createTempDirectory("assistant-profile-secret")
+        try {
+            val file = directory.resolve("memory.json")
+            val persistent = AssistantMemoryManager(
+                JsonAssistantMemoryStore(file),
+                sensitiveText = { "configured-secret" in it },
+            )
+            persistent.saveProfile(AssistantProfileDraft(about = "Безопасное значение"))
+            assertFailsWith<IllegalArgumentException> {
+                persistent.saveProfile(AssistantProfileDraft(constraints = "configured-secret"))
+            }
+            assertFalse(Files.readString(file).contains("configured-secret"))
+            assertEquals("Безопасное значение", persistent.state().profile.about)
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+}
+
+private class ProfileAwareAssistantClient : LlmClient {
+    override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+        val profile = messages.first().content
+        val prompt = messages.last().content
+        val content = when {
+            "Ответь таблицей" in prompt -> "| Формат | Ответ |\n|---|---|\n| Явный | Таблица |"
+            "Маркированный список" in profile -> "- Краткий пункт\n- Без заимствований"
+            else -> "Подробный связный ответ использует технические термины и описывает инкрементальная стратегия резервирования."
+        }
+        return CompletionResult(content, "stop", TokenUsage(20, 5, 25), "test-model")
     }
 }
 

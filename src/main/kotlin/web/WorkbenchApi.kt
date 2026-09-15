@@ -38,6 +38,8 @@ class WorkbenchApi(val controller: WorkbenchController) {
 
     fun memory(): String = safeJson(apiJson.encodeToJsonElement(controller.state.value.assistantMemory.toDto()))
 
+    fun profile(): String = safeJson(apiJson.encodeToJsonElement(controller.state.value.assistantMemory.profile.toDto()))
+
     private val requests = mutableMapOf<String, Pair<StartCommand, Long>>()
 
     private fun requireIdle() {
@@ -146,6 +148,10 @@ class WorkbenchApi(val controller: WorkbenchController) {
 
     fun completeTask(command: ContextMutationCommand): StateDto = memoryAction(command.expectedSettingsVersion) {
         controller.completeAssistantTask()
+    }
+
+    fun saveProfile(command: AssistantProfileCommand): StateDto = memoryAction(command.expectedSettingsVersion) {
+        controller.saveAssistantProfile(command.profile.toDomain())
     }
 
     private fun memoryMutation(expectedVersion: Long, rawLayer: String, action: (MemoryLayer) -> Boolean): StateDto {

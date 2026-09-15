@@ -44,6 +44,16 @@ data class MemoryLayerCommand(val expectedSettingsVersion: Long, val layer: Stri
 @Serializable
 data class MemoryEnabledCommand(val expectedSettingsVersion: Long, val layer: String, val enabled: Boolean)
 @Serializable
+data class AssistantProfileInputDto(
+    val preferredName: String = "",
+    val about: String = "",
+    val responseStyle: String = "",
+    val responseFormat: String = "",
+    val constraints: String = "",
+)
+@Serializable
+data class AssistantProfileCommand(val expectedSettingsVersion: Long, val profile: AssistantProfileInputDto)
+@Serializable
 data class ErrorDto(val code: String, val message: String)
 @Serializable
 data class ModelDto(val id: String, val title: String)
@@ -177,7 +187,22 @@ data class AssistantMemoryDto(val layers: List<MemoryLayerDto>)
 @Serializable
 data class MemoryLayerUsageDto(val layer: String, val enabled: Boolean, val usedCount: Int, val usedEntryIds: List<String>)
 @Serializable
-data class AssistantMemoryDiagnosticsDto(val layers: List<MemoryLayerUsageDto>)
+data class AssistantMemoryDiagnosticsDto(
+    val layers: List<MemoryLayerUsageDto>,
+    val profileApplied: Boolean,
+    val profileVersion: Long?,
+    val profileFieldCount: Int,
+)
+@Serializable
+data class AssistantProfileDto(
+    val version: Long,
+    val preferredName: String,
+    val about: String,
+    val responseStyle: String,
+    val responseFormat: String,
+    val constraints: String,
+    val configuredFieldCount: Int,
+)
 @Serializable
 data class HistoryDetailsDto(
     val counts: HistoryDto,
@@ -196,6 +221,7 @@ data class StateDto(
     val tokenConversations: Map<String, TokenConversationDto> = emptyMap(),
     val context: ContextDto,
     val assistantMemory: AssistantMemoryDto,
+    val assistantProfile: AssistantProfileDto,
 )
 
 fun AppSettings.toDto() = SettingsDto(
@@ -293,9 +319,18 @@ fun AssistantMemoryState.toDto() = AssistantMemoryDto(MemoryLayer.entries.map { 
     val entries = entries(layer)
     MemoryLayerDto(layer.name, settings.enabled(layer), entries.size, entries.map(MemoryEntry::toDto))
 })
-private fun AssistantMemoryDiagnostics.toDto() = AssistantMemoryDiagnosticsDto(layers.map {
-    MemoryLayerUsageDto(it.layer.name, it.enabled, it.usedCount, it.usedEntryIds)
-})
+fun AssistantProfile.toDto() = AssistantProfileDto(
+    version, preferredName, about, responseStyle, responseFormat, constraints, configuredFieldCount,
+)
+fun AssistantProfileInputDto.toDomain() = AssistantProfileDraft(
+    preferredName, about, responseStyle, responseFormat, constraints,
+)
+private fun AssistantMemoryDiagnostics.toDto() = AssistantMemoryDiagnosticsDto(
+    layers.map { MemoryLayerUsageDto(it.layer.name, it.enabled, it.usedCount, it.usedEntryIds) },
+    profileApplied,
+    profileVersion,
+    profileFieldCount,
+)
 
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
@@ -339,4 +374,5 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
     } + ("assistant" to TokenConversationDto(assistantTokenMetrics.map { it.toDto() }, assistantTokenTotals.toDto())),
     context = context.toDto(),
     assistantMemory = assistantMemory.toDto(),
+    assistantProfile = assistantMemory.profile.toDto(),
 )

@@ -85,6 +85,14 @@ test.beforeEach(async ({ page }) => {
       data: {expectedSettingsVersion: enabledState.settingsVersion, layer, enabled: true},
     });
   }
+  const profileState = await (await page.request.get("/api/state")).json() as State;
+  await page.request.put("/api/assistant/profile", {
+    headers,
+    data: {
+      expectedSettingsVersion: profileState.settingsVersion,
+      profile: {preferredName: "", about: "", responseStyle: "", responseFormat: "", constraints: ""},
+    },
+  });
   await page.request.delete("/api/notice", { headers, data: {} });
   await page.goto("/");
   await ready(page);
@@ -104,6 +112,7 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByLabel("Переполнение контекста")).toBeVisible();
   await expect(page.getByLabel("Стратегия контекста")).toHaveValue("SLIDING_WINDOW");
   await expect(page.getByLabel("Последних сообщений (N)")).toHaveValue("10");
+  await expect(page.getByTestId("assistant-profile")).toHaveCount(0);
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(
     page.locator(".history-counts").getByText("С ограничениями", {
@@ -121,6 +130,50 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByLabel("Максимум токенов")).toBeVisible();
   await expect(page.getByLabel("Максимум слов")).toHaveCount(0);
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
+});
+
+test("assistant profile personalizes neutral requests and current format overrides it", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");
+  const profile = page.getByTestId("assistant-profile");
+  await expect(profile).toBeVisible();
+  await page.getByLabel("Имя или обращение").fill("Анна");
+  await page.getByLabel("О вас и вашем контексте").fill("Разрабатывает JVM-сервисы");
+  await page.getByLabel("Предпочтительный стиль ответа").fill("Кратко, без англицизмов");
+  await page.getByLabel("Предпочтительный формат ответа").fill("Маркированный список");
+  await page.getByLabel("Ограничения и дополнительные пожелания").fill("Не предлагать платные сервисы");
+  await page.getByRole("button", {name: "Сохранить профиль"}).click();
+  await expect(profile).toContainText("5/5");
+
+  for (const layer of ["SHORT_TERM", "WORKING", "LONG_TERM"] as const) {
+    await page.locator(`[data-layer="${layer}"]`).getByLabel("Учитывать в ответе").click();
+    await expect.poll(async () => {
+      const current = await (await page.request.get("/api/state")).json() as State;
+      return current.assistantMemory.layers.find((item) => item.layer === layer)?.enabled;
+    }).toBe(false);
+  }
+  await send(page, "Объясни резервное копирование");
+  await done(page);
+  let exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("Резервная копия хранит запасной набор данных");
+  await expect(exchange.getByTestId("memory-diagnostics")).toContainText("Профиль");
+  await expect(exchange.getByTestId("memory-diagnostics")).toContainText("применён");
+
+  await page.getByLabel("Предпочтительный стиль ответа").fill("Подробно, с техническими терминами");
+  await page.getByLabel("Предпочтительный формат ответа").fill("Связный текст");
+  await page.getByRole("button", {name: "Сохранить профиль"}).click();
+  await send(page, "Объясни резервное копирование");
+  await done(page);
+  exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("инкрементальная стратегия");
+
+  await send(page, "Ответь таблицей: объясни резервное копирование");
+  await done(page);
+  exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("Явный запрос");
+  const persisted = await (await page.request.get("/api/assistant/profile")).json();
+  expect(persisted.responseFormat).toBe("Связный текст");
+  expect(JSON.stringify(await page.evaluate(() => ({...localStorage, ...sessionStorage})))).not.toContain("Анна");
 });
 
 test("simple agent switches context controls, shows facts and branches", async ({ page }) => {
@@ -188,7 +241,11 @@ test("simple agent memory layers are managed independently and diagnose each cal
   await expect(page.locator('[data-layer="SHORT_TERM"] .memory-entry')).toHaveCount(2);
 
   const working = page.locator('[data-layer="WORKING"]');
-  await working.getByLabel("Учитывать в ответе").uncheck();
+  await working.getByLabel("Учитывать в ответе").click();
+  await expect.poll(async () => {
+    const current = await (await page.request.get("/api/state")).json() as State;
+    return current.assistantMemory.layers.find((item) => item.layer === "WORKING")?.enabled;
+  }).toBe(false);
   await expect(working).toContainText("Отвечай только кратко");
   await send(page, "Следующий вопрос");
   await done(page);

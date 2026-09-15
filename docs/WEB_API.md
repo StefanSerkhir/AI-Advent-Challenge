@@ -16,6 +16,8 @@
 | POST | `/api/operations/{id}/cancel` | `{}` → текущий снимок; окончание отмены приходит по SSE |
 | GET | `/api/history` | Controlled/compare history и состояние стратегии: facts, checkpoint, branch ID/сообщения, activeBranchId |
 | GET | `/api/assistant/memory` | Три секции памяти `MEMORY_LAYERS`, записи, счётчики и флаги включения |
+| GET | `/api/assistant/profile` | Активный `AssistantProfileDto`: `version`, `preferredName`, `about`, `responseStyle`, `responseFormat`, `constraints`, `configuredFieldCount` |
+| PUT | `/api/assistant/profile` | `{ expectedSettingsVersion, profile: { preferredName, about, responseStyle, responseFormat, constraints } }` → полный снимок после атомарного сохранения |
 | POST / PUT / DELETE | `/api/assistant/memory` | Добавить / изменить / удалить запись с `{ expectedSettingsVersion, layer, ... }` |
 | POST | `/api/assistant/memory/clear` | `{ expectedSettingsVersion, layer }` → очистить ровно один слой |
 | PUT | `/api/assistant/memory/enabled` | `{ expectedSettingsVersion, layer, enabled }` → включить слой без удаления |
@@ -35,7 +37,7 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 ## Согласованность
 
 `revision` монотонно растёт при любом изменении снимка; `settingsVersion` — при
-сохранении настроек/ключа и каждой мутации памяти. Клиент передаёт последнюю версию и при
+сохранении настроек/ключа, профиля и каждой мутации памяти. Клиент передаёт последнюю версию и при
 `409 stale_settings` получает свежий снимок, после чего пользователь повторяет
 действие. Команды проверяются и выполняются под общим монитором контроллера.
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
@@ -72,6 +74,17 @@ context-state откатывается. При ошибке или отмене 
 (не меньше 2 для полного short-term обмена). Неизвестные значения
 и неположительный N дают `400 validation`. Sticky Facts публикует отдельный этап
 «Обновление facts» и учитывает usage этого вызова в `context.factUsage`.
+
+Все поля профиля необязательны и нормализуются обрезкой внешних пробелов и
+переводов строк. `preferredName` — одна строка до 120 символов; `about` и
+`constraints` — до 4000, `responseStyle` и `responseFormat` — до 1000 символов.
+Недопустимые управляющие символы и любое значение с настроенным API-ключом дают
+`400 validation`. PUT запрещён при активной операции (`409 busy`) и при устаревшем
+`expectedSettingsVersion` (`409 stale_settings`). Пустой профиль не включается в
+LLM-контекст. Непустой применяется только в `UNRESTRICTED + MEMORY_LAYERS`, даже
+если все слои выключены; `StateDto.assistantProfile` и SSE являются источником
+истины для редактора. Диагностика output содержит только факт применения, версию
+и число заполненных полей.
 
 ## Коды ошибок
 

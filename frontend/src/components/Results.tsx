@@ -2,12 +2,12 @@ import {useState} from "react";
 import {ActionIcon, Alert, Badge, Button, Tooltip,} from "@mantine/core";
 import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
 import type {
-    ConversationTokenTotals,
-    Exchange,
-    ModeInfo,
-    Output,
-    TokenConversation,
-    TurnTokenMetrics
+  ConversationTokenTotals,
+  Exchange,
+  ModeInfo,
+  Output,
+  TokenConversation,
+  TurnTokenMetrics
 } from "../api/types";
 import {Markdown} from "./Markdown";
 
@@ -105,6 +105,14 @@ function ResponseCard({ output }: { output: Output }) {
       {output.model && <div className="model-label">{output.model}</div>}
       {output.assistantMemoryDiagnostics && <div className="memory-diagnostics" data-testid="memory-diagnostics">
         <strong>Память этого вызова</strong>
+        <div>
+          <span>Профиль</span>
+          <Badge size="xs" variant="light" color={output.assistantMemoryDiagnostics.profileApplied ? "teal" : "gray"}>
+            {output.assistantMemoryDiagnostics.profileApplied
+              ? `применён: v${output.assistantMemoryDiagnostics.profileVersion}, полей ${output.assistantMemoryDiagnostics.profileFieldCount}`
+              : "не применён"}
+          </Badge>
+        </div>
         {output.assistantMemoryDiagnostics.layers.map((layer) => <div key={layer.layer}>
           <span>{{SHORT_TERM: "Краткосрочная", WORKING: "Рабочая", LONG_TERM: "Долговременная"}[layer.layer]}</span>
           <Badge size="xs" variant="light" color={layer.enabled ? "teal" : "gray"}>

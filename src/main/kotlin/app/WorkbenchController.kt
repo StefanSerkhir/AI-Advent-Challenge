@@ -174,6 +174,9 @@ class WorkbenchController(
         require(normalized.isNotEmpty() && normalized.length <= 4096 && normalized.none { it.isISOControl() }) {
             "Введите непустой API-ключ без переводов строки (до 4096 символов)."
         }
+        require(!assistantMemoryManager.containsSensitiveValue(normalized)) {
+            "API-ключ совпадает с данными памяти или профиля. Сначала удалите это значение из памяти."
+        }
         val settings = _state.value.settings
         val kind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) LlmKind.OPENAI else settings.llmKind
         val keys = apiKeys + (kind to normalized)
@@ -272,6 +275,12 @@ class WorkbenchController(
     fun completeAssistantTask(): Boolean = mutateAssistantMemory {
         assistantMemoryManager.completeTask()
         "Текущая задача завершена; очищена только рабочая память."
+    }
+
+    @Synchronized
+    fun saveAssistantProfile(profile: AssistantProfileDraft): Boolean = mutateAssistantMemory {
+        assistantMemoryManager.saveProfile(profile)
+        "Профиль сохранён и будет применён к следующему ответу ассистента."
     }
 
     @Synchronized

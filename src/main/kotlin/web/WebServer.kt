@@ -67,6 +67,7 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
         route("/api") {
             get("/state") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             get("/assistant/memory") { call.respondText(api.memory(), ContentType.Application.Json) }
+            get("/assistant/profile") { call.respondText(api.profile(), ContentType.Application.Json) }
             get("/settings") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             put("/settings") { call.respondText(api.snapshot(api.settings(call.receive<SettingsCommand>())), ContentType.Application.Json) }
             put("/key") { call.respondText(api.snapshot(api.key(call.receive<KeyCommand>())), ContentType.Application.Json) }
@@ -78,6 +79,7 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             delete("/assistant/memory") { call.respondText(api.snapshot(api.deleteMemory(call.receive<MemoryDeleteCommand>())), ContentType.Application.Json) }
             post("/assistant/memory/clear") { call.respondText(api.snapshot(api.clearMemory(call.receive<MemoryLayerCommand>())), ContentType.Application.Json) }
             put("/assistant/memory/enabled") { call.respondText(api.snapshot(api.setMemoryEnabled(call.receive<MemoryEnabledCommand>())), ContentType.Application.Json) }
+            put("/assistant/profile") { call.respondText(api.snapshot(api.saveProfile(call.receive<AssistantProfileCommand>())), ContentType.Application.Json) }
             post("/assistant/dialogue/new") { call.respondText(api.snapshot(api.newDialogue(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task/complete") { call.respondText(api.snapshot(api.completeTask(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/operations/{id}/cancel") {

@@ -160,6 +160,7 @@ export interface State {
   tokenConversations: Record<string, TokenConversation>;
   context: ContextState;
   assistantMemory: AssistantMemoryState;
+  assistantProfile: AssistantProfile;
 }
 export interface ContextState {
   strategy: ContextStrategy;
@@ -186,8 +187,22 @@ export interface MemoryLayerState {
   entries: MemoryEntry[];
 }
 export interface AssistantMemoryState { layers: MemoryLayerState[] }
+export interface AssistantProfileInput {
+  preferredName: string;
+  about: string;
+  responseStyle: string;
+  responseFormat: string;
+  constraints: string;
+}
+export interface AssistantProfile extends AssistantProfileInput {
+  version: number;
+  configuredFieldCount: number;
+}
 export interface AssistantMemoryDiagnostics {
   layers: { layer: MemoryLayer; enabled: boolean; usedCount: number; usedEntryIds: string[] }[];
+  profileApplied: boolean;
+  profileVersion: number | null;
+  profileFieldCount: number;
 }
 export interface StartCommand {
   requestId: string;

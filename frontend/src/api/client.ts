@@ -1,4 +1,4 @@
-import type {MemoryLayer, Provider, Settings, StartCommand, State} from "./types";
+import type {AssistantProfileInput, MemoryLayer, Provider, Settings, StartCommand, State} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -69,6 +69,8 @@ export const api = {
     request<State>("/assistant/dialogue/new", "POST", { expectedSettingsVersion }),
   completeTask: (expectedSettingsVersion: number) =>
     request<State>("/assistant/task/complete", "POST", { expectedSettingsVersion }),
+  saveProfile: (profile: AssistantProfileInput, expectedSettingsVersion: number) =>
+    request<State>("/assistant/profile", "PUT", { profile, expectedSettingsVersion }),
   clear: (target: "history" | "results" | "notice") =>
     request<State>(`/${target}`, "DELETE"),
 };

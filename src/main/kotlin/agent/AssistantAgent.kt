@@ -1,5 +1,7 @@
 package org.example.agent
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.example.llm.*
 import org.example.tokens.*
 
@@ -33,7 +35,8 @@ class AssistantAgent(
         memoryManager.validateForStorage(normalized)
         val currentUserMessage = LlmMessage(LlmRole.USER, normalized)
         val memory = memoryManager.prepare(shortTermMessageLimit)
-        val requestHistory = listOf(LlmMessage(LlmRole.SYSTEM, ASSISTANT_SYSTEM_INSTRUCTIONS)) + memory.historyMessages
+        val systemInstructions = assistantSystemInstructions(memory.state.profile)
+        val requestHistory = listOf(LlmMessage(LlmRole.SYSTEM, systemInstructions)) + memory.historyMessages
         val profile = profileProvider(model)
         val preparation = try {
             ContextPreparer(tokenEstimator).prepare(
@@ -77,12 +80,22 @@ class AssistantAgent(
         onMetrics(completed)
 
         val excludedShortTermMessages = preparation.excludedMessageCount
-        val diagnostics = memory.diagnostics.copy(layers = memory.diagnostics.layers.map { usage ->
-            if (usage.layer != MemoryLayer.SHORT_TERM || excludedShortTermMessages == 0) usage else usage.copy(
-                usedCount = (usage.usedCount - excludedShortTermMessages).coerceAtLeast(0),
-                usedEntryIds = usage.usedEntryIds.drop(excludedShortTermMessages),
-            )
-        })
+        val appliedProfile = memory.state.profile.takeUnless(AssistantProfile::isEmpty)?.takeIf {
+            preparation.activeMessages.firstOrNull()?.let { message ->
+                message.role == LlmRole.SYSTEM && USER_PROFILE_MARKER in message.content
+            } == true
+        }
+        val diagnostics = memory.diagnostics.copy(
+            layers = memory.diagnostics.layers.map { usage ->
+                if (usage.layer != MemoryLayer.SHORT_TERM || excludedShortTermMessages == 0) usage else usage.copy(
+                    usedCount = (usage.usedCount - excludedShortTermMessages).coerceAtLeast(0),
+                    usedEntryIds = usage.usedEntryIds.drop(excludedShortTermMessages),
+                )
+            },
+            profileApplied = appliedProfile != null,
+            profileVersion = appliedProfile?.version,
+            profileFieldCount = appliedProfile?.configuredFieldCount ?: 0,
+        )
         return AssistantAgentResponse(completion, completed, diagnostics)
     }
 
@@ -121,4 +134,18 @@ class AssistantAgent(
         pricingSourceUrl = profile?.sourceUrl,
         contextProfileSimulated = profile?.simulated == true,
     )
+}
+
+private const val USER_PROFILE_MARKER = "=== USER PROFILE DATA ==="
+
+private fun assistantSystemInstructions(profile: AssistantProfile): String {
+    if (profile.isEmpty) return ASSISTANT_SYSTEM_INSTRUCTIONS
+    val data = buildJsonObject {
+        if (profile.preferredName.isNotEmpty()) put("preferredName", profile.preferredName)
+        if (profile.about.isNotEmpty()) put("about", profile.about)
+        if (profile.responseStyle.isNotEmpty()) put("responseStyle", profile.responseStyle)
+        if (profile.responseFormat.isNotEmpty()) put("responseFormat", profile.responseFormat)
+        if (profile.constraints.isNotEmpty()) put("constraints", profile.constraints)
+    }
+    return "$ASSISTANT_SYSTEM_INSTRUCTIONS\n$USER_PROFILE_MARKER\n$data\n=== END USER PROFILE DATA ==="
 }

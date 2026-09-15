@@ -9,6 +9,8 @@ import io.ktor.server.testing.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import org.example.agent.AssistantMemoryState
+import org.example.agent.AssistantMemoryStore
 import org.example.app.AppSettings
 import org.example.app.DEFAULT_STOP_SEQUENCE
 import org.example.app.ResponseMode
@@ -26,11 +28,16 @@ class WorkbenchApiTest {
         mode: ResponseMode = ResponseMode.COMPARE,
         keys: Map<LlmKind, String> = mapOf(LlmKind.OPENAI to "test-secret-key"),
         persist: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
+        assistantMemoryStore: AssistantMemoryStore = object : AssistantMemoryStore {
+            private var state = AssistantMemoryState()
+            override fun load() = state
+            override fun save(state: AssistantMemoryState) { this.state = state }
+        },
         answer: suspend (String, List<LlmMessage>, CompletionOptions) -> CompletionResult = { model, _, _ -> completion(model) },
     ) = WorkbenchController(AppSettings(LlmKind.OPENAI, responseMode = mode), keys,
         clientFactory = { _, _, model -> object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = answer(model, messages, options)
-        } }, persistSettings = persist)
+        } }, assistantMemoryStore = assistantMemoryStore, persistSettings = persist)
 
     private fun command(version: Long = 0, prompt: String = "Тест", demo: String? = null) = StartCommand(UUID.randomUUID().toString(), version, prompt, demo)
     private fun HttpRequestBuilder.localJson(body: String = "{}") {
@@ -80,6 +87,74 @@ class WorkbenchApiTest {
             assertEquals(0, completed.assistantMemory.layers.first { it.layer == "WORKING" }.count)
             assertEquals(1, completed.assistantMemory.layers.first { it.layer == "LONG_TERM" }.count)
         } finally { c.close() }
+    }
+
+    @Test
+    fun `profile routes validate versions secrets and preserve state on persistence failure`() = testApplication {
+        engine { connector { host = "localhost"; port = 8080 } }
+        val client = createClient { defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") } }
+        val c = controller(mode = ResponseMode.UNRESTRICTED)
+        application { workbenchModule(WorkbenchApi(c)) }
+        try {
+            val empty = apiJson.decodeFromString<AssistantProfileDto>(client.get("$base/assistant/profile").bodyAsText())
+            assertEquals(0, empty.version)
+            assertEquals(0, empty.configuredFieldCount)
+            val input = AssistantProfileInputDto(
+                preferredName = "Анна",
+                about = "Kotlin-разработчик",
+                responseStyle = "Кратко",
+                responseFormat = "Списком",
+                constraints = "Без англицизмов",
+            )
+            val saved = client.put("$base/assistant/profile") {
+                localJson(apiJson.encodeToString(AssistantProfileCommand(0, input)))
+            }
+            assertEquals(HttpStatusCode.OK, saved.status)
+            val state = saved.state()
+            assertEquals(1, state.settingsVersion)
+            assertEquals(1, state.assistantProfile.version)
+            assertEquals(5, state.assistantProfile.configuredFieldCount)
+            assertEquals(input.preferredName, state.assistantProfile.preferredName)
+            assertEquals(input, apiJson.decodeFromString<AssistantProfileDto>(
+                client.get("$base/assistant/profile").bodyAsText(),
+            ).let { AssistantProfileInputDto(it.preferredName, it.about, it.responseStyle, it.responseFormat, it.constraints) })
+            val collidingKey = client.put("$base/key") {
+                localJson(apiJson.encodeToString(KeyCommand(1, "OPENAI", "Kotlin")))
+            }
+            assertEquals(HttpStatusCode.BadRequest, collidingKey.status)
+            assertFalse(collidingKey.bodyAsText().contains("Kotlin"))
+
+            val stale = client.put("$base/assistant/profile") {
+                localJson(apiJson.encodeToString(AssistantProfileCommand(0, input.copy(responseStyle = "Иначе"))))
+            }
+            assertEquals(HttpStatusCode.Conflict, stale.status)
+            assertEquals("stale_settings", apiJson.decodeFromString<ErrorDto>(stale.bodyAsText()).code)
+            val invalid = client.put("$base/assistant/profile") {
+                localJson(apiJson.encodeToString(AssistantProfileCommand(1, input.copy(preferredName = "Анна\nВторая строка"))))
+            }
+            assertEquals(HttpStatusCode.BadRequest, invalid.status)
+            val secret = client.put("$base/assistant/profile") {
+                localJson(apiJson.encodeToString(AssistantProfileCommand(1, input.copy(constraints = "test-secret-key"))))
+            }
+            assertEquals(HttpStatusCode.BadRequest, secret.status)
+            assertFalse(secret.bodyAsText().contains("test-secret-key"))
+            assertEquals(1, client.get("$base/state").state().assistantProfile.version)
+        } finally { c.shutdown() }
+
+        val failing = object : AssistantMemoryStore {
+            override fun load() = AssistantMemoryState()
+            override fun save(state: AssistantMemoryState) { throw IOException("disk full") }
+        }
+        val failedController = controller(mode = ResponseMode.UNRESTRICTED, assistantMemoryStore = failing)
+        try {
+            val problem = assertFailsWith<ApiProblem> {
+                WorkbenchApi(failedController).saveProfile(AssistantProfileCommand(0, AssistantProfileInputDto(responseStyle = "Кратко")))
+            }
+            assertEquals(500, problem.status)
+            assertEquals("persistence", problem.code)
+            assertEquals(0, failedController.state.value.settingsVersion)
+            assertTrue(failedController.state.value.assistantMemory.profile.isEmpty)
+        } finally { failedController.close() }
     }
 
     @Test
@@ -216,6 +291,9 @@ class WorkbenchApiTest {
             assertEquals(HttpStatusCode.Conflict, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(0, current.settings))) }.status)
             assertEquals(HttpStatusCode.Conflict, client.put("$base/key") { localJson(apiJson.encodeToString(KeyCommand(0, "OPENAI", "other-key"))) }.status)
             assertEquals(HttpStatusCode.Conflict, client.post("$base/context/checkpoint") { localJson(apiJson.encodeToString(ContextMutationCommand(0))) }.status)
+            assertEquals(HttpStatusCode.Conflict, client.put("$base/assistant/profile") {
+                localJson(apiJson.encodeToString(AssistantProfileCommand(0, AssistantProfileInputDto(responseStyle = "Кратко"))))
+            }.status)
             val duplicate = client.post("$base/operations") { localJson(apiJson.encodeToString(request)) }
             assertEquals(id, apiJson.decodeFromString<StartReply>(duplicate.bodyAsText()).operationId)
             assertEquals(1, count.get())

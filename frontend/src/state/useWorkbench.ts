@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {api, ApiError} from "../api/client";
-import type {MemoryLayer, Provider, Settings, StartCommand, State} from "../api/types";
+import type {AssistantProfileInput, MemoryLayer, Provider, Settings, StartCommand, State} from "../api/types";
 
 export function useWorkbench() {
   const [state, setState] = useState<State | null>(null);
@@ -185,6 +185,9 @@ export function useWorkbench() {
     }),
     completeTask: () => perform(async () => {
       if (state) accept(await api.completeTask(state.settingsVersion));
+    }),
+    saveProfile: (profile: AssistantProfileInput) => perform(async () => {
+      if (state) accept(await api.saveProfile(profile, state.settingsVersion));
     }),
     clear: (target: "history" | "results" | "notice") =>
       perform(async () => accept(await api.clear(target))),
