@@ -71,6 +71,18 @@ export const api = {
     request<State>("/assistant/task/complete", "POST", { expectedSettingsVersion }),
   saveProfile: (profile: AssistantProfileInput, expectedSettingsVersion: number) =>
     request<State>("/assistant/profile", "PUT", { profile, expectedSettingsVersion }),
+  startTaskState: (goal: string, currentStep: string, expectedAction: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/start", "POST", { goal, currentStep, expectedAction, expectedSettingsVersion }),
+  updateTaskProgress: (currentStep: string, expectedAction: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/progress", "PUT", { currentStep, expectedAction, expectedSettingsVersion }),
+  advanceTaskState: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/advance", "POST", { expectedSettingsVersion }),
+  pauseTaskState: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/pause", "POST", { expectedSettingsVersion }),
+  resumeTaskState: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/resume", "POST", { expectedSettingsVersion }),
+  resetTaskState: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/reset", "POST", { expectedSettingsVersion }),
   clear: (target: "history" | "results" | "notice") =>
     request<State>(`/${target}`, "DELETE"),
 };

@@ -261,6 +261,38 @@ button {
   border-radius: 9px;
   background: var(--mantine-color-indigo-0);
 }
+.task-state-panel {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--mantine-color-blue-2);
+  border-radius: 9px;
+  background: var(--mantine-color-blue-0);
+}
+.task-state-editor {
+  display: grid;
+  gap: 7px;
+}
+.task-state-goal {
+  display: grid;
+  gap: 4px;
+  padding: 7px;
+  border-radius: 7px;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.task-state-goal span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.task-state-goal p {
+  font-size: 11px;
+  line-height: 1.55;
+}
+.task-state-goal code {
+  color: var(--muted);
+  font-size: 9px;
+}
 .memory-layer {
   display: grid;
   gap: 7px;
@@ -315,6 +347,23 @@ button {
   gap: 7px;
 }
 .memory-diagnostics code {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-state-diagnostics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid #d9e7f7;
+  border-radius: 8px;
+  background: #f5f9ff;
+  font-size: 11px;
+}
+.task-state-diagnostics code {
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;

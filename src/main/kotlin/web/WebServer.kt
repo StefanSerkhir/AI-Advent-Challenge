@@ -68,6 +68,7 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             get("/state") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             get("/assistant/memory") { call.respondText(api.memory(), ContentType.Application.Json) }
             get("/assistant/profile") { call.respondText(api.profile(), ContentType.Application.Json) }
+            get("/assistant/task-state") { call.respondText(api.taskState(), ContentType.Application.Json) }
             get("/settings") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             put("/settings") { call.respondText(api.snapshot(api.settings(call.receive<SettingsCommand>())), ContentType.Application.Json) }
             put("/key") { call.respondText(api.snapshot(api.key(call.receive<KeyCommand>())), ContentType.Application.Json) }
@@ -82,6 +83,12 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             put("/assistant/profile") { call.respondText(api.snapshot(api.saveProfile(call.receive<AssistantProfileCommand>())), ContentType.Application.Json) }
             post("/assistant/dialogue/new") { call.respondText(api.snapshot(api.newDialogue(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task/complete") { call.respondText(api.snapshot(api.completeTask(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/start") { call.respondText(api.snapshot(api.startTaskState(call.receive<TaskStateStartCommand>())), ContentType.Application.Json) }
+            put("/assistant/task-state/progress") { call.respondText(api.snapshot(api.updateTaskProgress(call.receive<TaskStateProgressCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/advance") { call.respondText(api.snapshot(api.advanceTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/pause") { call.respondText(api.snapshot(api.pauseTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/resume") { call.respondText(api.snapshot(api.resumeTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/reset") { call.respondText(api.snapshot(api.resetTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/operations/{id}/cancel") {
                 val id = call.parameters["id"]?.toLongOrNull() ?: throw ApiProblem(400, "validation", "Некорректный номер операции.")
                 call.respondText(api.snapshot(api.cancel(id)), ContentType.Application.Json)

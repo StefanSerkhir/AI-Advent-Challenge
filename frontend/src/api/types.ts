@@ -10,6 +10,7 @@ export type Mode =
 export type Provider = "DEEPSEEK" | "OPENAI";
 export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | "MEMORY_LAYERS";
 export type MemoryLayer = "SHORT_TERM" | "WORKING" | "LONG_TERM";
+export type TaskPhase = "PLANNING" | "EXECUTION" | "VALIDATION" | "DONE";
 export interface Settings {
   provider: Provider;
   model: string;
@@ -128,6 +129,7 @@ export interface Output {
   branchId: string | null;
   branchName: string | null;
   assistantMemoryDiagnostics: AssistantMemoryDiagnostics | null;
+  taskStateDiagnostics: TaskStateDiagnostics | null;
 }
 export interface Exchange {
   id: number;
@@ -161,6 +163,7 @@ export interface State {
   context: ContextState;
   assistantMemory: AssistantMemoryState;
   assistantProfile: AssistantProfile;
+  taskState: AgentTaskState | null;
 }
 export interface ContextState {
   strategy: ContextStrategy;
@@ -203,6 +206,23 @@ export interface AssistantMemoryDiagnostics {
   profileApplied: boolean;
   profileVersion: number | null;
   profileFieldCount: number;
+}
+export interface AgentTaskState {
+  id: string;
+  version: number;
+  goal: string;
+  phase: TaskPhase;
+  currentStep: string;
+  expectedAction: string;
+  paused: boolean;
+  createdAtEpochMillis: number;
+  updatedAtEpochMillis: number;
+}
+export interface TaskStateDiagnostics {
+  applied: boolean;
+  taskId: string | null;
+  stateVersion: number | null;
+  phase: TaskPhase | null;
 }
 export interface StartCommand {
   requestId: string;

@@ -37,8 +37,11 @@ export default function App() {
     if (atBottom) scrollDown();
   }, [lastId, count, streamedLength, s?.operation?.progress.current]); // Keep position when reading previous answers.
   const locked = !!s?.operation || w.working || !w.connected || w.uncertain;
+  const taskPaused = s?.settings.mode === "unrestricted" &&
+    s.settings.contextStrategy === "MEMORY_LAYERS" && s.taskState?.paused === true;
+  const submissionLocked = locked || taskPaused;
   const send = async () => {
-    if (locked || !prompt.trim()) return;
+    if (submissionLocked || !prompt.trim()) return;
     if (await w.start(prompt)) {
       setPrompt("");
       setAtBottom(true);
@@ -299,6 +302,11 @@ export default function App() {
               {s.notice.message}
             </Alert>
           )}
+          {taskPaused && (
+            <Alert color="orange" title="Задача приостановлена">
+              Продолжите задачу в панели «Состояние задачи», чтобы снова отправлять связанные запросы агенту.
+            </Alert>
+          )}
           {s.operation && (
             <div className="operation-panel" role="status">
               <div className="operation-top">
@@ -349,7 +357,7 @@ export default function App() {
               minRows={2}
               maxRows={7}
               maxLength={100000}
-              disabled={!!s.operation || w.uncertain}
+              disabled={!!s.operation || w.uncertain || taskPaused}
               variant="unstyled"
               onKeyDown={(e) => {
                 if (
@@ -379,7 +387,7 @@ export default function App() {
               </span>
               <Button
                 leftSection={<IconArrowUp size={17} />}
-                disabled={locked || !prompt.trim()}
+                disabled={submissionLocked || !prompt.trim()}
                 onClick={() => void send()}
               >
                 Отправить

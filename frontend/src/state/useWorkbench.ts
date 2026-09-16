@@ -189,6 +189,24 @@ export function useWorkbench() {
     saveProfile: (profile: AssistantProfileInput) => perform(async () => {
       if (state) accept(await api.saveProfile(profile, state.settingsVersion));
     }),
+    startTaskState: (goal: string, currentStep: string, expectedAction: string) => perform(async () => {
+      if (state) accept(await api.startTaskState(goal, currentStep, expectedAction, state.settingsVersion));
+    }),
+    updateTaskProgress: (currentStep: string, expectedAction: string) => perform(async () => {
+      if (state) accept(await api.updateTaskProgress(currentStep, expectedAction, state.settingsVersion));
+    }),
+    advanceTaskState: () => perform(async () => {
+      if (state) accept(await api.advanceTaskState(state.settingsVersion));
+    }),
+    pauseTaskState: () => perform(async () => {
+      if (state) accept(await api.pauseTaskState(state.settingsVersion));
+    }),
+    resumeTaskState: () => perform(async () => {
+      if (state) accept(await api.resumeTaskState(state.settingsVersion));
+    }),
+    resetTaskState: () => perform(async () => {
+      if (state) accept(await api.resetTaskState(state.settingsVersion));
+    }),
     clear: (target: "history" | "results" | "notice") =>
       perform(async () => accept(await api.clear(target))),
   };

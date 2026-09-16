@@ -5,6 +5,7 @@ build/
 .env.*.local
 .llm-history.json
 .llm-assistant-memory.json
+.llm-task-state.json
 .llm-context-*.json
 /video/
 !gradle/wrapper/gradle-wrapper.jar

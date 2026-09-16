@@ -2,12 +2,12 @@ import {useState} from "react";
 import {ActionIcon, Alert, Badge, Button, Tooltip,} from "@mantine/core";
 import {IconAlertCircle, IconCheck, IconChevronDown, IconChevronUp, IconCopy, IconSparkles,} from "@tabler/icons-react";
 import type {
-  ConversationTokenTotals,
-  Exchange,
-  ModeInfo,
-  Output,
-  TokenConversation,
-  TurnTokenMetrics
+    ConversationTokenTotals,
+    Exchange,
+    ModeInfo,
+    Output,
+    TokenConversation,
+    TurnTokenMetrics
 } from "../api/types";
 import {Markdown} from "./Markdown";
 
@@ -60,6 +60,7 @@ const thinkingOutput: Output = {
   branchId: null,
   branchName: null,
   assistantMemoryDiagnostics: null,
+  taskStateDiagnostics: null,
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -120,6 +121,13 @@ function ResponseCard({ output }: { output: Output }) {
           </Badge>
           {layer.usedEntryIds.length > 0 && <code title={layer.usedEntryIds.join(", ")}>{layer.usedEntryIds.map((id) => id.slice(0, 8)).join(", ")}</code>}
         </div>)}
+      </div>}
+      {output.taskStateDiagnostics?.applied && <div className="task-state-diagnostics" data-testid="task-state-diagnostics">
+        <strong>Состояние задачи применено</strong>
+        <Badge size="xs" variant="light" color="blue">{output.taskStateDiagnostics.phase}</Badge>
+        <code title={output.taskStateDiagnostics.taskId ?? undefined}>
+          {output.taskStateDiagnostics.taskId?.slice(0, 12)} · v{output.taskStateDiagnostics.stateVersion}
+        </code>
       </div>}
       {output.error ? (
         <Alert

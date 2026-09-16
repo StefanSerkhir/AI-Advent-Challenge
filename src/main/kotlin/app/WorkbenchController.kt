@@ -68,6 +68,7 @@ data class WorkbenchState(
     val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
     val context: ContextDiagnostics,
     val assistantMemory: AssistantMemoryState = AssistantMemoryState(),
+    val taskState: AgentTaskState? = null,
     val assistantTokenMetrics: List<TurnTokenMetrics> = emptyList(),
     val assistantTokenTotals: ConversationTokenTotals = ConversationTokenTotals(scope = "assistant_memory"),
     val exchanges: List<ConversationExchange> = emptyList(),
@@ -87,6 +88,7 @@ class WorkbenchController(
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
     private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
     assistantMemoryStore: AssistantMemoryStore = InMemoryAssistantMemoryStore(),
+    taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -105,7 +107,11 @@ class WorkbenchController(
         store = assistantMemoryStore,
         sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
     )
-    private val assistantAgent = AssistantAgent(assistantMemoryManager) {
+    private val taskStateManager = TaskStateManager(
+        store = taskStateStore,
+        sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
+    )
+    private val assistantAgent = AssistantAgent(assistantMemoryManager, taskStateProvider = taskStateManager::state) {
         requestClient.get() ?: error("Клиент запроса не инициализирован")
     }
     private val promptRunner: PromptRunner = PromptRunner(
@@ -132,9 +138,15 @@ class WorkbenchController(
             tokenTotals = promptRunner.tokenTotalsSnapshot(),
             context = promptRunner.contextDiagnostics(initialSettings),
             assistantMemory = assistantMemoryManager.state(),
+            taskState = taskStateManager.state(),
             assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
             assistantTokenTotals = assistantAgent.tokenTotalsSnapshot(),
-            notice = listOfNotNull(initialWarning, promptRunner.historyLoadWarning, assistantMemoryManager.loadWarning)
+            notice = listOfNotNull(
+                initialWarning,
+                promptRunner.historyLoadWarning,
+                assistantMemoryManager.loadWarning,
+                taskStateManager.loadWarning,
+            )
                 .takeIf(List<String>::isNotEmpty)
                 ?.joinToString("\n")
                 ?.let { UiNotice(it, NoticeKind.ERROR) },
@@ -174,8 +186,9 @@ class WorkbenchController(
         require(normalized.isNotEmpty() && normalized.length <= 4096 && normalized.none { it.isISOControl() }) {
             "Введите непустой API-ключ без переводов строки (до 4096 символов)."
         }
-        require(!assistantMemoryManager.containsSensitiveValue(normalized)) {
-            "API-ключ совпадает с данными памяти или профиля. Сначала удалите это значение из памяти."
+        require(!assistantMemoryManager.containsSensitiveValue(normalized) &&
+            !taskStateManager.containsSensitiveValue(normalized)) {
+            "API-ключ совпадает с данными памяти, профиля или задачи. Сначала удалите это значение."
         }
         val settings = _state.value.settings
         val kind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) LlmKind.OPENAI else settings.llmKind
@@ -289,6 +302,42 @@ class WorkbenchController(
         if (enabled) "Слой ${layer.name} будет учтён в следующем ответе." else "Слой ${layer.name} исключён из следующего ответа; данные сохранены."
     }
 
+    @Synchronized
+    fun startTaskState(draft: NewTaskDraft): Boolean = mutateTaskState {
+        taskStateManager.start(draft)
+        "Новая задача создана на этапе PLANNING."
+    }
+
+    @Synchronized
+    fun updateTaskProgress(draft: TaskProgressDraft): Boolean = mutateTaskState {
+        taskStateManager.updateProgress(draft)
+        "Текущий шаг и ожидаемое действие обновлены."
+    }
+
+    @Synchronized
+    fun advanceTaskState(): Boolean = mutateTaskState {
+        val task = taskStateManager.advance()
+        if (task.phase == TaskPhase.DONE) "Задача переведена в DONE." else "Задача переведена в ${task.phase.name}."
+    }
+
+    @Synchronized
+    fun pauseTaskState(): Boolean = mutateTaskState {
+        taskStateManager.pause()
+        "Задача приостановлена; её этап и контекст сохранены."
+    }
+
+    @Synchronized
+    fun resumeTaskState(): Boolean = mutateTaskState {
+        taskStateManager.resume()
+        "Задача продолжена с сохранённого этапа."
+    }
+
+    @Synchronized
+    fun resetTaskState(): Boolean = mutateTaskState {
+        taskStateManager.reset()
+        "Состояние задачи сброшено."
+    }
+
     private inline fun mutateAssistantMemory(action: () -> String): Boolean {
         if (_state.value.isRunning || closed) return false
         return try {
@@ -301,6 +350,27 @@ class WorkbenchController(
             true
         } catch (_: AssistantMemoryPersistenceException) {
             publish { it.copy(notice = UiNotice(ASSISTANT_MEMORY_SAVE_ERROR, NoticeKind.ERROR)) }
+            false
+        }
+    }
+
+    private inline fun mutateTaskState(action: () -> String): Boolean {
+        if (_state.value.isRunning || closed) return false
+        val settings = _state.value.settings
+        require(settings.responseMode == ResponseMode.UNRESTRICTED &&
+            settings.contextStrategy == ContextStrategy.MEMORY_LAYERS) {
+            "Состояние задачи доступно только Простому агенту со стратегией Слои памяти."
+        }
+        return try {
+            val notice = action()
+            publish { it.copy(
+                taskState = taskStateManager.state(),
+                settingsVersion = it.settingsVersion + 1,
+                notice = UiNotice(notice, NoticeKind.INFO),
+            ) }
+            true
+        } catch (_: TaskStatePersistenceException) {
+            publish { it.copy(notice = UiNotice(TASK_STATE_SAVE_ERROR, NoticeKind.ERROR)) }
             false
         }
     }
@@ -370,6 +440,15 @@ class WorkbenchController(
         }
         val baseSettings = _state.value.settings
         val settings = baseSettings.copy(responseMode = forcedMode ?: baseSettings.responseMode)
+        if (settings.responseMode == ResponseMode.UNRESTRICTED &&
+            settings.contextStrategy == ContextStrategy.MEMORY_LAYERS &&
+            taskStateManager.state()?.paused == true) {
+            publish { it.copy(notice = UiNotice(
+                "Задача приостановлена. Сначала продолжите её в панели состояния задачи.",
+                NoticeKind.ERROR,
+            )) }
+            return false
+        }
         val requestKind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) {
             LlmKind.OPENAI
         } else {
@@ -451,6 +530,7 @@ class WorkbenchController(
                                 tokenMetrics = response.tokenMetrics,
                                 contextStrategy = ContextStrategy.MEMORY_LAYERS,
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
+                                taskStateDiagnostics = response.taskStateDiagnostics,
                             ))
                             publish { it.copy(
                                 assistantMemory = assistantMemoryManager.state(),
@@ -464,6 +544,7 @@ class WorkbenchController(
                                 tokenMetrics = response.tokenMetrics,
                                 contextStrategy = ContextStrategy.MEMORY_LAYERS,
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
+                                taskStateDiagnostics = response.taskStateDiagnostics,
                             )))
                         } else {
                             RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))
@@ -537,6 +618,7 @@ class WorkbenchController(
                         tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
                         context = promptRunner.contextDiagnostics(it.settings),
                         assistantMemory = assistantMemoryManager.state(),
+                        taskState = taskStateManager.state(),
                         assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
                         assistantTokenTotals = assistantAgent.tokenTotalsSnapshot()) }
                 }
@@ -635,6 +717,7 @@ internal fun userFacingError(error: Throwable, secrets: Collection<String> = emp
     val message = when (error) {
         is HistoryPersistenceException -> HISTORY_SAVE_ERROR
         is AssistantMemoryPersistenceException -> ASSISTANT_MEMORY_SAVE_ERROR
+        is TaskStatePersistenceException -> TASK_STATE_SAVE_ERROR
         is LlmApiException -> error.message ?: "Провайдер вернул ошибку."
         is HttpRequestTimeoutException -> "Превышено время ожидания ответа. Попробуйте ещё раз."
         is SerializationException -> "Провайдер вернул ответ в неожиданном формате. Попробуйте ещё раз."
@@ -652,6 +735,9 @@ private const val HISTORY_SAVE_ERROR =
 
 private const val ASSISTANT_MEMORY_SAVE_ERROR =
     "Не удалось сохранить память ассистента. Новая пара не добавлена; проверьте права доступа к файлу."
+
+private const val TASK_STATE_SAVE_ERROR =
+    "Не удалось сохранить состояние задачи. Прежнее состояние сохранено; проверьте права доступа к файлу."
 
 fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "DeepSeek"

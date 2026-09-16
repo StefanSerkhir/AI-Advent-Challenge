@@ -6,7 +6,7 @@
 
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
-| GET | `/api/state` | Полный `StateDto`: настройки, каталог провайдеров/моделей/режимов, история, результаты, операция, уведомление |
+| GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `taskState`, результаты, операция, уведомление |
 | GET | `/api/settings` | Тот же полный снимок; ключи представлены только `hasKey` |
 | PUT | `/api/settings` | `{ expectedSettingsVersion, settings: SettingsDto }` → снимок после сохранения |
 | PUT | `/api/key` | `{ expectedSettingsVersion, provider, key }` → снимок без ключа |
@@ -23,6 +23,13 @@
 | PUT | `/api/assistant/memory/enabled` | `{ expectedSettingsVersion, layer, enabled }` → включить слой без удаления |
 | POST | `/api/assistant/dialogue/new` | Очистить только `SHORT_TERM` |
 | POST | `/api/assistant/task/complete` | Очистить только `WORKING` |
+| GET | `/api/assistant/task-state` | `{ task: TaskStateDto \| null }` для отдельной FSM |
+| POST | `/api/assistant/task-state/start` | `{ expectedSettingsVersion, goal, currentStep, expectedAction }` → новая задача в `PLANNING` |
+| PUT | `/api/assistant/task-state/progress` | `{ expectedSettingsVersion, currentStep, expectedAction }` → обновить ход задачи без смены этапа |
+| POST | `/api/assistant/task-state/advance` | `{ expectedSettingsVersion }` → следующий допустимый этап |
+| POST | `/api/assistant/task-state/pause` | `{ expectedSettingsVersion }` → пауза без смены этапа |
+| POST | `/api/assistant/task-state/resume` | `{ expectedSettingsVersion }` → продолжение на том же этапе |
+| POST | `/api/assistant/task-state/reset` | `{ expectedSettingsVersion }` → удалить только состояние FSM |
 | DELETE | `/api/history` | `{}` → очищает обычную историю и состояния трёх прежних стратегий; слои памяти не затрагивает |
 | DELETE | `/api/results` | `{}` → снимок без карточек; история сохранена |
 | DELETE | `/api/notice` | `{}` → снимок без уведомления |
@@ -37,14 +44,14 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 ## Согласованность
 
 `revision` монотонно растёт при любом изменении снимка; `settingsVersion` — при
-сохранении настроек/ключа, профиля и каждой мутации памяти. Клиент передаёт последнюю версию и при
+сохранении настроек/ключа, профиля, каждой мутации памяти и FSM. Клиент передаёт последнюю версию и при
 `409 stale_settings` получает свежий снимок, после чего пользователь повторяет
 действие. Команды проверяются и выполняются под общим монитором контроллера.
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
 рабочей корутине до освобождения активной операции.
 
 Одновременно работает один эксперимент. Другой запуск, изменение настроек/ключа,
-checkpoint/branch-команды и обе очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
+checkpoint/branch-команды, мутации FSM и очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
 запоздалая отмена из вкладки не остановит следующий запрос.
 
 `requestId` — новый UUID для каждого намеренного запуска. Повтор **той же** команды
@@ -86,12 +93,24 @@ LLM-контекст. Непустой применяется только в `U
 истины для редактора. Диагностика output содержит только факт применения, версию
 и число заполненных полей.
 
+Task State Machine доступна только при `unrestricted + MEMORY_LAYERS`. Поля `goal`,
+`currentStep` и `expectedAction` обязательны после нормализации; пределы — 8000,
+4000 и 4000 символов. Новая задача начинается в `PLANNING`; разрешены только
+`PLANNING → EXECUTION → VALIDATION → DONE`. Pause/resume сохраняют ID, цель, этап,
+шаг и ожидаемое действие. Повторная пауза/resume, пропуск/возврат этапа и команда
+из `DONE` дают `409 invalid_task_transition` без записи и публикации мутации.
+Приостановленная задача блокирует обычный `POST /api/operations` с кодом
+`409 task_paused` до вызова LLM. Активная незавершённая задача попадает в system
+context, а output diagnostics содержит только `applied`, `taskId`, `stateVersion`
+и `phase`. Известный API-ключ в любом текстовом поле даёт `400 validation`.
+
 ## Коды ошибок
 
 - `400 validation`, `400 invalid_json`: некорректные параметры / JSON / отсутствие ключа.
 - `403 forbidden`: неподходящий Host, Origin, fetch metadata или формат команды.
 - `404 not_found`: неизвестная операция.
-- `409 busy`, `409 stale_settings`, `409 duplicate_id`: конфликт команд.
+- `409 busy`, `409 stale_settings`, `409 duplicate_id`, `409 invalid_task_transition`,
+  `409 task_paused`: конфликт команд или состояния задачи.
 - `500 persistence`, `500 internal`: ошибка сохранения / выполнения команды,
   без содержимого запросов и исключений.
 

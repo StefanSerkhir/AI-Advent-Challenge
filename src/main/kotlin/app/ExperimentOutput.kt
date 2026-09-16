@@ -2,6 +2,7 @@ package org.example.app
 
 import org.example.agent.AssistantMemoryDiagnostics
 import org.example.agent.ContextStrategy
+import org.example.agent.TaskStateDiagnostics
 import org.example.llm.CompletionResult
 import org.example.tokens.TurnTokenMetrics
 
@@ -20,6 +21,7 @@ data class ExperimentOutput(
     val branchId: String? = null,
     val branchName: String? = null,
     val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
+    val taskStateDiagnostics: TaskStateDiagnostics? = null,
 )
 
 data class ExperimentOutputDelta(

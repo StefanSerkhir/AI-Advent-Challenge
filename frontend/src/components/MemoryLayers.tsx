@@ -3,6 +3,7 @@ import {ActionIcon, Badge, Button, Group, NativeSelect, Switch, Textarea, TextIn
 import {IconEdit, IconMessagePlus, IconRefresh, IconTrash} from "@tabler/icons-react";
 import type {AssistantProfileInput, MemoryLayer} from "../api/types";
 import type {Workbench} from "../state/useWorkbench";
+import {TaskStatePanel} from "./TaskStatePanel";
 
 const labels: Record<MemoryLayer, string> = {
   SHORT_TERM: "Краткосрочная",
@@ -19,6 +20,7 @@ export function MemoryLayers({workbench: w, locked}: {workbench: Workbench; lock
   };
   return <div className="memory-layers" data-testid="memory-layers">
     <p className="micro">Все три слоя работают одновременно. Краткосрочный слой пополняется только завершёнными парами диалога.</p>
+    <TaskStatePanel workbench={w} locked={locked}/>
     <ProfileEditor workbench={w} locked={locked}/>
     {state.assistantMemory.layers.map((memory) => <section className="memory-layer" data-layer={memory.layer} key={memory.layer}>
       <div className="memory-layer-heading">

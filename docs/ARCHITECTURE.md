@@ -91,6 +91,7 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 - единственной активной worker coroutine;
 - `PromptRunner` для обычных вариантов и трёх старых context strategies;
 - отдельными `AssistantMemoryManager` и `AssistantAgent`;
+- отдельным `TaskStateManager` и состоянием задачи Простого агента;
 - специализированными runners экспериментов;
 - монотонными номерами exchange/revision и streaming snapshots.
 
@@ -142,8 +143,9 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 Сборка запроса выполняется так:
 
-1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`; непустой профиль
-   добавляется в неё как детерминированный JSON-блок недоверенных данных;
+1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`; непустой профиль и
+   активная незавершённая задача добавляются в неё как отдельные детерминированные
+   JSON-блоки недоверенных данных;
 2. включённый непустой `LONG_TERM`;
 3. включённый непустой `WORKING`;
 4. включённый непустой `SHORT_TERM`;
@@ -185,6 +187,23 @@ sequenceDiagram
 дублируются. Это диагностика фактически подготовленного/сокращённого запроса, а не
 текущего состояния sidebar после ответа.
 
+### Машина состояния задачи
+
+`TaskStateManager.kt` — независимая доменная подсистема только для
+`UNRESTRICTED + MEMORY_LAYERS`. `AgentTaskState` содержит стабильный ID, собственную
+версию, цель, `phase`, текущий шаг, ожидаемое действие, флаг паузы и timestamps.
+Пауза ортогональна этапу. Разрешённый граф переходов линейный:
+`PLANNING → EXECUTION → VALIDATION → DONE`; `DONE` терминален. Start, update,
+advance, pause, resume и reset являются явными командами и никогда не выводятся
+из текста ответа модели.
+
+Активная незавершённая задача включается в первое system message как компактный
+JSON-блок `TASK STATE DATA`. Блок помечен как недоверенный пользовательский контекст,
+а текущий prompt имеет более высокий приоритет. При паузе controller/API отклоняет
+запуск до создания exchange и LLM-клиента; `AssistantAgent` повторяет защиту до
+расчёта метрик. `DONE` не считается активным контекстом. Output diagnostics хранит
+только факт применения, ID, версию и этап — без полных текстов задачи.
+
 ## Постоянное состояние
 
 Все локальные runtime-файлы относятся к текущему рабочему каталогу запуска и исключены из Git.
@@ -195,6 +214,7 @@ sequenceDiagram
 | `.llm-history.json` | `JsonConversationHistoryStore` | Обычные завершённые exchanges и token metrics |
 | `.llm-context-state.json` | `JsonContextStateStore` | Состояния `SLIDING_WINDOW`, `STICKY_FACTS`, `BRANCHING` |
 | `.llm-assistant-memory.json` | `JsonAssistantMemoryStore` | v2: профиль и три слоя, записи, роли/пары, timestamps и enable flags; v1 читается с явной миграцией в пустой профиль |
+| `.llm-task-state.json` | `JsonTaskStateStore` | v1: отдельная текущая задача FSM либо явное пустое состояние |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 
@@ -205,6 +225,7 @@ JSON stores используют UTF-8, номер версии, temporary file 
 - «Новый диалог» очищает только `SHORT_TERM`;
 - «Завершить задачу» очищает только `WORKING`;
 - обе команды сохраняют профиль; очистка профиля — явное сохранение пяти пустых полей;
+- ни одна из этих очисток не меняет Task State Machine; для неё существует отдельный reset;
 - очистка карточек результатов не затрагивает историю и память.
 
 ## HTTP API и согласованность
@@ -228,12 +249,13 @@ JSON stores используют UTF-8, номер версии, temporary file 
 
 `App.tsx` собирает layout, `useWorkbench` держит последний принятый state и действия, `Sidebar` показывает только настройки активного режима, `Results` отображает streaming/final outputs и метрики, `MemoryLayers` управляет тремя слоями.
 
-`useWorkbench` принимает snapshot, только если его `revision` не старее текущего. SSE является основным каналом состояния; REST-ответ после команды помогает быстро синхронизироваться. На неопределённой сетевой ошибке start command сохраняется с исходным `requestId`, чтобы проверка отправки не создала повторный платный запрос.
+`useWorkbench` принимает snapshot, только если его `revision` не старее текущего. SSE является основным каналом состояния; REST-ответ после команды помогает быстро синхронизироваться. На неопределённой сетевой ошибке start command сохраняется с исходным `requestId`, чтобы проверка отправки не создала повторный платный запрос. `TaskStatePanel` показывает FSM только рядом со слоями памяти, скрывает недопустимые переходы и оставляет resume доступным во время паузы.
 
 Условный UI должен следовать доменной доступности:
 
 - branch controls — только `strategy === "BRANCHING"`;
 - memory controls — только `strategy === "MEMORY_LAYERS"` в режиме `unrestricted`;
+- task-state controls — только там же; paused task блокирует composer, но не resume;
 - настройки, не используемые текущим режимом, скрываются;
 - во время активной операции мутации заблокированы и frontend, и backend.
 
@@ -274,6 +296,8 @@ API-ключ сохраняется только в локальном `.env`; A
 
 - тесты `llm` проверяют adapter payload/streaming/usage;
 - тесты `agent` проверяют transactional history, старые strategies, memory layers и stores;
+- `TaskStateManagerTest` проверяет граф переходов, pause/resume, persistence,
+  секреты и отсутствие неявных изменений при сбое/отмене stream;
 - тесты `app` проверяют runners, controller concurrency, persistence и demos;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.

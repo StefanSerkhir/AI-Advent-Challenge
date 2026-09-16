@@ -93,6 +93,29 @@ test.beforeEach(async ({ page }) => {
       profile: {preferredName: "", about: "", responseStyle: "", responseFormat: "", constraints: ""},
     },
   });
+  const taskState = await (await page.request.get("/api/state")).json() as State;
+  if (taskState.taskState) {
+    const memoryMode = await page.request.put("/api/settings", {
+      headers,
+      data: {
+        expectedSettingsVersion: taskState.settingsVersion,
+        settings: {...taskState.settings, mode: "unrestricted", contextStrategy: "MEMORY_LAYERS"},
+      },
+    });
+    const configured = await memoryMode.json() as State;
+    const reset = await page.request.post("/api/assistant/task-state/reset", {
+      headers,
+      data: {expectedSettingsVersion: configured.settingsVersion},
+    });
+    const empty = await reset.json() as State;
+    await page.request.put("/api/settings", {
+      headers,
+      data: {
+        expectedSettingsVersion: empty.settingsVersion,
+        settings: {...empty.settings, mode: "compare", contextStrategy: "SLIDING_WINDOW"},
+      },
+    });
+  }
   await page.request.delete("/api/notice", { headers, data: {} });
   await page.goto("/");
   await ready(page);
@@ -259,6 +282,52 @@ test("simple agent memory layers are managed independently and diagnose each cal
   await page.getByRole("button", {name: "Завершить задачу"}).click();
   await expect(page.locator('[data-layer="WORKING"] .memory-entry')).toHaveCount(0);
   await expect(page.locator('[data-layer="LONG_TERM"]')).toContainText("Меня зовут Анна");
+});
+
+test("task state survives pause dialogue reset and reload then resumes from a short prompt", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");
+  const panel = page.getByTestId("task-state-panel");
+  await expect(panel).toBeVisible();
+  await panel.getByLabel("Цель задачи").fill("Подготовить выпуск FSM");
+  await panel.getByLabel("Текущий шаг задачи").fill("Реализовать хранение состояния");
+  await panel.getByLabel("Ожидаемое следующее действие").fill("Проверить восстановление после паузы");
+  await panel.getByRole("button", {name: "Начать задачу", exact: true}).click();
+  await expect(panel).toContainText("Планирование");
+  const created = (await (await page.request.get("/api/state")).json() as State).taskState!;
+
+  await send(page, "Зафиксируй начало работы");
+  await done(page);
+  await panel.getByRole("button", {name: "Далее: Выполнение", exact: true}).click();
+  await expect(panel).toContainText("Выполнение");
+  await panel.getByRole("button", {name: "Поставить на паузу", exact: true}).click();
+  await expect(panel).toContainText("На паузе");
+  await expect(page.getByText("Задача приостановлена", {exact: true})).toBeVisible();
+  await expect(page.getByRole("textbox", {name: "Новый запрос", exact: true})).toBeDisabled();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", {name: "Новый диалог", exact: true}).click();
+  await expect(page.locator('[data-layer="SHORT_TERM"] .memory-entry')).toHaveCount(0);
+  await page.reload();
+  await ready(page);
+  await expect(panel).toContainText("На паузе");
+  const restored = (await (await page.request.get("/api/state")).json() as State).taskState!;
+  expect(restored.id).toBe(created.id);
+  expect(restored.goal).toBe(created.goal);
+  expect(restored.phase).toBe("EXECUTION");
+  expect(restored.currentStep).toBe(created.currentStep);
+  expect(restored.expectedAction).toBe(created.expectedAction);
+
+  await panel.getByRole("button", {name: "Продолжить задачу", exact: true}).click();
+  await expect(panel).toContainText("Активна");
+  await send(page, "Продолжай");
+  await done(page);
+  const exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("цель=Подготовить выпуск FSM");
+  await expect(exchange).toContainText("этап=EXECUTION");
+  await expect(exchange).toContainText("шаг=Реализовать хранение состояния");
+  await expect(exchange).toContainText("следующее действие=Проверить восстановление после паузы");
+  await expect(exchange.getByTestId("task-state-diagnostics")).toContainText("EXECUTION");
 });
 
 test("prompt focus uses one clean highlight around the composer", async ({

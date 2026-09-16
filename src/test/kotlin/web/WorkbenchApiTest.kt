@@ -9,8 +9,7 @@ import io.ktor.server.testing.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import org.example.agent.AssistantMemoryState
-import org.example.agent.AssistantMemoryStore
+import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.DEFAULT_STOP_SEQUENCE
 import org.example.app.ResponseMode
@@ -33,11 +32,12 @@ class WorkbenchApiTest {
             override fun load() = state
             override fun save(state: AssistantMemoryState) { this.state = state }
         },
+        taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
         answer: suspend (String, List<LlmMessage>, CompletionOptions) -> CompletionResult = { model, _, _ -> completion(model) },
     ) = WorkbenchController(AppSettings(LlmKind.OPENAI, responseMode = mode), keys,
         clientFactory = { _, _, model -> object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = answer(model, messages, options)
-        } }, assistantMemoryStore = assistantMemoryStore, persistSettings = persist)
+        } }, assistantMemoryStore = assistantMemoryStore, taskStateStore = taskStateStore, persistSettings = persist)
 
     private fun command(version: Long = 0, prompt: String = "Тест", demo: String? = null) = StartCommand(UUID.randomUUID().toString(), version, prompt, demo)
     private fun HttpRequestBuilder.localJson(body: String = "{}") {
@@ -155,6 +155,223 @@ class WorkbenchApiTest {
             assertEquals(0, failedController.state.value.settingsVersion)
             assertTrue(failedController.state.value.assistantMemory.profile.isEmpty)
         } finally { failedController.close() }
+    }
+
+    @Test
+    fun `task state API uses versions rejects invalid transitions and blocks paused llm calls`() = runBlocking {
+        val calls = mutableListOf<List<LlmMessage>>()
+        val c = controller(mode = ResponseMode.UNRESTRICTED) { model, messages, _ ->
+            calls += messages
+            completion(model)
+        }
+        val api = WorkbenchApi(c)
+        try {
+            val initial = c.state.value.toDto()
+            val configured = api.settings(SettingsCommand(
+                initial.settingsVersion,
+                initial.settings.copy(contextStrategy = "MEMORY_LAYERS", recentMessagesLimit = 4),
+            ))
+            val started = api.startTaskState(TaskStateStartCommand(
+                configured.settingsVersion,
+                "Подготовить релиз",
+                "Составить план",
+                "Перейти к реализации",
+            ))
+            val task = requireNotNull(started.taskState)
+            assertEquals("PLANNING", task.phase)
+            assertFalse(task.paused)
+            assertEquals(1, task.version)
+            assertEquals(task, apiJson.decodeFromString<TaskStateSnapshotDto>(api.taskState()).task)
+
+            val beforeInvalid = c.state.value
+            val invalid = assertFailsWith<ApiProblem> {
+                api.startTaskState(TaskStateStartCommand(
+                    started.settingsVersion,
+                    "Другая задача",
+                    "Новый шаг",
+                    "Новое действие",
+                ))
+            }
+            assertEquals(409, invalid.status)
+            assertEquals("invalid_task_transition", invalid.code)
+            assertEquals(beforeInvalid, c.state.value)
+
+            val stale = assertFailsWith<ApiProblem> { api.pauseTaskState(ContextMutationCommand(0)) }
+            assertEquals("stale_settings", stale.code)
+            val paused = api.pauseTaskState(ContextMutationCommand(started.settingsVersion))
+            assertTrue(paused.taskState!!.paused)
+            assertEquals(task.id, paused.taskState.id)
+            assertEquals(task.goal, paused.taskState.goal)
+            assertEquals(task.currentStep, paused.taskState.currentStep)
+            assertEquals(task.expectedAction, paused.taskState.expectedAction)
+
+            val blocked = assertFailsWith<ApiProblem> {
+                api.start(command(paused.settingsVersion, "Продолжай"))
+            }
+            assertEquals(409, blocked.status)
+            assertEquals("task_paused", blocked.code)
+            assertTrue(calls.isEmpty())
+            assertTrue(c.state.value.assistantMemory.shortTerm.isEmpty())
+            assertTrue(c.state.value.assistantTokenMetrics.isEmpty())
+
+            val resumed = api.resumeTaskState(ContextMutationCommand(paused.settingsVersion))
+            val progressed = api.updateTaskProgress(TaskStateProgressCommand(
+                resumed.settingsVersion,
+                "Реализовать FSM",
+                "Запустить проверки",
+            ))
+            val execution = api.advanceTaskState(ContextMutationCommand(progressed.settingsVersion))
+            assertEquals("EXECUTION", execution.taskState?.phase)
+            api.start(command(execution.settingsVersion, "Продолжай"))
+            c.awaitCurrentRequest()
+            val output = c.state.value.toDto().exchanges.last().outputs.single()
+            assertTrue(output.taskStateDiagnostics!!.applied)
+            assertEquals(execution.taskState?.id, output.taskStateDiagnostics.taskId)
+            assertEquals("EXECUTION", output.taskStateDiagnostics.phase)
+            assertContains(calls.single().first().content, "\"goal\":\"Подготовить релиз\"")
+            assertEquals("Продолжай", calls.single().last().content)
+            val taskBeforeClears = c.state.value.taskState
+            api.newDialogue(ContextMutationCommand(c.state.value.settingsVersion))
+            api.completeTask(ContextMutationCommand(c.state.value.settingsVersion))
+            api.clear(history = true)
+            api.clear(history = false)
+            assertEquals(taskBeforeClears, c.state.value.taskState)
+        } finally { c.shutdown() }
+    }
+
+    @Test
+    fun `task state routes expose matching REST snapshots and guard secret busy and persistence`() = testApplication {
+        engine { connector { host = "localhost"; port = 8080 } }
+        val client = createClient { defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") } }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val c = controller(mode = ResponseMode.UNRESTRICTED) { model, _, _ ->
+            entered.complete(Unit)
+            release.await()
+            completion(model)
+        }
+        application { workbenchModule(WorkbenchApi(c)) }
+        try {
+            var state = client.get("$base/state").state()
+            state = client.put("$base/settings") {
+                localJson(apiJson.encodeToString(SettingsCommand(
+                    state.settingsVersion,
+                    state.settings.copy(contextStrategy = "MEMORY_LAYERS"),
+                )))
+            }.state()
+            val secret = client.post("$base/assistant/task-state/start") {
+                localJson(apiJson.encodeToString(TaskStateStartCommand(
+                    state.settingsVersion,
+                    "Не сохранять test-secret-key",
+                    "Проверить данные",
+                    "Исправить ввод",
+                )))
+            }
+            assertEquals(HttpStatusCode.BadRequest, secret.status)
+            assertFalse(secret.bodyAsText().contains("test-secret-key"))
+
+            state = client.post("$base/assistant/task-state/start") {
+                localJson(apiJson.encodeToString(TaskStateStartCommand(
+                    state.settingsVersion,
+                    "Цель API",
+                    "Шаг API",
+                    "Действие API",
+                )))
+            }.state()
+            val standalone = apiJson.decodeFromString<TaskStateSnapshotDto>(
+                client.get("$base/assistant/task-state").bodyAsText(),
+            )
+            assertEquals(state.taskState, standalone.task)
+            withTimeout(2_000) {
+                client.prepareGet("$base/events").execute { events ->
+                    val channel = events.bodyAsChannel()
+                    var snapshot: StateDto? = null
+                    while (snapshot == null) {
+                        val line = channel.readUTF8Line() ?: error("SSE closed")
+                        if (line.startsWith("data:")) {
+                            snapshot = apiJson.decodeFromString(line.removePrefix("data:").trim())
+                        }
+                    }
+                    assertEquals(state.taskState, snapshot.taskState)
+                    channel.cancel()
+                }
+            }
+
+            client.post("$base/operations") {
+                localJson(apiJson.encodeToString(command(state.settingsVersion, "Работа")))
+            }
+            withTimeout(2_000) { entered.await() }
+            val busy = client.post("$base/assistant/task-state/pause") {
+                localJson(apiJson.encodeToString(ContextMutationCommand(state.settingsVersion)))
+            }
+            assertEquals(HttpStatusCode.Conflict, busy.status)
+            assertEquals("busy", apiJson.decodeFromString<ErrorDto>(busy.bodyAsText()).code)
+            release.complete(Unit)
+            withTimeout(2_000) { c.state.first { !it.isRunning } }
+
+            val reset = client.post("$base/assistant/task-state/reset") {
+                localJson(apiJson.encodeToString(ContextMutationCommand(c.state.value.settingsVersion)))
+            }.state()
+            assertNull(reset.taskState)
+        } finally { c.shutdown() }
+
+        val failingStore = object : TaskStateStore {
+            override fun load(): AgentTaskState? = null
+            override fun save(state: AgentTaskState?) { throw IOException("disk full") }
+        }
+        val failed = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            taskStateStore = failingStore,
+        )
+        try {
+            val api = WorkbenchApi(failed)
+            val configured = api.settings(SettingsCommand(
+                0,
+                failed.state.value.settings.toDto().copy(contextStrategy = "MEMORY_LAYERS"),
+            ))
+            val problem = assertFailsWith<ApiProblem> {
+                api.startTaskState(TaskStateStartCommand(
+                    configured.settingsVersion,
+                    "Цель",
+                    "Шаг",
+                    "Действие",
+                ))
+            }
+            assertEquals(500, problem.status)
+            assertEquals("persistence", problem.code)
+            assertEquals(configured.settingsVersion, failed.state.value.settingsVersion)
+            assertNull(failed.state.value.taskState)
+        } finally { failed.shutdown() }
+    }
+
+    @Test
+    fun `new controller restores task state without touching assistant memory`() {
+        val directory = Files.createTempDirectory("controller-task-state")
+        try {
+            val store = JsonTaskStateStore(directory.resolve("task.json"))
+            val first = controller(mode = ResponseMode.UNRESTRICTED, taskStateStore = store)
+            val api = WorkbenchApi(first)
+            val configured = api.settings(SettingsCommand(
+                0,
+                first.state.value.settings.toDto().copy(contextStrategy = "MEMORY_LAYERS"),
+            ))
+            val saved = api.startTaskState(TaskStateStartCommand(
+                configured.settingsVersion,
+                "Пережить перезапуск",
+                "Сохранить JSON",
+                "Восстановить controller",
+            )).taskState
+            first.close()
+
+            val restored = controller(mode = ResponseMode.UNRESTRICTED, taskStateStore = store)
+            try {
+                assertEquals(saved, restored.state.value.toDto().taskState)
+                assertTrue(restored.state.value.assistantMemory.shortTerm.isEmpty())
+                assertTrue(restored.state.value.assistantMemory.working.isEmpty())
+            } finally { restored.close() }
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
     }
 
     @Test

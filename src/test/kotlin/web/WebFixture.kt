@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.example.agent.JsonAssistantMemoryStore
 import org.example.agent.JsonContextStateStore
 import org.example.agent.JsonConversationHistoryStore
+import org.example.agent.JsonTaskStateStore
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
@@ -26,6 +27,7 @@ fun main() {
         historyStore = JsonConversationHistoryStore(directory.resolve(".llm-history.json")),
         contextStateStore = JsonContextStateStore(directory.resolve(".llm-context-state.json")),
         assistantMemoryStore = JsonAssistantMemoryStore(directory.resolve(".llm-assistant-memory.json")),
+        taskStateStore = JsonTaskStateStore(directory.resolve(".llm-task-state.json")),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -65,11 +67,15 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
+        fun taskField(name: String) = Regex("\\\"$name\\\":\\\"([^\\\"]*)\\\"")
+            .find(assistantProfile)?.groupValues?.get(1).orEmpty()
         val content = when {
             messages.firstOrNull()?.content?.contains("key-value memory") == true -> {
                 val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
                 if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"
             }
+            "Продолжай" in prompt && "TASK STATE DATA" in assistantProfile ->
+                "Сохранённая задача: цель=${taskField("goal")}; этап=${taskField("phase")}; шаг=${taskField("currentStep")}; следующее действие=${taskField("expectedAction")}."
             "Ответь таблицей" in prompt -> "| Формат | Ответ |\n|---|---|\n| Явный запрос | Таблица |"
             "\"responseFormat\":\"Маркированный список\"" in assistantProfile ->
                 "- Резервная копия хранит запасной набор данных.\n- Проверяйте восстановление регулярно."
