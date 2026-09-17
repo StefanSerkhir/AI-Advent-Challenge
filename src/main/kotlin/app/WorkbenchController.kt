@@ -68,6 +68,7 @@ data class WorkbenchState(
     val tokenTotals: Map<ResponseVariant, ConversationTokenTotals> = emptyMap(),
     val context: ContextDiagnostics,
     val assistantMemory: AssistantMemoryState = AssistantMemoryState(),
+    val assistantInvariants: AssistantInvariantState = AssistantInvariantState(),
     val taskState: AgentTaskState? = null,
     val assistantTokenMetrics: List<TurnTokenMetrics> = emptyList(),
     val assistantTokenTotals: ConversationTokenTotals = ConversationTokenTotals(scope = "assistant_memory"),
@@ -88,6 +89,7 @@ class WorkbenchController(
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
     private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
     assistantMemoryStore: AssistantMemoryStore = InMemoryAssistantMemoryStore(),
+    assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
     taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
@@ -107,11 +109,19 @@ class WorkbenchController(
         store = assistantMemoryStore,
         sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
     )
+    private val assistantInvariantManager = AssistantInvariantManager(
+        store = assistantInvariantStore,
+        sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
+    )
     private val taskStateManager = TaskStateManager(
         store = taskStateStore,
         sensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
     )
-    private val assistantAgent = AssistantAgent(assistantMemoryManager, taskStateProvider = taskStateManager::state) {
+    private val assistantAgent = AssistantAgent(
+        assistantMemoryManager,
+        taskStateProvider = taskStateManager::state,
+        invariantStateProvider = assistantInvariantManager::state,
+    ) {
         requestClient.get() ?: error("Клиент запроса не инициализирован")
     }
     private val promptRunner: PromptRunner = PromptRunner(
@@ -138,6 +148,7 @@ class WorkbenchController(
             tokenTotals = promptRunner.tokenTotalsSnapshot(),
             context = promptRunner.contextDiagnostics(initialSettings),
             assistantMemory = assistantMemoryManager.state(),
+            assistantInvariants = assistantInvariantManager.state(),
             taskState = taskStateManager.state(),
             assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
             assistantTokenTotals = assistantAgent.tokenTotalsSnapshot(),
@@ -145,6 +156,7 @@ class WorkbenchController(
                 initialWarning,
                 promptRunner.historyLoadWarning,
                 assistantMemoryManager.loadWarning,
+                assistantInvariantManager.loadWarning,
                 taskStateManager.loadWarning,
             )
                 .takeIf(List<String>::isNotEmpty)
@@ -187,8 +199,9 @@ class WorkbenchController(
             "Введите непустой API-ключ без переводов строки (до 4096 символов)."
         }
         require(!assistantMemoryManager.containsSensitiveValue(normalized) &&
+            !assistantInvariantManager.containsSensitiveValue(normalized) &&
             !taskStateManager.containsSensitiveValue(normalized)) {
-            "API-ключ совпадает с данными памяти, профиля или задачи. Сначала удалите это значение."
+            "API-ключ совпадает с данными памяти, профиля, инвариантов или задачи. Сначала удалите это значение."
         }
         val settings = _state.value.settings
         val kind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) LlmKind.OPENAI else settings.llmKind
@@ -303,6 +316,24 @@ class WorkbenchController(
     }
 
     @Synchronized
+    fun addAssistantInvariant(draft: AssistantInvariantDraft): Boolean = mutateAssistantInvariants {
+        assistantInvariantManager.add(draft)
+        "Инвариант добавлен и будет обязателен для следующего ответа ассистента."
+    }
+
+    @Synchronized
+    fun updateAssistantInvariant(id: String, draft: AssistantInvariantDraft): Boolean = mutateAssistantInvariants {
+        assistantInvariantManager.update(id, draft)
+        "Инвариант обновлён."
+    }
+
+    @Synchronized
+    fun deleteAssistantInvariant(id: String): Boolean = mutateAssistantInvariants {
+        assistantInvariantManager.delete(id)
+        "Инвариант удалён."
+    }
+
+    @Synchronized
     fun startTaskState(draft: NewTaskDraft): Boolean = mutateTaskState {
         taskStateManager.start(draft)
         "Новая задача создана на этапе PLANNING."
@@ -371,6 +402,27 @@ class WorkbenchController(
             true
         } catch (_: TaskStatePersistenceException) {
             publish { it.copy(notice = UiNotice(TASK_STATE_SAVE_ERROR, NoticeKind.ERROR)) }
+            false
+        }
+    }
+
+    private inline fun mutateAssistantInvariants(action: () -> String): Boolean {
+        if (_state.value.isRunning || closed) return false
+        val settings = _state.value.settings
+        require(settings.responseMode == ResponseMode.UNRESTRICTED &&
+            settings.contextStrategy == ContextStrategy.MEMORY_LAYERS) {
+            "Инварианты доступны только Простому агенту со стратегией Слои памяти."
+        }
+        return try {
+            val notice = action()
+            publish { it.copy(
+                assistantInvariants = assistantInvariantManager.state(),
+                settingsVersion = it.settingsVersion + 1,
+                notice = UiNotice(notice, NoticeKind.INFO),
+            ) }
+            true
+        } catch (_: AssistantInvariantPersistenceException) {
+            publish { it.copy(notice = UiNotice(ASSISTANT_INVARIANTS_SAVE_ERROR, NoticeKind.ERROR)) }
             false
         }
     }
@@ -531,6 +583,7 @@ class WorkbenchController(
                                 contextStrategy = ContextStrategy.MEMORY_LAYERS,
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
                                 taskStateDiagnostics = response.taskStateDiagnostics,
+                                assistantInvariantDiagnostics = response.invariantDiagnostics,
                             ))
                             publish { it.copy(
                                 assistantMemory = assistantMemoryManager.state(),
@@ -545,6 +598,7 @@ class WorkbenchController(
                                 contextStrategy = ContextStrategy.MEMORY_LAYERS,
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
                                 taskStateDiagnostics = response.taskStateDiagnostics,
+                                assistantInvariantDiagnostics = response.invariantDiagnostics,
                             )))
                         } else {
                             RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))
@@ -618,6 +672,7 @@ class WorkbenchController(
                         tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
                         context = promptRunner.contextDiagnostics(it.settings),
                         assistantMemory = assistantMemoryManager.state(),
+                        assistantInvariants = assistantInvariantManager.state(),
                         taskState = taskStateManager.state(),
                         assistantTokenMetrics = assistantAgent.tokenMetricsSnapshot(),
                         assistantTokenTotals = assistantAgent.tokenTotalsSnapshot()) }
@@ -717,6 +772,7 @@ internal fun userFacingError(error: Throwable, secrets: Collection<String> = emp
     val message = when (error) {
         is HistoryPersistenceException -> HISTORY_SAVE_ERROR
         is AssistantMemoryPersistenceException -> ASSISTANT_MEMORY_SAVE_ERROR
+        is AssistantInvariantPersistenceException -> ASSISTANT_INVARIANTS_SAVE_ERROR
         is TaskStatePersistenceException -> TASK_STATE_SAVE_ERROR
         is LlmApiException -> error.message ?: "Провайдер вернул ошибку."
         is HttpRequestTimeoutException -> "Превышено время ожидания ответа. Попробуйте ещё раз."
@@ -738,6 +794,9 @@ private const val ASSISTANT_MEMORY_SAVE_ERROR =
 
 private const val TASK_STATE_SAVE_ERROR =
     "Не удалось сохранить состояние задачи. Прежнее состояние сохранено; проверьте права доступа к файлу."
+
+private const val ASSISTANT_INVARIANTS_SAVE_ERROR =
+    "Не удалось сохранить инварианты ассистента. Прежнее состояние сохранено; проверьте права доступа к файлу."
 
 fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "DeepSeek"

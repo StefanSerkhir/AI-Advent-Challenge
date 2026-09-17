@@ -1,4 +1,12 @@
-import type {AssistantProfileInput, MemoryLayer, Provider, Settings, StartCommand, State} from "./types";
+import type {
+    AssistantInvariantCategory,
+    AssistantProfileInput,
+    MemoryLayer,
+    Provider,
+    Settings,
+    StartCommand,
+    State
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -71,6 +79,12 @@ export const api = {
     request<State>("/assistant/task/complete", "POST", { expectedSettingsVersion }),
   saveProfile: (profile: AssistantProfileInput, expectedSettingsVersion: number) =>
     request<State>("/assistant/profile", "PUT", { profile, expectedSettingsVersion }),
+  addInvariant: (category: AssistantInvariantCategory, text: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/invariants", "POST", { category, text, expectedSettingsVersion }),
+  updateInvariant: (id: string, category: AssistantInvariantCategory, text: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/invariants", "PUT", { id, category, text, expectedSettingsVersion }),
+  deleteInvariant: (id: string, expectedSettingsVersion: number) =>
+    request<State>("/assistant/invariants", "DELETE", { id, expectedSettingsVersion }),
   startTaskState: (goal: string, currentStep: string, expectedAction: string, expectedSettingsVersion: number) =>
     request<State>("/assistant/task-state/start", "POST", { goal, currentStep, expectedAction, expectedSettingsVersion }),
   updateTaskProgress: (currentStep: string, expectedAction: string, expectedSettingsVersion: number) =>

@@ -68,6 +68,7 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             get("/state") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             get("/assistant/memory") { call.respondText(api.memory(), ContentType.Application.Json) }
             get("/assistant/profile") { call.respondText(api.profile(), ContentType.Application.Json) }
+            get("/assistant/invariants") { call.respondText(api.invariants(), ContentType.Application.Json) }
             get("/assistant/task-state") { call.respondText(api.taskState(), ContentType.Application.Json) }
             get("/settings") { call.respondText(api.snapshot(), ContentType.Application.Json) }
             put("/settings") { call.respondText(api.snapshot(api.settings(call.receive<SettingsCommand>())), ContentType.Application.Json) }
@@ -81,6 +82,9 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             post("/assistant/memory/clear") { call.respondText(api.snapshot(api.clearMemory(call.receive<MemoryLayerCommand>())), ContentType.Application.Json) }
             put("/assistant/memory/enabled") { call.respondText(api.snapshot(api.setMemoryEnabled(call.receive<MemoryEnabledCommand>())), ContentType.Application.Json) }
             put("/assistant/profile") { call.respondText(api.snapshot(api.saveProfile(call.receive<AssistantProfileCommand>())), ContentType.Application.Json) }
+            post("/assistant/invariants") { call.respondText(api.snapshot(api.addInvariant(call.receive<AssistantInvariantAddCommand>())), ContentType.Application.Json) }
+            put("/assistant/invariants") { call.respondText(api.snapshot(api.updateInvariant(call.receive<AssistantInvariantUpdateCommand>())), ContentType.Application.Json) }
+            delete("/assistant/invariants") { call.respondText(api.snapshot(api.deleteInvariant(call.receive<AssistantInvariantDeleteCommand>())), ContentType.Application.Json) }
             post("/assistant/dialogue/new") { call.respondText(api.snapshot(api.newDialogue(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task/complete") { call.respondText(api.snapshot(api.completeTask(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task-state/start") { call.respondText(api.snapshot(api.startTaskState(call.receive<TaskStateStartCommand>())), ContentType.Application.Json) }

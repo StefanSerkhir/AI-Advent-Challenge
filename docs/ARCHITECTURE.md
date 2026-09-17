@@ -91,6 +91,7 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 - единственной активной worker coroutine;
 - `PromptRunner` для обычных вариантов и трёх старых context strategies;
 - отдельными `AssistantMemoryManager` и `AssistantAgent`;
+- отдельным `AssistantInvariantManager` и версионированной коллекцией обязательных правил;
 - отдельным `TaskStateManager` и состоянием задачи Простого агента;
 - специализированными runners экспериментов;
 - монотонными номерами exchange/revision и streaming snapshots.
@@ -143,16 +144,17 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 Сборка запроса выполняется так:
 
-1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`; непустой профиль и
-   активная незавершённая задача добавляются в неё как отдельные детерминированные
-   JSON-блоки недоверенных данных;
+1. системная инструкция `ASSISTANT_SYSTEM_INSTRUCTIONS`; непустая коллекция
+   инвариантов, профиль и активная незавершённая задача добавляются в неё как
+   отдельные детерминированные JSON-блоки с экранированными значениями;
 2. включённый непустой `LONG_TERM`;
 3. включённый непустой `WORKING`;
 4. включённый непустой `SHORT_TERM`;
 5. текущий prompt пользователя.
 
 Порядок приоритетов зафиксирован в system instructions: безопасность и системные
-правила → явные требования текущего prompt → профиль → остальные слои. Поэтому
+правила → инварианты → явные требования текущего prompt → task state → профиль →
+остальные слои. Поэтому
 текущий запрос может временно переопределить стиль/формат, не изменяя профиль.
 Profile и memory blocks помечаются как недоверенные пользовательские данные.
 Переключатели слоёв не влияют на профиль. `AssistantAgent` затем передаёт сообщения
@@ -171,10 +173,14 @@ sequenceDiagram
     C->>A: respond(prompt, settings)
     A->>M: prepare(enabled layers, short-term limit)
     A->>L: stream(active messages)
-    L-->>A: deltas + CompletionFinished + usage
-    A->>A: validate usage and compute metrics/cost
-    A->>M: commitShortTermPair(user, assistant)
-    M->>M: atomic persistent save
+    L-->>A: buffered deltas + CompletionFinished + usage
+    A->>A: validate invariant receipt, usage and metrics/cost
+    alt receipt accepted or no invariants
+        A->>M: commitShortTermPair(user, assistant)
+        M->>M: atomic persistent save
+    else receipt rejected
+        A->>A: replace raw output with safe blocked response
+    end
     A-->>C: response + actual memory diagnostics
     C-->>C: publish final StateFlow snapshot
 ```
@@ -186,6 +192,47 @@ sequenceDiagram
 каждого слоя — `enabled`, `usedCount` и `usedEntryIds`. Полные поля профиля не
 дублируются. Это диагностика фактически подготовленного/сокращённого запроса, а не
 текущего состояния sidebar после ответа.
+
+### Инварианты ассистента
+
+`AssistantInvariantManager.kt` — отдельная доменная подсистема только для
+`UNRESTRICTED + MEMORY_LAYERS`. Она не входит в `AssistantMemoryState`, профиль,
+FSM или старый `ContextManager`. `AssistantInvariantState` содержит собственную
+монотонную версию и явно созданные записи со стабильным ID, категорией
+`ARCHITECTURE`, `TECH_DECISION`, `STACK`, `BUSINESS_RULE` или `OTHER`, текстом и
+timestamps. Добавление, редактирование и удаление являются единственными способами
+изменить коллекцию; диалог и ответы модели её не пополняют.
+
+Непустой snapshot включается в первое system message как экранированный JSON-блок
+`ASSISTANT INVARIANTS` до профиля и task state. Контракт требует до ответа
+проверить весь запрос и все предлагаемые действия по всем правилам. Инструкции
+«игнорировать», сделать исключение или изменить приоритет не действуют. Значения
+правил являются конфигурационными данными и не могут менять системную безопасность,
+формат блока или порядок приоритетов. При конфликте модель отказывает только в
+несовместимой части, называет ID и категории, объясняет прямую причину и предлагает
+совместимую альтернативу. Отдельного классифицирующего LLM-вызова и production
+keyword-логики нет.
+
+Для каждого такого вызова `AssistantAgent` обрамляет текущий prompt как
+экранированные недоверенные JSON-данные и требует один структурированный ответ:
+preflight-поля с версией snapshot, полным упорядоченным списком проверенных ID,
+конфликтующими ID и решением `COMPATIBLE`/`CONFLICT`, пользовательское поле
+`answer` и вложенный postflight audit готового текста. `OpenAiLlmClient` передаёт
+схему нативно через `response_format=json_schema`; совместимый transport без такой
+возможности сохраняет prompt-контракт и тот же строгий локальный parser. Пока поток
+не завершён, сырой текст не публикуется. Backend сверяет схему, версию и ID и только
+затем публикует `answer`. Отсутствующий, повреждённый или несогласованный объект
+приводит к fail-closed
+ответу: сырой output не раскрывается, пара не фиксируется в `SHORT_TERM`, а
+диагностика получает `responseBlocked=true`. Семантическую классификацию по
+ключевым словам backend не выполняет; дополнительного LLM-вызова нет.
+
+System message и текущий prompt являются обязательным контекстом для
+`ContextPreparer`: `DROP_OLDEST` их не удаляет, а если они сами не помещаются,
+существующий preflight локально отклоняет запрос. `AssistantInvariantDiagnostics`
+сохраняется с конкретным output и содержит `applied`, версию snapshot, количество,
+ID применённых правил и `responseBlocked`. При пустом списке блок отсутствует,
+`applied=false`, а обычный streaming pipeline остаётся прежним.
 
 ### Машина состояния задачи
 
@@ -214,9 +261,13 @@ JSON-блок `TASK STATE DATA`. Блок помечен как недовере
 | `.llm-history.json` | `JsonConversationHistoryStore` | Обычные завершённые exchanges и token metrics |
 | `.llm-context-state.json` | `JsonContextStateStore` | Состояния `SLIDING_WINDOW`, `STICKY_FACTS`, `BRANCHING` |
 | `.llm-assistant-memory.json` | `JsonAssistantMemoryStore` | v2: профиль и три слоя, записи, роли/пары, timestamps и enable flags; v1 читается с явной миграцией в пустой профиль |
+| `.llm-assistant-invariants.json` | `JsonAssistantInvariantStore` | v1: версия коллекции и отдельные обязательные правила с ID, категориями и timestamps |
 | `.llm-task-state.json` | `JsonTaskStateStore` | v1: отдельная текущая задача FSM либо явное пустое состояние |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
+Для инвариантов commit store предшествует изменению in-memory state и публикации
+`WorkbenchState`; ошибка записи сохраняет прежнюю коллекцию и обе версии. Тексты
+проверяются на известные API-ключи, а новый ключ — на присутствие в инвариантах.
 
 Очистки намеренно разделены:
 
@@ -226,6 +277,7 @@ JSON stores используют UTF-8, номер версии, temporary file 
 - «Завершить задачу» очищает только `WORKING`;
 - обе команды сохраняют профиль; очистка профиля — явное сохранение пяти пустых полей;
 - ни одна из этих очисток не меняет Task State Machine; для неё существует отдельный reset;
+- инварианты не меняются ни одной очисткой памяти, истории, task state или карточек;
 - очистка карточек результатов не затрагивает историю и память.
 
 ## HTTP API и согласованность
@@ -235,7 +287,7 @@ JSON stores используют UTF-8, номер версии, temporary file 
 Ключевые правила:
 
 - каждый state snapshot имеет монотонный `revision`;
-- `settingsVersion` растёт при настройках, ключе и мутациях памяти;
+- `settingsVersion` растёт при настройках, ключе, мутациях памяти, FSM и инвариантов;
 - изменяющая команда, зависящая от настроек, передаёт `expectedSettingsVersion`;
 - stale версия получает `409 stale_settings`, после чего клиент обновляет state;
 - `POST /api/operations` принимает новый `requestId`; повтор идентичной команды не запускает второй платный вызов;
@@ -247,7 +299,10 @@ JSON stores используют UTF-8, номер версии, temporary file 
 
 ## Frontend
 
-`App.tsx` собирает layout, `useWorkbench` держит последний принятый state и действия, `Sidebar` показывает только настройки активного режима, `Results` отображает streaming/final outputs и метрики, `MemoryLayers` управляет тремя слоями.
+`App.tsx` собирает layout, `useWorkbench` держит последний принятый state и действия,
+`Sidebar` показывает только настройки активного режима, `Results` отображает
+streaming/final outputs, метрики и диагностику инвариантов, `MemoryLayers`
+управляет тремя слоями, а `AssistantInvariants` — отдельной коллекцией правил.
 
 `useWorkbench` принимает snapshot, только если его `revision` не старее текущего. SSE является основным каналом состояния; REST-ответ после команды помогает быстро синхронизироваться. На неопределённой сетевой ошибке start command сохраняется с исходным `requestId`, чтобы проверка отправки не создала повторный платный запрос. `TaskStatePanel` показывает FSM только рядом со слоями памяти, скрывает недопустимые переходы и оставляет resume доступным во время паузы.
 
@@ -256,6 +311,7 @@ JSON stores используют UTF-8, номер версии, temporary file 
 - branch controls — только `strategy === "BRANCHING"`;
 - memory controls — только `strategy === "MEMORY_LAYERS"` в режиме `unrestricted`;
 - task-state controls — только там же; paused task блокирует composer, но не resume;
+- invariant controls — только там же; активная операция блокирует их мутации;
 - настройки, не используемые текущим режимом, скрываются;
 - во время активной операции мутации заблокированы и frontend, и backend.
 
@@ -298,6 +354,8 @@ API-ключ сохраняется только в локальном `.env`; A
 - тесты `agent` проверяют transactional history, старые strategies, memory layers и stores;
 - `TaskStateManagerTest` проверяет граф переходов, pause/resume, persistence,
   секреты и отсутствие неявных изменений при сбое/отмене stream;
+- `AssistantInvariantManagerTest` проверяет CRUD/version, v1 persistence,
+  fail-closed load, секреты, порядок контекста, диагностику и конфликтные fake-ответы;
 - тесты `app` проверяют runners, controller concurrency, persistence и demos;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.

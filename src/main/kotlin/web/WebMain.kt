@@ -3,10 +3,7 @@ package org.example.web
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import kotlinx.coroutines.runBlocking
-import org.example.agent.JsonAssistantMemoryStore
-import org.example.agent.JsonContextStateStore
-import org.example.agent.JsonConversationHistoryStore
-import org.example.agent.JsonTaskStateStore
+import org.example.agent.*
 import org.example.app.AppBootstrap
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfig
@@ -26,6 +23,7 @@ fun main() {
         historyStore = JsonConversationHistoryStore(),
         contextStateStore = JsonContextStateStore(),
         assistantMemoryStore = JsonAssistantMemoryStore(),
+        assistantInvariantStore = JsonAssistantInvariantStore(),
         taskStateStore = JsonTaskStateStore(),
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)

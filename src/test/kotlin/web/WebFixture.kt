@@ -6,10 +6,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
-import org.example.agent.JsonAssistantMemoryStore
-import org.example.agent.JsonContextStateStore
-import org.example.agent.JsonConversationHistoryStore
-import org.example.agent.JsonTaskStateStore
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
@@ -27,6 +28,7 @@ fun main() {
         historyStore = JsonConversationHistoryStore(directory.resolve(".llm-history.json")),
         contextStateStore = JsonContextStateStore(directory.resolve(".llm-context-state.json")),
         assistantMemoryStore = JsonAssistantMemoryStore(directory.resolve(".llm-assistant-memory.json")),
+        assistantInvariantStore = JsonAssistantInvariantStore(directory.resolve(".llm-assistant-invariants.json")),
         taskStateStore = JsonTaskStateStore(directory.resolve(".llm-task-state.json")),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
@@ -69,13 +71,25 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         fun taskField(name: String) = Regex("\\\"$name\\\":\\\"([^\\\"]*)\\\"")
             .find(assistantProfile)?.groupValues?.get(1).orEmpty()
-        val content = when {
+        val invariantId = Regex("\\\"id\\\":\\\"([^\\\"]+)\\\"")
+            .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
+        val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
+            .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
+        val answer = when {
             messages.firstOrNull()?.content?.contains("key-value memory") == true -> {
                 val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
                 if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"
             }
             "Продолжай" in prompt && "TASK STATE DATA" in assistantProfile ->
                 "Сохранённая задача: цель=${taskField("goal")}; этап=${taskField("phase")}; шаг=${taskField("currentStep")}; следующее действие=${taskField("expectedAction")}."
+            "[[invalid-invariant-receipt]]" in prompt ->
+                "UNSAFE MODEL OUTPUT: invariant protocol was ignored"
+            "endpoint /health" in prompt && "ASSISTANT INVARIANTS" in assistantProfile ->
+                "Endpoint `/health` добавлен на Kotlin и возвращает статус приложения."
+            "Python" in prompt && "ASSISTANT INVARIANTS" in assistantProfile && "endpoint проверки здоровья" in prompt ->
+                "Python-часть выполнить нельзя: конфликтующий инвариант $invariantId ($invariantCategory) требует сохранить Kotlin/JVM 21, поэтому смена стека нарушает правило. Совместимая часть выполнена: endpoint проверки здоровья добавлен на Kotlin."
+            "Python" in prompt && "ASSISTANT INVARIANTS" in assistantProfile ->
+                "Запрос в предложенном виде выполнить нельзя. Конфликтующий инвариант: $invariantId ($invariantCategory). Python напрямую нарушает обязательное правило сохранить backend на Kotlin/JVM 21. Совместимая альтернатива — реализовать изменение в текущем Kotlin-стеке."
             "Ответь таблицей" in prompt -> "| Формат | Ответ |\n|---|---|\n| Явный запрос | Таблица |"
             "\"responseFormat\":\"Маркированный список\"" in assistantProfile ->
                 "- Резервная копия хранит запасной набор данных.\n- Проверяйте восстановление регулярно."
@@ -109,6 +123,29 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             "Требования к ответу:" in prompt -> "- Кубит описывает квантовое состояние.\n- Алгоритм меняет вероятности измерений.\n- Измерение возвращает классический результат."
             else -> "## Ответ\n\nКвантовый компьютер использует **кубиты** и квантовые операции. Интерференция помогает усилить вероятность нужного результата.\n\n| Подход | Контекст |\n|---|---|\n| Текущий запрос | ${messages.size} сообщений |\n\nФормула: \\( E = mc^2 \\)."
         }
+        val content = if ("ASSISTANT INVARIANTS" in assistantProfile && "[[invalid-invariant-receipt]]" !in prompt) {
+            val invariantBlock = assistantProfile.substringAfter("ASSISTANT INVARIANTS", "")
+                .substringBefore("END ASSISTANT INVARIANTS")
+            val stateVersion = Regex("\\\"stateVersion\\\":(\\d+)")
+                .find(invariantBlock)?.groupValues?.get(1)?.toLong() ?: 0L
+            val ids = Regex("\\\"id\\\":\\\"([^\\\"]+)\\\"")
+                .findAll(invariantBlock).map { it.groupValues[1] }.toList()
+            val conflicts = if ("Python" in prompt) ids else emptyList()
+            val receipt = buildJsonObject {
+                put("stateVersion", stateVersion)
+                put("checkedInvariantIds", buildJsonArray { ids.forEach(::add) })
+                put("conflictingInvariantIds", buildJsonArray { conflicts.forEach(::add) })
+                put("decision", if (conflicts.isEmpty()) "COMPATIBLE" else "CONFLICT")
+                put("answer", answer)
+                put("audit", buildJsonObject {
+                    put("stateVersion", stateVersion)
+                    put("checkedInvariantIds", buildJsonArray { ids.forEach(::add) })
+                    put("violatedInvariantIds", buildJsonArray { })
+                    put("answerCompliant", true)
+                })
+            }
+            receipt.toString()
+        } else answer
         return CompletionResult(content, if (options.maxTokens != null && options.maxTokens < 50) "length" else "stop",
             TokenUsage(120, 80, 200, cachedPromptTokens = 20, cacheWritePromptTokens = 5, reasoningTokens = 10),
             if (model == "gpt-5.6-luna" && options.temperature != null) "gpt-4.1-mini" else model)

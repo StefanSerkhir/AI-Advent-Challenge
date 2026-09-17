@@ -32,12 +32,14 @@ class WorkbenchApiTest {
             override fun load() = state
             override fun save(state: AssistantMemoryState) { this.state = state }
         },
+        assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
         taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
         answer: suspend (String, List<LlmMessage>, CompletionOptions) -> CompletionResult = { model, _, _ -> completion(model) },
     ) = WorkbenchController(AppSettings(LlmKind.OPENAI, responseMode = mode), keys,
         clientFactory = { _, _, model -> object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = answer(model, messages, options)
-        } }, assistantMemoryStore = assistantMemoryStore, taskStateStore = taskStateStore, persistSettings = persist)
+        } }, assistantMemoryStore = assistantMemoryStore, assistantInvariantStore = assistantInvariantStore,
+        taskStateStore = taskStateStore, persistSettings = persist)
 
     private fun command(version: Long = 0, prompt: String = "Тест", demo: String? = null) = StartCommand(UUID.randomUUID().toString(), version, prompt, demo)
     private fun HttpRequestBuilder.localJson(body: String = "{}") {
@@ -87,6 +89,176 @@ class WorkbenchApiTest {
             assertEquals(0, completed.assistantMemory.layers.first { it.layer == "WORKING" }.count)
             assertEquals(1, completed.assistantMemory.layers.first { it.layer == "LONG_TERM" }.count)
         } finally { c.close() }
+    }
+
+    @Test
+    fun `assistant invariant routes provide versioned CRUD diagnostics validation and secret protection`() = testApplication {
+        engine { connector { host = "localhost"; port = 8080 } }
+        val calls = mutableListOf<List<LlmMessage>>()
+        val c = controller(mode = ResponseMode.UNRESTRICTED) { model, messages, _ ->
+            calls += messages
+            invariantAwareCompletion(model, messages, "Совместимый Kotlin-ответ")
+        }
+        application { workbenchModule(WorkbenchApi(c)) }
+        val client = createClient { defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") } }
+        try {
+            val configured = WorkbenchApi(c).settings(SettingsCommand(
+                0,
+                c.state.value.settings.toDto().copy(contextStrategy = "MEMORY_LAYERS"),
+            ))
+            val empty = apiJson.decodeFromString<AssistantInvariantStateDto>(
+                client.get("$base/assistant/invariants").bodyAsText(),
+            )
+            assertEquals(0, empty.version)
+            assertTrue(empty.invariants.isEmpty())
+
+            val add = client.post("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantAddCommand(
+                    configured.settingsVersion,
+                    "STACK",
+                    "Backend должен оставаться на Kotlin/JVM 21",
+                )))
+            }
+            assertEquals(HttpStatusCode.OK, add.status)
+            val added = add.state()
+            assertEquals(configured.settingsVersion + 1, added.settingsVersion)
+            assertEquals(1, added.assistantInvariants.version)
+            val invariant = added.assistantInvariants.invariants.single()
+            assertEquals("STACK", invariant.category)
+            val collidingKey = client.put("$base/key") {
+                localJson(apiJson.encodeToString(KeyCommand(added.settingsVersion, "OPENAI", "Kotlin/JVM 21")))
+            }
+            assertEquals(HttpStatusCode.BadRequest, collidingKey.status)
+            assertFalse(collidingKey.bodyAsText().contains("Kotlin/JVM 21"))
+
+            val stale = client.put("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantUpdateCommand(
+                    configured.settingsVersion,
+                    invariant.id,
+                    "ARCHITECTURE",
+                    "stale",
+                )))
+            }
+            assertEquals(HttpStatusCode.Conflict, stale.status)
+            assertEquals("stale_settings", apiJson.decodeFromString<ErrorDto>(stale.bodyAsText()).code)
+
+            val invalid = client.post("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantAddCommand(added.settingsVersion, "UNKNOWN", "bad")))
+            }
+            assertEquals(HttpStatusCode.BadRequest, invalid.status)
+            val secret = client.post("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantAddCommand(
+                    added.settingsVersion,
+                    "OTHER",
+                    "test-secret-key",
+                )))
+            }
+            assertEquals(HttpStatusCode.BadRequest, secret.status)
+            assertFalse(secret.bodyAsText().contains("test-secret-key"))
+
+            val updatedResponse = client.put("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantUpdateCommand(
+                    added.settingsVersion,
+                    invariant.id,
+                    "TECH_DECISION",
+                    "Backend остаётся на Kotlin/JVM 21",
+                )))
+            }
+            val updated = updatedResponse.state()
+            assertEquals(2, updated.assistantInvariants.version)
+            assertEquals("TECH_DECISION", updated.assistantInvariants.invariants.single().category)
+
+            WorkbenchApi(c).start(command(updated.settingsVersion, "Добавь health endpoint"))
+            c.awaitCurrentRequest()
+            val afterCall = c.state.value.toDto()
+            val diagnostics = requireNotNull(afterCall.exchanges.last().outputs.single().assistantInvariantDiagnostics)
+            assertTrue(diagnostics.applied)
+            assertFalse(diagnostics.responseBlocked)
+            assertEquals(2, diagnostics.stateVersion)
+            assertEquals(listOf(invariant.id), diagnostics.appliedInvariantIds)
+            assertContains(calls.single().first().content, "ASSISTANT INVARIANTS")
+            assertContains(calls.single().last().content, "Добавь health endpoint")
+
+            val preservedVersion = afterCall.assistantInvariants.version
+            WorkbenchApi(c).newDialogue(ContextMutationCommand(afterCall.settingsVersion))
+            WorkbenchApi(c).completeTask(ContextMutationCommand(c.state.value.settingsVersion))
+            WorkbenchApi(c).clear(history = true)
+            WorkbenchApi(c).clear(history = false)
+            assertEquals(preservedVersion, c.state.value.assistantInvariants.version)
+            assertEquals(invariant.id, c.state.value.assistantInvariants.invariants.single().id)
+
+            val deleted = client.delete("$base/assistant/invariants") {
+                localJson(apiJson.encodeToString(AssistantInvariantDeleteCommand(
+                    c.state.value.settingsVersion,
+                    invariant.id,
+                )))
+            }.state()
+            assertEquals(3, deleted.assistantInvariants.version)
+            assertTrue(deleted.assistantInvariants.invariants.isEmpty())
+        } finally {
+            c.close()
+        }
+    }
+
+    @Test
+    fun `assistant invariant mutation is busy-safe and persistence failure has no partial state`() = runBlocking {
+        val slow = CompletableDeferred<Unit>()
+        val busyController = controller(mode = ResponseMode.UNRESTRICTED) { model, _, _ ->
+            slow.await()
+            completion(model)
+        }
+        val busyApi = WorkbenchApi(busyController)
+        try {
+            val configured = busyApi.settings(SettingsCommand(
+                0,
+                busyController.state.value.settings.toDto().copy(contextStrategy = "MEMORY_LAYERS"),
+            ))
+            busyApi.start(command(configured.settingsVersion, "Долгий запрос"))
+            val busy = assertFailsWith<ApiProblem> {
+                busyApi.addInvariant(AssistantInvariantAddCommand(
+                    configured.settingsVersion,
+                    "STACK",
+                    "Backend остаётся на Kotlin",
+                ))
+            }
+            assertEquals(409, busy.status)
+            assertEquals("busy", busy.code)
+            assertTrue(busyController.state.value.assistantInvariants.invariants.isEmpty())
+            slow.complete(Unit)
+            busyController.awaitCurrentRequest()
+        } finally {
+            slow.complete(Unit)
+            busyController.close()
+        }
+
+        val failingStore = object : AssistantInvariantStore {
+            override fun load() = AssistantInvariantState()
+            override fun save(state: AssistantInvariantState) = throw IOException("disk full")
+        }
+        val failedController = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            assistantInvariantStore = failingStore,
+        )
+        val failedApi = WorkbenchApi(failedController)
+        try {
+            val configured = failedApi.settings(SettingsCommand(
+                0,
+                failedController.state.value.settings.toDto().copy(contextStrategy = "MEMORY_LAYERS"),
+            ))
+            val failure = assertFailsWith<ApiProblem> {
+                failedApi.addInvariant(AssistantInvariantAddCommand(
+                    configured.settingsVersion,
+                    "OTHER",
+                    "Безопасное правило",
+                ))
+            }
+            assertEquals(500, failure.status)
+            assertEquals("persistence", failure.code)
+            assertEquals(configured.settingsVersion, failedController.state.value.settingsVersion)
+            assertEquals(AssistantInvariantState(), failedController.state.value.assistantInvariants)
+        } finally {
+            failedController.close()
+        }
     }
 
     @Test
@@ -706,5 +878,22 @@ class WorkbenchApiTest {
 
     companion object {
         fun completion(model: String) = CompletionResult("Ответ 👋", "stop", TokenUsage(20, 10, 30, reasoningTokens = 2), model)
+
+        fun invariantAwareCompletion(model: String, messages: List<LlmMessage>, answer: String): CompletionResult {
+            val system = messages.first().content
+            if ("ASSISTANT INVARIANTS" !in system) {
+                return CompletionResult(answer, "stop", TokenUsage(10, 2, 12), model)
+            }
+            val block = system.substringAfter("ASSISTANT INVARIANTS").substringBefore("END ASSISTANT INVARIANTS")
+            val version = Regex("\\\"stateVersion\\\":(\\d+)").find(block)?.groupValues?.get(1) ?: "0"
+            val ids = Regex("\\\"id\\\":\\\"([^\\\"]+)\\\"").findAll(block).map { it.groupValues[1] }.toList()
+            val response = """{"stateVersion":$version,"checkedInvariantIds":${apiJson.encodeToString(ids)},"conflictingInvariantIds":[],"decision":"COMPATIBLE","answer":${apiJson.encodeToString(answer)},"audit":{"stateVersion":$version,"checkedInvariantIds":${apiJson.encodeToString(ids)},"violatedInvariantIds":[],"answerCompliant":true}}"""
+            return CompletionResult(
+                response,
+                "stop",
+                TokenUsage(10, 2, 12),
+                model,
+            )
+        }
     }
 }

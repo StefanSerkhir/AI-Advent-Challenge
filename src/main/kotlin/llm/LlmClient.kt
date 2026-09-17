@@ -2,6 +2,7 @@ package org.example.llm
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonObject
 
 interface LlmClient {
     suspend fun complete(
@@ -125,6 +126,7 @@ data class CompletionOptions(
     val stopSequences: List<String> = emptyList(),
     val temperature: Double? = null,
     val reasoningEffort: ReasoningEffort? = null,
+    val structuredOutput: StructuredOutput? = null,
 ) {
     init {
         require(maxTokens == null || maxTokens > 0) {
@@ -135,6 +137,17 @@ data class CompletionOptions(
         }
         require(temperature == null || temperature.isFinite() && temperature in 0.0..2.0) {
             "temperature должна быть числом от 0 до 2"
+        }
+    }
+}
+
+data class StructuredOutput(
+    val name: String,
+    val schema: JsonObject,
+) {
+    init {
+        require(name.matches(Regex("[A-Za-z0-9_-]{1,64}"))) {
+            "Имя structured output должно содержать от 1 до 64 латинских букв, цифр, _ или -."
         }
     }
 }

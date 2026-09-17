@@ -40,6 +40,8 @@ class WorkbenchApi(val controller: WorkbenchController) {
 
     fun profile(): String = safeJson(apiJson.encodeToJsonElement(controller.state.value.assistantMemory.profile.toDto()))
 
+    fun invariants(): String = safeJson(apiJson.encodeToJsonElement(controller.state.value.assistantInvariants.toDto()))
+
     fun taskState(): String = safeJson(apiJson.encodeToJsonElement(
         TaskStateSnapshotDto(controller.state.value.taskState?.toDto()),
     ))
@@ -163,6 +165,20 @@ class WorkbenchApi(val controller: WorkbenchController) {
         controller.saveAssistantProfile(command.profile.toDomain())
     }
 
+    fun addInvariant(command: AssistantInvariantAddCommand): StateDto = invariantAction(
+        command.expectedSettingsVersion,
+        command.category,
+    ) { category -> controller.addAssistantInvariant(AssistantInvariantDraft(requireNotNull(category), command.text)) }
+
+    fun updateInvariant(command: AssistantInvariantUpdateCommand): StateDto = invariantAction(
+        command.expectedSettingsVersion,
+        command.category,
+    ) { category -> controller.updateAssistantInvariant(command.id, AssistantInvariantDraft(requireNotNull(category), command.text)) }
+
+    fun deleteInvariant(command: AssistantInvariantDeleteCommand): StateDto = invariantAction(
+        command.expectedSettingsVersion,
+    ) { controller.deleteAssistantInvariant(command.id) }
+
     fun startTaskState(command: TaskStateStartCommand): StateDto = taskAction(command.expectedSettingsVersion) {
         controller.startTaskState(NewTaskDraft(command.goal, command.currentStep, command.expectedAction))
     }
@@ -217,6 +233,29 @@ class WorkbenchApi(val controller: WorkbenchController) {
             throw ApiProblem(409, "invalid_task_transition", error.message ?: "Недопустимый переход состояния задачи.")
         } catch (error: IllegalArgumentException) {
             throw ApiProblem(400, "validation", error.message ?: "Некорректное состояние задачи.")
+        }
+        controller.state.value.toDto()
+    }
+
+    private fun invariantAction(
+        expectedVersion: Long,
+        rawCategory: String? = null,
+        action: (AssistantInvariantCategory?) -> Boolean,
+    ): StateDto = synchronized(controller) {
+        requireIdle()
+        requireVersion(expectedVersion)
+        val category = rawCategory?.let {
+            AssistantInvariantCategory.from(it)
+                ?: throw ApiProblem(400, "validation", "Неизвестная категория инварианта.")
+        }
+        try {
+            if (!action(category)) throw ApiProblem(
+                500,
+                "persistence",
+                controller.state.value.notice?.message ?: "Не удалось изменить инварианты ассистента.",
+            )
+        } catch (error: IllegalArgumentException) {
+            throw ApiProblem(400, "validation", error.message ?: "Некорректный инвариант ассистента.")
         }
         controller.state.value.toDto()
     }

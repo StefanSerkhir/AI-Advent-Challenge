@@ -112,10 +112,23 @@ class OpenAiCompatibleLlmClientTest {
             assertEquals(500, requests[1]["max_completion_tokens"]?.jsonPrimitive?.int)
             assertEquals("medium", requests[1]["reasoning_effort"]?.jsonPrimitive?.content)
             assertTrue(requests[1]["stop"] == null || requests[1]["stop"] == JsonNull)
+            val schema = buildJsonObject {
+                put("type", "object")
+                put("additionalProperties", false)
+                put("properties", buildJsonObject { put("answer", buildJsonObject { put("type", "string") }) })
+                put("required", buildJsonArray { add("answer") })
+            }
+            openai.complete("structured", CompletionOptions(structuredOutput = StructuredOutput("test_answer", schema)))
+            val responseFormat = requireNotNull(requests[2]["response_format"]?.jsonObject)
+            assertEquals("json_schema", responseFormat["type"]?.jsonPrimitive?.content)
+            assertEquals("test_answer", responseFormat["json_schema"]?.jsonObject?.get("name")?.jsonPrimitive?.content)
+            assertEquals(true, responseFormat["json_schema"]?.jsonObject?.get("strict")?.jsonPrimitive?.boolean)
+            assertEquals(schema, responseFormat["json_schema"]?.jsonObject?.get("schema"))
             DeepSeekLlmClient("fake-key", http).complete("controlled", CompletionOptions(maxTokens = 200, stopSequences = listOf("END")))
-            assertEquals("deepseek-v4-flash", requests[2]["model"]?.jsonPrimitive?.content)
-            assertEquals(200, requests[2]["max_tokens"]?.jsonPrimitive?.int)
-            assertEquals("END", requests[2]["stop"]?.jsonArray?.single()?.jsonPrimitive?.content)
+            assertEquals("deepseek-v4-flash", requests[3]["model"]?.jsonPrimitive?.content)
+            assertEquals(200, requests[3]["max_tokens"]?.jsonPrimitive?.int)
+            assertEquals("END", requests[3]["stop"]?.jsonArray?.single()?.jsonPrimitive?.content)
+            assertTrue(requests[3]["response_format"] == null || requests[3]["response_format"] == JsonNull)
         } finally { http.close() }
     }
 }

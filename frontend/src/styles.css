@@ -261,6 +261,41 @@ button {
   border-radius: 9px;
   background: var(--mantine-color-indigo-0);
 }
+.assistant-invariants {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--mantine-color-violet-2);
+  border-radius: 9px;
+  background: var(--mantine-color-violet-0);
+}
+.assistant-invariants .memory-layer-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.invariant-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.invariant-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  padding: 6px;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.invariant-entry .mantine-Input-wrapper {
+  grid-column: 1 / -1;
+}
+.invariant-entry > span {
+  line-height: 1.5;
+}
 .task-state-panel {
   display: grid;
   gap: 8px;
@@ -364,6 +399,23 @@ button {
   font-size: 11px;
 }
 .task-state-diagnostics code {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.invariant-diagnostics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid #e8ddf8;
+  border-radius: 8px;
+  background: #faf7ff;
+  font-size: 11px;
+}
+.invariant-diagnostics code {
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;

@@ -17,5 +17,6 @@ class OpenAiLlmClient(
         useMaxCompletionTokens = true,
         supportsStopSequences = false,
         supportsReasoningEffort = true,
+        supportsJsonSchema = true,
     ),
 )

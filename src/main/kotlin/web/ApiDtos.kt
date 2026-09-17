@@ -54,6 +54,21 @@ data class AssistantProfileInputDto(
 @Serializable
 data class AssistantProfileCommand(val expectedSettingsVersion: Long, val profile: AssistantProfileInputDto)
 @Serializable
+data class AssistantInvariantAddCommand(
+    val expectedSettingsVersion: Long,
+    val category: String,
+    val text: String,
+)
+@Serializable
+data class AssistantInvariantUpdateCommand(
+    val expectedSettingsVersion: Long,
+    val id: String,
+    val category: String,
+    val text: String,
+)
+@Serializable
+data class AssistantInvariantDeleteCommand(val expectedSettingsVersion: Long, val id: String)
+@Serializable
 data class TaskStateStartCommand(
     val expectedSettingsVersion: Long,
     val goal: String,
@@ -158,6 +173,7 @@ data class OutputDto(
     val branchName: String? = null,
     val assistantMemoryDiagnostics: AssistantMemoryDiagnosticsDto? = null,
     val taskStateDiagnostics: TaskStateDiagnosticsDto? = null,
+    val assistantInvariantDiagnostics: AssistantInvariantDiagnosticsDto? = null,
 )
 @Serializable
 data class ExchangeDto(
@@ -218,6 +234,27 @@ data class AssistantProfileDto(
     val configuredFieldCount: Int,
 )
 @Serializable
+data class AssistantInvariantDto(
+    val id: String,
+    val category: String,
+    val text: String,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+)
+@Serializable
+data class AssistantInvariantStateDto(
+    val version: Long,
+    val invariants: List<AssistantInvariantDto>,
+)
+@Serializable
+data class AssistantInvariantDiagnosticsDto(
+    val applied: Boolean,
+    val stateVersion: Long,
+    val appliedCount: Int,
+    val appliedInvariantIds: List<String>,
+    val responseBlocked: Boolean,
+)
+@Serializable
 data class TaskStateDto(
     val id: String,
     val version: Long,
@@ -257,6 +294,7 @@ data class StateDto(
     val context: ContextDto,
     val assistantMemory: AssistantMemoryDto,
     val assistantProfile: AssistantProfileDto,
+    val assistantInvariants: AssistantInvariantStateDto,
     val taskState: TaskStateDto?,
 )
 
@@ -367,6 +405,13 @@ private fun AssistantMemoryDiagnostics.toDto() = AssistantMemoryDiagnosticsDto(
     profileVersion,
     profileFieldCount,
 )
+private fun AssistantInvariant.toDto() = AssistantInvariantDto(
+    id, category.name, text, createdAtEpochMillis, updatedAtEpochMillis,
+)
+fun AssistantInvariantState.toDto() = AssistantInvariantStateDto(version, invariants.map(AssistantInvariant::toDto))
+private fun AssistantInvariantDiagnostics.toDto() = AssistantInvariantDiagnosticsDto(
+    applied, stateVersion, appliedCount, appliedInvariantIds, responseBlocked,
+)
 fun AgentTaskState.toDto() = TaskStateDto(
     id,
     version,
@@ -409,7 +454,8 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                         usage?.totalTokens, output.elapsedMillis, output.estimatedCostUsd,
                         usage?.cachedPromptTokens, usage?.cacheWritePromptTokens), output.streaming,
                     output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName,
-                    output.assistantMemoryDiagnostics?.toDto(), output.taskStateDiagnostics?.toDto())
+                    output.assistantMemoryDiagnostics?.toDto(), output.taskStateDiagnostics?.toDto(),
+                    output.assistantInvariantDiagnostics?.toDto())
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null,
             (exchange.outcome as? ExchangeOutcome.Failed)?.code,
@@ -428,5 +474,6 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
     context = context.toDto(),
     assistantMemory = assistantMemory.toDto(),
     assistantProfile = assistantMemory.profile.toDto(),
+    assistantInvariants = assistantInvariants.toDto(),
     taskState = taskState?.toDto(),
 )

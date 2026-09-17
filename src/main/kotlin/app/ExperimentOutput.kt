@@ -1,5 +1,6 @@
 package org.example.app
 
+import org.example.agent.AssistantInvariantDiagnostics
 import org.example.agent.AssistantMemoryDiagnostics
 import org.example.agent.ContextStrategy
 import org.example.agent.TaskStateDiagnostics
@@ -22,6 +23,7 @@ data class ExperimentOutput(
     val branchName: String? = null,
     val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
     val taskStateDiagnostics: TaskStateDiagnostics? = null,
+    val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
 )
 
 data class ExperimentOutputDelta(

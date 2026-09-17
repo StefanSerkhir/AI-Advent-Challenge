@@ -5,6 +5,7 @@ build/
 .env.*.local
 .llm-history.json
 .llm-assistant-memory.json
+.llm-assistant-invariants.json
 .llm-task-state.json
 .llm-context-*.json
 /video/

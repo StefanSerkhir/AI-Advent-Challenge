@@ -61,6 +61,7 @@ const thinkingOutput: Output = {
   branchName: null,
   assistantMemoryDiagnostics: null,
   taskStateDiagnostics: null,
+  assistantInvariantDiagnostics: null,
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -104,6 +105,20 @@ function ResponseCard({ output }: { output: Output }) {
         )}
       </div>
       {output.model && <div className="model-label">{output.model}</div>}
+      {output.assistantInvariantDiagnostics && <div className="invariant-diagnostics" data-testid="invariant-diagnostics">
+        <strong>Инварианты этого вызова</strong>
+        <Badge size="xs" variant="light" color={output.assistantInvariantDiagnostics.responseBlocked ? "red" : output.assistantInvariantDiagnostics.applied ? "violet" : "gray"}>
+          {output.assistantInvariantDiagnostics.responseBlocked
+            ? `ответ заблокирован · v${output.assistantInvariantDiagnostics.stateVersion}`
+            : output.assistantInvariantDiagnostics.applied
+            ? `применено: ${output.assistantInvariantDiagnostics.appliedCount} · v${output.assistantInvariantDiagnostics.stateVersion}`
+            : `не применены · v${output.assistantInvariantDiagnostics.stateVersion}`}
+        </Badge>
+        {output.assistantInvariantDiagnostics.appliedInvariantIds.length > 0 && <code
+          title={output.assistantInvariantDiagnostics.appliedInvariantIds.join(", ")}>
+          {output.assistantInvariantDiagnostics.appliedInvariantIds.map((id) => id.slice(0, 8)).join(", ")}
+        </code>}
+      </div>}
       {output.assistantMemoryDiagnostics && <div className="memory-diagnostics" data-testid="memory-diagnostics">
         <strong>Память этого вызова</strong>
         <div>

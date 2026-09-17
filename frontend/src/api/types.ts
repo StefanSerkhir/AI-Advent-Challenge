@@ -10,6 +10,7 @@ export type Mode =
 export type Provider = "DEEPSEEK" | "OPENAI";
 export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | "MEMORY_LAYERS";
 export type MemoryLayer = "SHORT_TERM" | "WORKING" | "LONG_TERM";
+export type AssistantInvariantCategory = "ARCHITECTURE" | "TECH_DECISION" | "STACK" | "BUSINESS_RULE" | "OTHER";
 export type TaskPhase = "PLANNING" | "EXECUTION" | "VALIDATION" | "DONE";
 export interface Settings {
   provider: Provider;
@@ -130,6 +131,7 @@ export interface Output {
   branchName: string | null;
   assistantMemoryDiagnostics: AssistantMemoryDiagnostics | null;
   taskStateDiagnostics: TaskStateDiagnostics | null;
+  assistantInvariantDiagnostics: AssistantInvariantDiagnostics | null;
 }
 export interface Exchange {
   id: number;
@@ -163,6 +165,7 @@ export interface State {
   context: ContextState;
   assistantMemory: AssistantMemoryState;
   assistantProfile: AssistantProfile;
+  assistantInvariants: AssistantInvariantState;
   taskState: AgentTaskState | null;
 }
 export interface ContextState {
@@ -206,6 +209,24 @@ export interface AssistantMemoryDiagnostics {
   profileApplied: boolean;
   profileVersion: number | null;
   profileFieldCount: number;
+}
+export interface AssistantInvariant {
+  id: string;
+  category: AssistantInvariantCategory;
+  text: string;
+  createdAtEpochMillis: number;
+  updatedAtEpochMillis: number;
+}
+export interface AssistantInvariantState {
+  version: number;
+  invariants: AssistantInvariant[];
+}
+export interface AssistantInvariantDiagnostics {
+  applied: boolean;
+  stateVersion: number;
+  appliedCount: number;
+  appliedInvariantIds: string[];
+  responseBlocked: boolean;
 }
 export interface AgentTaskState {
   id: string;

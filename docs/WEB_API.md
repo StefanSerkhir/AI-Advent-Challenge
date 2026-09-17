@@ -6,7 +6,7 @@
 
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
-| GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `taskState`, результаты, операция, уведомление |
+| GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `assistantInvariants`, `taskState`, результаты, операция, уведомление |
 | GET | `/api/settings` | Тот же полный снимок; ключи представлены только `hasKey` |
 | PUT | `/api/settings` | `{ expectedSettingsVersion, settings: SettingsDto }` → снимок после сохранения |
 | PUT | `/api/key` | `{ expectedSettingsVersion, provider, key }` → снимок без ключа |
@@ -18,6 +18,10 @@
 | GET | `/api/assistant/memory` | Три секции памяти `MEMORY_LAYERS`, записи, счётчики и флаги включения |
 | GET | `/api/assistant/profile` | Активный `AssistantProfileDto`: `version`, `preferredName`, `about`, `responseStyle`, `responseFormat`, `constraints`, `configuredFieldCount` |
 | PUT | `/api/assistant/profile` | `{ expectedSettingsVersion, profile: { preferredName, about, responseStyle, responseFormat, constraints } }` → полный снимок после атомарного сохранения |
+| GET | `/api/assistant/invariants` | `AssistantInvariantStateDto`: версия коллекции и полный список правил |
+| POST | `/api/assistant/invariants` | `{ expectedSettingsVersion, category, text }` → добавить правило и вернуть полный снимок |
+| PUT | `/api/assistant/invariants` | `{ expectedSettingsVersion, id, category, text }` → изменить правило с сохранением ID/created timestamp и вернуть полный снимок |
+| DELETE | `/api/assistant/invariants` | `{ expectedSettingsVersion, id }` → удалить правило и вернуть полный снимок |
 | POST / PUT / DELETE | `/api/assistant/memory` | Добавить / изменить / удалить запись с `{ expectedSettingsVersion, layer, ... }` |
 | POST | `/api/assistant/memory/clear` | `{ expectedSettingsVersion, layer }` → очистить ровно один слой |
 | PUT | `/api/assistant/memory/enabled` | `{ expectedSettingsVersion, layer, enabled }` → включить слой без удаления |
@@ -44,14 +48,14 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 ## Согласованность
 
 `revision` монотонно растёт при любом изменении снимка; `settingsVersion` — при
-сохранении настроек/ключа, профиля, каждой мутации памяти и FSM. Клиент передаёт последнюю версию и при
+сохранении настроек/ключа, профиля, каждой мутации памяти, FSM и инвариантов. Клиент передаёт последнюю версию и при
 `409 stale_settings` получает свежий снимок, после чего пользователь повторяет
 действие. Команды проверяются и выполняются под общим монитором контроллера.
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
 рабочей корутине до освобождения активной операции.
 
 Одновременно работает один эксперимент. Другой запуск, изменение настроек/ключа,
-checkpoint/branch-команды, мутации FSM и очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
+checkpoint/branch-команды, мутации FSM/инвариантов и очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
 запоздалая отмена из вкладки не остановит следующий запрос.
 
 `requestId` — новый UUID для каждого намеренного запуска. Повтор **той же** команды
@@ -103,6 +107,31 @@ Task State Machine доступна только при `unrestricted + MEMORY_L
 `409 task_paused` до вызова LLM. Активная незавершённая задача попадает в system
 context, а output diagnostics содержит только `applied`, `taskId`, `stateVersion`
 и `phase`. Известный API-ключ в любом текстовом поле даёт `400 validation`.
+
+Инварианты доступны для мутаций только при `unrestricted + MEMORY_LAYERS`.
+Категория — одно из `ARCHITECTURE`, `TECH_DECISION`, `STACK`, `BUSINESS_RULE`,
+`OTHER`; текст после нормализации непустой, не длиннее 16 384 символов и не
+содержит недопустимых управляющих символов или настроенного API-ключа. Версия
+`AssistantInvariantStateDto.version` увеличивается после каждой успешно записанной
+мутации. Ошибка persistence возвращает `500 persistence`, не меняя коллекцию,
+`settingsVersion` или опубликованный snapshot. Новый API-ключ отклоняется, если
+его значение уже встречается в инварианте. `StateDto`/SSE возвращают тексты правил
+для редактора, а output diagnostics — только `applied`, `stateVersion`,
+`appliedCount`, `appliedInvariantIds` и `responseBlocked`.
+
+В pipeline `unrestricted + MEMORY_LAYERS` непустые правила входят в первое system
+message перед task/profile/memory context и имеют приоритет над текущим prompt.
+При конфликте контракт требует объяснимый отказ с ID/категорией и совместимой
+альтернативой, сохраняя выполнение совместимой части. Ответ с инвариантами
+буферизуется до завершения и принимается только как структурированный объект с
+preflight-полями, пользовательским `answer` и вложенным postflight-аудитом. Для
+OpenAI форма закрепляется нативным `response_format=json_schema`. Объект содержит
+версию snapshot, все проверенные ID, конфликтующие ID, согласованное решение и
+результат проверки готового ответа. При невалидном объекте сырой output блокируется,
+`responseBlocked=true`, а пара не
+попадает в `SHORT_TERM`. Пустая коллекция не создаёт invariant block, даёт
+`applied=false` и сохраняет обычный streaming. Дополнительного LLM-вызова и
+production keyword-классификатора нет.
 
 ## Коды ошибок
 

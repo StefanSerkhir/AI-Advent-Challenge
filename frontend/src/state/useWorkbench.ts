@@ -1,6 +1,14 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {api, ApiError} from "../api/client";
-import type {AssistantProfileInput, MemoryLayer, Provider, Settings, StartCommand, State} from "../api/types";
+import type {
+    AssistantInvariantCategory,
+    AssistantProfileInput,
+    MemoryLayer,
+    Provider,
+    Settings,
+    StartCommand,
+    State
+} from "../api/types";
 
 export function useWorkbench() {
   const [state, setState] = useState<State | null>(null);
@@ -188,6 +196,15 @@ export function useWorkbench() {
     }),
     saveProfile: (profile: AssistantProfileInput) => perform(async () => {
       if (state) accept(await api.saveProfile(profile, state.settingsVersion));
+    }),
+    addInvariant: (category: AssistantInvariantCategory, text: string) => perform(async () => {
+      if (state) accept(await api.addInvariant(category, text, state.settingsVersion));
+    }),
+    updateInvariant: (id: string, category: AssistantInvariantCategory, text: string) => perform(async () => {
+      if (state) accept(await api.updateInvariant(id, category, text, state.settingsVersion));
+    }),
+    deleteInvariant: (id: string) => perform(async () => {
+      if (state) accept(await api.deleteInvariant(id, state.settingsVersion));
     }),
     startTaskState: (goal: string, currentStep: string, expectedAction: string) => perform(async () => {
       if (state) accept(await api.startTaskState(goal, currentStep, expectedAction, state.settingsVersion));

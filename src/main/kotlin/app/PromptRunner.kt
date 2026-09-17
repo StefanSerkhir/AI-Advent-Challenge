@@ -17,6 +17,7 @@ data class LabeledResponse(
     val branchName: String? = null,
     val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
     val taskStateDiagnostics: TaskStateDiagnostics? = null,
+    val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
 ) {
     val content: String
         get() = completion.content

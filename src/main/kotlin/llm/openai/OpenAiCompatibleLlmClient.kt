@@ -21,6 +21,7 @@ data class OpenAiCompatibleConfig(
     val useMaxCompletionTokens: Boolean = false,
     val supportsStopSequences: Boolean = true,
     val supportsReasoningEffort: Boolean = false,
+    val supportsJsonSchema: Boolean = false,
 )
 
 class OpenAiCompatibleLlmClient(
@@ -139,6 +140,18 @@ class OpenAiCompatibleLlmClient(
                     .takeIf { config.supportsReasoningEffort },
                 stream = true.takeIf { streaming },
                 streamOptions = ChatCompletionStreamOptions(includeUsage = true).takeIf { streaming },
+                responseFormat = options.structuredOutput
+                    ?.takeIf { config.supportsJsonSchema }
+                    ?.let { structured ->
+                        ChatCompletionResponseFormat(
+                            type = "json_schema",
+                            jsonSchema = ChatCompletionJsonSchema(
+                                name = structured.name,
+                                strict = true,
+                                schema = structured.schema,
+                            ),
+                        )
+                    },
             ),
         )
     }

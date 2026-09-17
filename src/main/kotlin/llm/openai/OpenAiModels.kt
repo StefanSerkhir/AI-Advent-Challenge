@@ -2,6 +2,7 @@ package org.example.llm.openai
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class ChatMessage(val role: String, val content: String? = null)
@@ -21,6 +22,22 @@ data class ChatCompletionRequest(
     val stream: Boolean? = null,
     @SerialName("stream_options")
     val streamOptions: ChatCompletionStreamOptions? = null,
+    @SerialName("response_format")
+    val responseFormat: ChatCompletionResponseFormat? = null,
+)
+
+@Serializable
+data class ChatCompletionResponseFormat(
+    val type: String,
+    @SerialName("json_schema")
+    val jsonSchema: ChatCompletionJsonSchema,
+)
+
+@Serializable
+data class ChatCompletionJsonSchema(
+    val name: String,
+    val strict: Boolean,
+    val schema: JsonObject,
 )
 
 @Serializable
