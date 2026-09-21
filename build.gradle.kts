@@ -10,6 +10,7 @@ repositories { mavenCentral() }
 
 dependencies {
     val ktorVersion = "3.5.1"
+    val mcpVersion = "0.15.0"
     implementation("io.ktor:ktor-client-cio:$ktorVersion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
     implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
@@ -17,6 +18,7 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:$ktorVersion")
     implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
     implementation("io.ktor:ktor-server-sse:$ktorVersion")
+    implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.18")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion")
@@ -57,6 +59,12 @@ tasks.register<JavaExec>("runWeb") {
     description = "Build the frontend and start the local Ktor application"
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = application.mainClass
+}
+tasks.register<JavaExec>("runMcpDemo") {
+    group = "application"
+    description = "Start the local MCP stdio server and list its tools with the MCP client"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.mcp.McpDemoClientKt"
 }
 // Test-only entry point: deterministic clients are never packaged in the application.
 tasks.register<JavaExec>("runWebFixture") {

@@ -38,6 +38,7 @@ flowchart LR
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
 | `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
+| `src/main/kotlin/mcp` | Изолированный локальный MCP stdio-пример: сервер тестовых инструментов и клиент обнаружения `tools/list` |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -61,6 +62,15 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 Для разработки UI backend запускается с `WEB_DEV_PORT=5173`, а Vite отдельно через `npm --prefix frontend run dev`. Vite проксирует `/api`; произвольный CORS не включён.
 
 `runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution.
+
+Отдельная задача `./gradlew runMcpDemo` запускает `McpDemoClientKt`. Клиент
+создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime classpath и
+соединяет их официальными `StdioClientTransport`/`StdioServerTransport` Kotlin
+MCP SDK. Сервер объявляет только безопасные локальные инструменты `ping` и `echo`;
+клиент выполняет стандартный handshake и `tools/list`, печатает полученные
+описания и JSON-схемы, проверяет каталог, затем закрывает клиент, транспорт и
+процесс. Этот пример не входит в HTTP API, не читает `.env` и не обращается к LLM
+или внешним сервисам.
 
 ## Доменная orchestration
 
