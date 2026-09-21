@@ -71,6 +71,7 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         fun taskField(name: String) = Regex("\\\"$name\\\":\\\"([^\\\"]*)\\\"")
             .find(assistantProfile)?.groupValues?.get(1).orEmpty()
+        val taskPhase = taskField("phase")
         val invariantId = Regex("\\\"id\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
@@ -80,6 +81,10 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                 val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
                 if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"
             }
+            "Начни реализацию" in prompt && taskPhase == "PLANNING" ->
+                "Переход сейчас недопустим: текущая фаза PLANNING. Сначала явно утвердите план действием «Утвердить план и начать выполнение»."
+            "готовой без проверки" in prompt && taskPhase != "DONE" ->
+                "Завершение сейчас недопустимо: текущая фаза $taskPhase. Ближайшее разрешённое действие задаётся панелью состояния; DONE возможен только после успешной проверки."
             "Продолжай" in prompt && "TASK STATE DATA" in assistantProfile ->
                 "Сохранённая задача: цель=${taskField("goal")}; этап=${taskField("phase")}; шаг=${taskField("currentStep")}; следующее действие=${taskField("expectedAction")}."
             "[[invalid-invariant-receipt]]" in prompt ->

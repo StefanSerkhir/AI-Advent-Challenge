@@ -212,8 +212,14 @@ export function useWorkbench() {
     updateTaskProgress: (currentStep: string, expectedAction: string) => perform(async () => {
       if (state) accept(await api.updateTaskProgress(currentStep, expectedAction, state.settingsVersion));
     }),
-    advanceTaskState: () => perform(async () => {
-      if (state) accept(await api.advanceTaskState(state.settingsVersion));
+    approveTaskPlan: () => perform(async () => {
+      if (state) accept(await api.approveTaskPlan(state.settingsVersion));
+    }),
+    completeTaskImplementation: () => perform(async () => {
+      if (state) accept(await api.completeTaskImplementation(state.settingsVersion));
+    }),
+    recordTaskValidation: (successful: boolean, details: string, expectedAction: string | null = null) => perform(async () => {
+      if (state) accept(await api.recordTaskValidation(successful, details, expectedAction, state.settingsVersion));
     }),
     pauseTaskState: () => perform(async () => {
       if (state) accept(await api.pauseTaskState(state.settingsVersion));

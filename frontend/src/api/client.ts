@@ -89,8 +89,12 @@ export const api = {
     request<State>("/assistant/task-state/start", "POST", { goal, currentStep, expectedAction, expectedSettingsVersion }),
   updateTaskProgress: (currentStep: string, expectedAction: string, expectedSettingsVersion: number) =>
     request<State>("/assistant/task-state/progress", "PUT", { currentStep, expectedAction, expectedSettingsVersion }),
-  advanceTaskState: (expectedSettingsVersion: number) =>
-    request<State>("/assistant/task-state/advance", "POST", { expectedSettingsVersion }),
+  approveTaskPlan: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/approve-plan", "POST", { expectedSettingsVersion }),
+  completeTaskImplementation: (expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/complete-implementation", "POST", { expectedSettingsVersion }),
+  recordTaskValidation: (successful: boolean, details: string, expectedAction: string | null, expectedSettingsVersion: number) =>
+    request<State>("/assistant/task-state/validation", "POST", { successful, details, expectedAction, expectedSettingsVersion }),
   pauseTaskState: (expectedSettingsVersion: number) =>
     request<State>("/assistant/task-state/pause", "POST", { expectedSettingsVersion }),
   resumeTaskState: (expectedSettingsVersion: number) =>

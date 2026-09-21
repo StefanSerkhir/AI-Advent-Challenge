@@ -30,7 +30,9 @@
 | GET | `/api/assistant/task-state` | `{ task: TaskStateDto \| null }` для отдельной FSM |
 | POST | `/api/assistant/task-state/start` | `{ expectedSettingsVersion, goal, currentStep, expectedAction }` → новая задача в `PLANNING` |
 | PUT | `/api/assistant/task-state/progress` | `{ expectedSettingsVersion, currentStep, expectedAction }` → обновить ход задачи без смены этапа |
-| POST | `/api/assistant/task-state/advance` | `{ expectedSettingsVersion }` → следующий допустимый этап |
+| POST | `/api/assistant/task-state/approve-plan` | `{ expectedSettingsVersion }` → явно утверждает план и переводит `PLANNING → EXECUTION` |
+| POST | `/api/assistant/task-state/complete-implementation` | `{ expectedSettingsVersion }` → фиксирует завершение реализации и переводит `EXECUTION → VALIDATION` |
+| POST | `/api/assistant/task-state/validation` | `{ expectedSettingsVersion, successful, details, expectedAction? }`; успех переводит `VALIDATION → DONE`, неуспех сохраняет причину/следующее действие в `VALIDATION` |
 | POST | `/api/assistant/task-state/pause` | `{ expectedSettingsVersion }` → пауза без смены этапа |
 | POST | `/api/assistant/task-state/resume` | `{ expectedSettingsVersion }` → продолжение на том же этапе |
 | POST | `/api/assistant/task-state/reset` | `{ expectedSettingsVersion }` → удалить только состояние FSM |
@@ -99,11 +101,21 @@ LLM-контекст. Непустой применяется только в `U
 
 Task State Machine доступна только при `unrestricted + MEMORY_LAYERS`. Поля `goal`,
 `currentStep` и `expectedAction` обязательны после нормализации; пределы — 8000,
-4000 и 4000 символов. Новая задача начинается в `PLANNING`; разрешены только
-`PLANNING → EXECUTION → VALIDATION → DONE`. Pause/resume сохраняют ID, цель, этап,
-шаг и ожидаемое действие. Повторная пауза/resume, пропуск/возврат этапа и команда
-из `DONE` дают `409 invalid_task_transition` без записи и публикации мутации.
-Приостановленная задача блокирует обычный `POST /api/operations` с кодом
+4000 и 4000 символов; `details` проверки — до 4000. Новая задача начинается в
+`PLANNING`. Серверная таблица переходов разрешает только явное утверждение плана
+`PLANNING → EXECUTION`, фиксацию завершения реализации `EXECUTION → VALIDATION` и
+успешный результат проверки `VALIDATION → DONE`. Неуспешная проверка требует
+`details` и непустой `expectedAction`, сохраняет `validationStatus=FAILED` и
+остаётся в `VALIDATION`. DTO задачи также содержит transition timestamps,
+`validationStatus`, `validationDetails` и вычисленный backend список
+`availableActions`; frontend не вычисляет граф самостоятельно. Pause/resume
+сохраняют все поля. На паузе разрешены только resume/reset. Повторная пауза/resume,
+обновление прогресса на паузе, пропуск/возврат этапа и команда из `DONE` дают
+`409 invalid_task_transition` с текущей фазой и ближайшим действием, без записи,
+изменения `revision`/`settingsVersion` и публикации snapshot.
+Текст ответа модели не меняет FSM. System context ограничивает ответ текущей фазой:
+в `PLANNING` нельзя изображать реализацию, а до зафиксированной успешной проверки —
+объявлять задачу завершённой. Приостановленная задача блокирует обычный `POST /api/operations` с кодом
 `409 task_paused` до вызова LLM. Активная незавершённая задача попадает в system
 context, а output diagnostics содержит только `applied`, `taskId`, `stateVersion`
 и `phase`. Известный API-ключ в любом текстовом поле даёт `400 validation`.

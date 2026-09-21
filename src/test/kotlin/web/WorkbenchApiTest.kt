@@ -353,6 +353,8 @@ class WorkbenchApiTest {
             assertEquals("PLANNING", task.phase)
             assertFalse(task.paused)
             assertEquals(1, task.version)
+            assertTrue("APPROVE_PLAN" in task.availableActions)
+            assertFalse("COMPLETE_IMPLEMENTATION" in task.availableActions)
             assertEquals(task, apiJson.decodeFromString<TaskStateSnapshotDto>(api.taskState()).task)
 
             val beforeInvalid = c.state.value
@@ -367,6 +369,18 @@ class WorkbenchApiTest {
             assertEquals(409, invalid.status)
             assertEquals("invalid_task_transition", invalid.code)
             assertEquals(beforeInvalid, c.state.value)
+
+            val premature = assertFailsWith<ApiProblem> {
+                api.completeTaskImplementation(ContextMutationCommand(started.settingsVersion))
+            }
+            assertEquals(409, premature.status)
+            assertEquals("invalid_task_transition", premature.code)
+            assertContains(premature.message, "PLANNING")
+            assertContains(premature.message, "APPROVE_PLAN")
+            assertEquals(beforeInvalid, c.state.value)
+            assertTrue(calls.isEmpty())
+            assertTrue(c.state.value.assistantMemory.shortTerm.isEmpty())
+            assertTrue(c.state.value.assistantTokenMetrics.isEmpty())
 
             val stale = assertFailsWith<ApiProblem> { api.pauseTaskState(ContextMutationCommand(0)) }
             assertEquals("stale_settings", stale.code)
@@ -392,16 +406,37 @@ class WorkbenchApiTest {
                 "Реализовать FSM",
                 "Запустить проверки",
             ))
-            val execution = api.advanceTaskState(ContextMutationCommand(progressed.settingsVersion))
-            assertEquals("EXECUTION", execution.taskState?.phase)
+            val execution = api.approveTaskPlan(ContextMutationCommand(progressed.settingsVersion))
+            val executionTask = requireNotNull(execution.taskState)
+            assertEquals("EXECUTION", executionTask.phase)
+            assertNotNull(executionTask.planApprovedAtEpochMillis)
+            assertEquals(setOf("UPDATE_PROGRESS", "COMPLETE_IMPLEMENTATION", "PAUSE", "RESET"), executionTask.availableActions.toSet())
             api.start(command(execution.settingsVersion, "Продолжай"))
             c.awaitCurrentRequest()
             val output = c.state.value.toDto().exchanges.last().outputs.single()
             assertTrue(output.taskStateDiagnostics!!.applied)
-            assertEquals(execution.taskState?.id, output.taskStateDiagnostics.taskId)
+            assertEquals(executionTask.id, output.taskStateDiagnostics.taskId)
             assertEquals("EXECUTION", output.taskStateDiagnostics.phase)
             assertContains(calls.single().first().content, "\"goal\":\"Подготовить релиз\"")
             assertEquals("Продолжай", calls.single().last().content)
+
+            val validation = api.completeTaskImplementation(ContextMutationCommand(c.state.value.settingsVersion))
+            assertEquals("VALIDATION", validation.taskState?.phase)
+            val failedValidation = api.recordTaskValidation(TaskValidationCommand(
+                validation.settingsVersion,
+                successful = false,
+                details = "Тест API не прошёл",
+                expectedAction = "Исправить и повторить",
+            ))
+            assertEquals("VALIDATION", failedValidation.taskState?.phase)
+            assertEquals("FAILED", failedValidation.taskState?.validationStatus)
+            val done = api.recordTaskValidation(TaskValidationCommand(
+                failedValidation.settingsVersion,
+                successful = true,
+                details = "Все проверки прошли",
+            ))
+            assertEquals("DONE", done.taskState?.phase)
+            assertEquals("PASSED", done.taskState?.validationStatus)
             val taskBeforeClears = c.state.value.taskState
             api.newDialogue(ContextMutationCommand(c.state.value.settingsVersion))
             api.completeTask(ContextMutationCommand(c.state.value.settingsVersion))

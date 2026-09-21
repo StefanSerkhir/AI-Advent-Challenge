@@ -346,9 +346,25 @@ class WorkbenchController(
     }
 
     @Synchronized
-    fun advanceTaskState(): Boolean = mutateTaskState {
-        val task = taskStateManager.advance()
-        if (task.phase == TaskPhase.DONE) "Задача переведена в DONE." else "Задача переведена в ${task.phase.name}."
+    fun approveTaskPlan(): Boolean = mutateTaskState {
+        taskStateManager.approvePlan()
+        "План утверждён; задача переведена к выполнению."
+    }
+
+    @Synchronized
+    fun completeTaskImplementation(): Boolean = mutateTaskState {
+        taskStateManager.completeImplementation()
+        "Завершение реализации зафиксировано; задача передана на проверку."
+    }
+
+    @Synchronized
+    fun recordTaskValidation(draft: TaskValidationDraft): Boolean = mutateTaskState {
+        val task = taskStateManager.recordValidation(draft)
+        if (task.phase == TaskPhase.DONE) {
+            "Успешная проверка зафиксирована; задача завершена."
+        } else {
+            "Неуспешная проверка зафиксирована; задача остаётся на этапе VALIDATION."
+        }
     }
 
     @Synchronized

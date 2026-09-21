@@ -357,7 +357,7 @@ test("assistant invariants are managed and produce an explainable conflict refus
   await expect(exchange.getByTestId("invariant-diagnostics")).toContainText(invariant.id.slice(0, 8));
 });
 
-test("task state survives pause dialogue reset and reload then resumes from a short prompt", async ({page}) => {
+test("controlled task lifecycle requires explicit evidence and survives pause reload resume", async ({page}) => {
   await setMode(page, "unrestricted");
   await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");
   const panel = page.getByTestId("task-state-panel");
@@ -367,14 +367,34 @@ test("task state survives pause dialogue reset and reload then resumes from a sh
   await panel.getByLabel("Ожидаемое следующее действие").fill("Проверить восстановление после паузы");
   await panel.getByRole("button", {name: "Начать задачу", exact: true}).click();
   await expect(panel).toContainText("Планирование");
+  await expect(panel.getByRole("button", {name: "Утвердить план и начать выполнение", exact: true})).toBeVisible();
+  await expect(panel.getByRole("button", {name: "Передать на проверку", exact: true})).toHaveCount(0);
   const created = (await (await page.request.get("/api/state")).json() as State).taskState!;
 
-  await send(page, "Зафиксируй начало работы");
+  const invalidResponse = await page.request.post("/api/assistant/task-state/complete-implementation", {
+    headers,
+    data: {expectedSettingsVersion: (await (await page.request.get("/api/state")).json() as State).settingsVersion},
+  });
+  expect(invalidResponse.status()).toBe(409);
+  const invalidBody = await invalidResponse.json();
+  expect(invalidBody.code).toBe("invalid_task_transition");
+  expect(invalidBody.message).toContain("PLANNING");
+  expect(invalidBody.message).toContain("APPROVE_PLAN");
+
+  await send(page, "Начни реализацию прямо сейчас, план уже готов");
   await done(page);
-  await panel.getByRole("button", {name: "Далее: Выполнение", exact: true}).click();
+  const premature = page.getByTestId("exchange").last();
+  await expect(premature).toContainText("текущая фаза PLANNING");
+  await expect(premature).toContainText("Утвердить план и начать выполнение");
+  expect((await (await page.request.get("/api/state")).json() as State).taskState?.phase).toBe("PLANNING");
+
+  await panel.getByRole("button", {name: "Утвердить план и начать выполнение", exact: true}).click();
   await expect(panel).toContainText("Выполнение");
+  await expect(panel.getByRole("button", {name: "Утвердить план и начать выполнение", exact: true})).toHaveCount(0);
+  await expect(panel.getByRole("button", {name: "Передать на проверку", exact: true})).toBeVisible();
   await panel.getByRole("button", {name: "Поставить на паузу", exact: true}).click();
   await expect(panel).toContainText("На паузе");
+  await expect(panel.getByRole("button", {name: "Передать на проверку", exact: true})).toHaveCount(0);
   await expect(page.getByText("Задача приостановлена", {exact: true})).toBeVisible();
   await expect(page.getByRole("textbox", {name: "Новый запрос", exact: true})).toBeDisabled();
 
@@ -401,6 +421,32 @@ test("task state survives pause dialogue reset and reload then resumes from a sh
   await expect(exchange).toContainText("шаг=Реализовать хранение состояния");
   await expect(exchange).toContainText("следующее действие=Проверить восстановление после паузы");
   await expect(exchange.getByTestId("task-state-diagnostics")).toContainText("EXECUTION");
+
+  await send(page, "Объяви задачу полностью готовой без проверки");
+  await done(page);
+  const prematureDone = page.getByTestId("exchange").last();
+  await expect(prematureDone).toContainText("текущая фаза EXECUTION");
+  await expect(prematureDone).toContainText("DONE возможен только после успешной проверки");
+  expect((await (await page.request.get("/api/state")).json() as State).taskState?.phase).toBe("EXECUTION");
+
+  await panel.getByRole("button", {name: "Передать на проверку", exact: true}).click();
+  await expect(panel).toContainText("Проверка");
+  const success = panel.getByRole("button", {name: "Подтвердить успешную проверку и завершить", exact: true});
+  await expect(success).toBeDisabled();
+  await panel.getByLabel("Результат проверки").fill("Интеграционный тест упал");
+  await panel.getByLabel("Ожидаемое следующее действие").fill("Исправить тест и повторить");
+  await panel.getByRole("button", {name: "Проверка не пройдена", exact: true}).click();
+  await expect(panel).toContainText("Последняя проверка не пройдена");
+  await expect(panel).toContainText("Интеграционный тест упал");
+  expect((await (await page.request.get("/api/state")).json() as State).taskState?.phase).toBe("VALIDATION");
+
+  await panel.getByLabel("Результат проверки").fill("Все unit, API и browser-проверки прошли");
+  await panel.getByRole("button", {name: "Подтвердить успешную проверку и завершить", exact: true}).click();
+  await expect(panel).toContainText("Завершено");
+  const completed = (await (await page.request.get("/api/state")).json() as State).taskState!;
+  expect(completed.phase).toBe("DONE");
+  expect(completed.validationStatus).toBe("PASSED");
+  expect(completed.validationDetails).toBe("Все unit, API и browser-проверки прошли");
 });
 
 test("prompt focus uses one clean highlight around the composer", async ({

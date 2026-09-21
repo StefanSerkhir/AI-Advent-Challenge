@@ -89,7 +89,9 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
             post("/assistant/task/complete") { call.respondText(api.snapshot(api.completeTask(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task-state/start") { call.respondText(api.snapshot(api.startTaskState(call.receive<TaskStateStartCommand>())), ContentType.Application.Json) }
             put("/assistant/task-state/progress") { call.respondText(api.snapshot(api.updateTaskProgress(call.receive<TaskStateProgressCommand>())), ContentType.Application.Json) }
-            post("/assistant/task-state/advance") { call.respondText(api.snapshot(api.advanceTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/approve-plan") { call.respondText(api.snapshot(api.approveTaskPlan(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/complete-implementation") { call.respondText(api.snapshot(api.completeTaskImplementation(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
+            post("/assistant/task-state/validation") { call.respondText(api.snapshot(api.recordTaskValidation(call.receive<TaskValidationCommand>())), ContentType.Application.Json) }
             post("/assistant/task-state/pause") { call.respondText(api.snapshot(api.pauseTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task-state/resume") { call.respondText(api.snapshot(api.resumeTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }
             post("/assistant/task-state/reset") { call.respondText(api.snapshot(api.resetTaskState(call.receive<ContextMutationCommand>())), ContentType.Application.Json) }

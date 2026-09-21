@@ -82,6 +82,13 @@ data class TaskStateProgressCommand(
     val expectedAction: String,
 )
 @Serializable
+data class TaskValidationCommand(
+    val expectedSettingsVersion: Long,
+    val successful: Boolean,
+    val details: String,
+    val expectedAction: String? = null,
+)
+@Serializable
 data class ErrorDto(val code: String, val message: String)
 @Serializable
 data class ModelDto(val id: String, val title: String)
@@ -263,6 +270,11 @@ data class TaskStateDto(
     val currentStep: String,
     val expectedAction: String,
     val paused: Boolean,
+    val planApprovedAtEpochMillis: Long?,
+    val implementationCompletedAtEpochMillis: Long?,
+    val validationStatus: String,
+    val validationDetails: String?,
+    val availableActions: List<String>,
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
 )
@@ -420,6 +432,11 @@ fun AgentTaskState.toDto() = TaskStateDto(
     currentStep,
     expectedAction,
     paused,
+    planApprovedAtEpochMillis,
+    implementationCompletedAtEpochMillis,
+    validationStatus.name,
+    validationDetails,
+    availableActions().map { it.name },
     createdAtEpochMillis,
     updatedAtEpochMillis,
 )

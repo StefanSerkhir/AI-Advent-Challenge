@@ -254,6 +254,10 @@ class AssistantInvariantManagerTest {
             currentStep = "Реализация",
             expectedAction = "Проверка",
             paused = false,
+            planApprovedAtEpochMillis = 2,
+            implementationCompletedAtEpochMillis = null,
+            validationStatus = TaskValidationStatus.NOT_RUN,
+            validationDetails = null,
             createdAtEpochMillis = 1,
             updatedAtEpochMillis = 2,
         )

@@ -1,6 +1,6 @@
 import {useEffect, useState} from "react";
-import {Badge, Button, Group, Textarea} from "@mantine/core";
-import type {AgentTaskState, TaskPhase} from "../api/types";
+import {Alert, Badge, Button, Group, Textarea} from "@mantine/core";
+import type {AgentTaskState, TaskAvailableAction, TaskPhase} from "../api/types";
 import type {Workbench} from "../state/useWorkbench";
 
 const phaseLabels: Record<TaskPhase, string> = {
@@ -8,12 +8,6 @@ const phaseLabels: Record<TaskPhase, string> = {
   EXECUTION: "Выполнение",
   VALIDATION: "Проверка",
   DONE: "Завершено",
-};
-
-const nextPhase: Partial<Record<TaskPhase, TaskPhase>> = {
-  PLANNING: "EXECUTION",
-  EXECUTION: "VALIDATION",
-  VALIDATION: "DONE",
 };
 
 const emptyDraft = {goal: "", currentStep: "", expectedAction: ""};
@@ -38,7 +32,7 @@ export function TaskStatePanel({workbench: w, locked}: {workbench: Workbench; lo
       workbench={w}
       locked={locked}
       cancel={task ? () => setCreating(false) : undefined}
-    /> : <ExistingTaskEditor workbench={w} locked={locked} task={task} beginNew={() => setCreating(true)}/>} 
+    /> : <ExistingTaskEditor workbench={w} locked={locked} task={task} beginNew={() => setCreating(true)}/>}
   </section>;
 }
 
@@ -77,14 +71,20 @@ function ExistingTaskEditor({workbench: w, locked, task, beginNew}: {
 }) {
   const [currentStep, setCurrentStep] = useState(task.currentStep);
   const [expectedAction, setExpectedAction] = useState(task.expectedAction);
+  const [validationDetails, setValidationDetails] = useState("");
   useEffect(() => {
     setCurrentStep(task.currentStep);
     setExpectedAction(task.expectedAction);
+    setValidationDetails("");
   }, [task.id, task.version, task.currentStep, task.expectedAction]);
-  const changed = currentStep !== task.currentStep || expectedAction !== task.expectedAction;
-  const valid = currentStep.trim() && expectedAction.trim();
-  const done = task.phase === "DONE";
-  const target = nextPhase[task.phase];
+  const can = (action: TaskAvailableAction) => task.availableActions.includes(action);
+  const stepChanged = currentStep !== task.currentStep;
+  const actionChanged = expectedAction !== task.expectedAction;
+  const changed = stepChanged || actionChanged;
+  const valid = !!currentStep.trim() && !!expectedAction.trim();
+  const validationReady = !!validationDetails.trim();
+  const editingEnabled = can("UPDATE_PROGRESS") && !locked;
+
   return <div className="task-state-editor">
     <div className="task-state-goal">
       <span>Цель</span>
@@ -92,23 +92,45 @@ function ExistingTaskEditor({workbench: w, locked, task, beginNew}: {
       <code title={task.id}>{task.id.slice(0, 12)} · v{task.version}</code>
     </div>
     <Textarea label="Текущий шаг задачи" value={currentStep} maxLength={4000} minRows={2}
-      disabled={locked || done} onChange={(event) => setCurrentStep(event.currentTarget.value)}/>
+      disabled={!editingEnabled} onChange={(event) => setCurrentStep(event.currentTarget.value)}/>
     <Textarea label="Ожидаемое следующее действие" value={expectedAction} maxLength={4000} minRows={2}
-      disabled={locked || done} onChange={(event) => setExpectedAction(event.currentTarget.value)}/>
-    {!done && <Button size="xs" variant="light" disabled={locked || !changed || !valid}
+      disabled={!editingEnabled} onChange={(event) => setExpectedAction(event.currentTarget.value)}/>
+    {can("UPDATE_PROGRESS") && <Button size="xs" variant="light" disabled={locked || !changed || !valid}
       onClick={() => void w.updateTaskProgress(currentStep, expectedAction)}>Сохранить шаг</Button>}
-    {!done && <Group grow>
-      {task.paused ? <Button size="xs" color="teal" disabled={locked || changed} onClick={() => void w.resumeTaskState()}>Продолжить задачу</Button> : <>
-        <Button size="xs" variant="light" color="orange" disabled={locked || changed} onClick={() => void w.pauseTaskState()}>Поставить на паузу</Button>
-        <Button size="xs" disabled={locked || !target || changed} onClick={() => void w.advanceTaskState()}>
-          Далее: {target ? phaseLabels[target] : "—"}
-        </Button>
-      </>}
-    </Group>}
-    {done && <Button size="xs" onClick={beginNew} disabled={locked}>Начать новую задачу</Button>}
-    <Button size="compact-xs" variant="subtle" color="red" disabled={locked}
+
+    {task.validationStatus === "FAILED" && task.validationDetails && <Alert color="red" title="Последняя проверка не пройдена">
+      {task.validationDetails}
+    </Alert>}
+    {(can("RECORD_VALIDATION_FAILURE") || can("CONFIRM_VALIDATION_SUCCESS")) && <>
+      <Textarea label="Результат проверки" value={validationDetails} maxLength={4000} minRows={2} disabled={locked}
+        placeholder="Укажите выполненные проверки и их результат"
+        onChange={(event) => setValidationDetails(event.currentTarget.value)}/>
+      <Group grow>
+        {can("RECORD_VALIDATION_FAILURE") && <Button size="xs" variant="light" color="red"
+          disabled={locked || stepChanged || !expectedAction.trim() || !validationReady}
+          onClick={() => void w.recordTaskValidation(false, validationDetails, expectedAction)}>
+          Проверка не пройдена
+        </Button>}
+        {can("CONFIRM_VALIDATION_SUCCESS") && <Button size="xs" color="teal"
+          disabled={locked || changed || !validationReady}
+          onClick={() => void w.recordTaskValidation(true, validationDetails)}>
+          Подтвердить успешную проверку и завершить
+        </Button>}
+      </Group>
+    </>}
+
+    {can("APPROVE_PLAN") && <Button size="xs" disabled={locked || changed}
+      onClick={() => void w.approveTaskPlan()}>Утвердить план и начать выполнение</Button>}
+    {can("COMPLETE_IMPLEMENTATION") && <Button size="xs" disabled={locked || changed}
+      onClick={() => void w.completeTaskImplementation()}>Передать на проверку</Button>}
+    {can("PAUSE") && <Button size="xs" variant="light" color="orange" disabled={locked || changed}
+      onClick={() => void w.pauseTaskState()}>Поставить на паузу</Button>}
+    {can("RESUME") && <Button size="xs" color="teal" disabled={locked}
+      onClick={() => void w.resumeTaskState()}>Продолжить задачу</Button>}
+    {can("START_NEW") && <Button size="xs" onClick={beginNew} disabled={locked}>Начать новую задачу</Button>}
+    {can("RESET") && <Button size="compact-xs" variant="subtle" color="red" disabled={locked}
       onClick={() => {
         if (window.confirm("Сбросить сохранённое состояние задачи? Память и история не изменятся.")) void w.resetTaskState();
-      }}>Сбросить состояние задачи</Button>
+      }}>Сбросить состояние задачи</Button>}
   </div>;
 }

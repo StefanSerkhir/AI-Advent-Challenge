@@ -12,6 +12,17 @@ export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | 
 export type MemoryLayer = "SHORT_TERM" | "WORKING" | "LONG_TERM";
 export type AssistantInvariantCategory = "ARCHITECTURE" | "TECH_DECISION" | "STACK" | "BUSINESS_RULE" | "OTHER";
 export type TaskPhase = "PLANNING" | "EXECUTION" | "VALIDATION" | "DONE";
+export type TaskValidationStatus = "NOT_RUN" | "FAILED" | "PASSED";
+export type TaskAvailableAction =
+  | "UPDATE_PROGRESS"
+  | "APPROVE_PLAN"
+  | "COMPLETE_IMPLEMENTATION"
+  | "RECORD_VALIDATION_FAILURE"
+  | "CONFIRM_VALIDATION_SUCCESS"
+  | "PAUSE"
+  | "RESUME"
+  | "RESET"
+  | "START_NEW";
 export interface Settings {
   provider: Provider;
   model: string;
@@ -236,6 +247,11 @@ export interface AgentTaskState {
   currentStep: string;
   expectedAction: string;
   paused: boolean;
+  planApprovedAtEpochMillis: number | null;
+  implementationCompletedAtEpochMillis: number | null;
+  validationStatus: TaskValidationStatus;
+  validationDetails: string | null;
+  availableActions: TaskAvailableAction[];
   createdAtEpochMillis: number;
   updatedAtEpochMillis: number;
 }

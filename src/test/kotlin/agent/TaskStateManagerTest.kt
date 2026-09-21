@@ -30,17 +30,21 @@ class TaskStateManagerTest {
         assertEquals(TaskPhase.PLANNING, planning.phase)
         assertEquals(1, planning.version)
 
-        val execution = manager.advance()
-        val validation = manager.advance()
-        val done = manager.advance()
+        val execution = manager.approvePlan()
+        val validation = manager.completeImplementation()
+        val done = manager.recordValidation(TaskValidationDraft(true, "Все проверки прошли"))
 
         assertEquals(TaskPhase.EXECUTION, execution.phase)
         assertEquals(TaskPhase.VALIDATION, validation.phase)
         assertEquals(TaskPhase.DONE, done.phase)
+        assertNotNull(execution.planApprovedAtEpochMillis)
+        assertNotNull(validation.implementationCompletedAtEpochMillis)
+        assertEquals(TaskValidationStatus.PASSED, done.validationStatus)
+        assertEquals("Все проверки прошли", done.validationDetails)
         assertEquals(listOf(2L, 3L, 4L), listOf(execution.version, validation.version, done.version))
         assertFalse(done.paused)
         val snapshot = manager.state()
-        assertFailsWith<InvalidTaskTransitionException> { manager.advance() }
+        assertFailsWith<InvalidTaskTransitionException> { manager.approvePlan() }
         assertFailsWith<InvalidTaskTransitionException> { manager.pause() }
         assertFailsWith<InvalidTaskTransitionException> { manager.resume() }
         assertFailsWith<InvalidTaskTransitionException> {
@@ -64,8 +68,14 @@ class TaskStateManagerTest {
         manager.start(draft)
         val planning = manager.state()
 
+        assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.EXECUTION) }
         assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.VALIDATION) }
+        assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.DONE) }
         assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.PLANNING) }
+        assertFailsWith<InvalidTaskTransitionException> { manager.completeImplementation() }
+        assertFailsWith<InvalidTaskTransitionException> {
+            manager.recordValidation(TaskValidationDraft(true, "Проверено"))
+        }
         assertFailsWith<InvalidTaskTransitionException> { manager.resume() }
         assertEquals(planning, manager.state())
         assertEquals(1, store.saves)
@@ -73,16 +83,21 @@ class TaskStateManagerTest {
         manager.pause()
         val paused = manager.state()
         assertFailsWith<InvalidTaskTransitionException> { manager.pause() }
-        assertFailsWith<InvalidTaskTransitionException> { manager.advance() }
+        assertFailsWith<InvalidTaskTransitionException> { manager.approvePlan() }
+        assertFailsWith<InvalidTaskTransitionException> {
+            manager.updateProgress(TaskProgressDraft("Нельзя", "На паузе"))
+        }
         assertEquals(paused, manager.state())
         assertEquals(2, store.saves)
 
         manager.resume()
-        manager.transitionTo(TaskPhase.EXECUTION)
+        manager.approvePlan()
         val execution = manager.state()
         assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.PLANNING) }
         assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.DONE) }
+        assertFailsWith<InvalidTaskTransitionException> { manager.approvePlan() }
         assertEquals(execution, manager.state())
+        assertEquals(4, store.saves)
     }
 
     @Test
@@ -96,11 +111,9 @@ class TaskStateManagerTest {
             val resumed = manager.resume()
             assertTrue(paused.paused)
             assertFalse(resumed.paused)
-            assertEquals(
-                listOf(before.id, before.goal, before.phase, before.currentStep, before.expectedAction, before.createdAtEpochMillis),
-                listOf(resumed.id, resumed.goal, resumed.phase, resumed.currentStep, resumed.expectedAction, resumed.createdAtEpochMillis),
-            )
-            if (phase != TaskPhase.VALIDATION) manager.advance()
+            assertEquals(before.copy(version = resumed.version, updatedAtEpochMillis = resumed.updatedAtEpochMillis), resumed)
+            if (phase == TaskPhase.PLANNING) manager.approvePlan()
+            if (phase == TaskPhase.EXECUTION) manager.completeImplementation()
         }
     }
 
@@ -111,18 +124,41 @@ class TaskStateManagerTest {
             val file = directory.resolve("task.json")
             val first = manager(JsonTaskStateStore(file))
             first.start(draft)
-            first.advance()
+            first.approvePlan()
             first.updateProgress(TaskProgressDraft("Реализовать FSM", "Запустить тесты"))
             first.pause()
 
             val restored = TaskStateManager(JsonTaskStateStore(file))
             assertEquals(first.state(), restored.state())
             assertNull(restored.loadWarning)
-            assertContains(Files.readString(file), "\"formatVersion\": 1")
+            assertContains(Files.readString(file), "\"formatVersion\": 2")
 
             restored.reset()
             assertNull(TaskStateManager(JsonTaskStateStore(file)).state())
             assertContains(Files.readString(file), "\"task\": null")
+
+            Files.writeString(file, """
+                {
+                  "formatVersion": 1,
+                  "task": {
+                    "id": "legacy-task",
+                    "version": 3,
+                    "goal": "Восстановить старую задачу",
+                    "phase": "VALIDATION",
+                    "currentStep": "Проверить результат",
+                    "expectedAction": "Зафиксировать проверку",
+                    "paused": true,
+                    "createdAtEpochMillis": 10,
+                    "updatedAtEpochMillis": 20
+                  }
+                }
+            """.trimIndent())
+            val migrated = requireNotNull(TaskStateManager(JsonTaskStateStore(file)).state())
+            assertEquals(TaskPhase.VALIDATION, migrated.phase)
+            assertTrue(migrated.paused)
+            assertNotNull(migrated.planApprovedAtEpochMillis)
+            assertNotNull(migrated.implementationCompletedAtEpochMillis)
+            assertEquals(TaskValidationStatus.NOT_RUN, migrated.validationStatus)
 
             Files.writeString(file, "{broken")
             val corrupt = TaskStateManager(JsonTaskStateStore(file))
@@ -139,6 +175,34 @@ class TaskStateManagerTest {
     }
 
     @Test
+    fun `failed validation stays in validation and successful evidence is required for done`() {
+        val store = CountingTaskStore()
+        val manager = manager(store)
+        manager.start(draft)
+        manager.approvePlan()
+        manager.completeImplementation()
+        val validation = manager.state()
+
+        assertFailsWith<InvalidTaskTransitionException> { manager.transitionTo(TaskPhase.DONE) }
+        assertEquals(validation, manager.state())
+        assertEquals(3, store.saves)
+        val failed = manager.recordValidation(TaskValidationDraft(
+            successful = false,
+            details = "Интеграционный тест упал",
+            expectedAction = "Исправить обработку ошибки и повторить тест",
+        ))
+        assertEquals(TaskPhase.VALIDATION, failed.phase)
+        assertEquals(TaskValidationStatus.FAILED, failed.validationStatus)
+        assertEquals("Интеграционный тест упал", failed.validationDetails)
+        assertEquals("Исправить обработку ошибки и повторить тест", failed.expectedAction)
+
+        val done = manager.recordValidation(TaskValidationDraft(true, "Повторный прогон успешен"))
+        assertEquals(TaskPhase.DONE, done.phase)
+        assertEquals(TaskValidationStatus.PASSED, done.validationStatus)
+        assertEquals("Повторный прогон успешен", done.validationDetails)
+    }
+
+    @Test
     fun `persistence failure and secret validation leave published state unchanged`() {
         val initial = manager().apply { start(draft) }.state()
         val failing = object : TaskStateStore {
@@ -146,7 +210,7 @@ class TaskStateManagerTest {
             override fun save(state: AgentTaskState?) { throw IOException("disk full") }
         }
         val manager = TaskStateManager(failing, clock = { 200 })
-        assertFailsWith<TaskStatePersistenceException> { manager.pause() }
+        assertFailsWith<TaskStatePersistenceException> { manager.approvePlan() }
         assertEquals(initial, manager.state())
 
         val protected = TaskStateManager(
@@ -193,7 +257,9 @@ class TaskStateManagerTest {
         assertEquals(tasks.state()?.id, response.taskStateDiagnostics.taskId)
         assertEquals(TaskPhase.PLANNING, response.taskStateDiagnostics.phase)
 
-        repeat(3) { tasks.advance() }
+        tasks.approvePlan()
+        tasks.completeImplementation()
+        tasks.recordValidation(TaskValidationDraft(true, "Проверки успешны"))
         memory.newDialogue()
         val afterDoneClient = RecordingTaskClient()
         val afterDone = AssistantAgent(
@@ -226,7 +292,7 @@ class TaskStateManagerTest {
     fun `provider error cancellation and incomplete stream never mutate task state`() = runBlocking {
         suspend fun verify(client: LlmClient) {
             val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
-            val tasks = manager().apply { start(draft); advance() }
+            val tasks = manager().apply { start(draft); approvePlan() }
             val before = tasks.state()
             val agent = AssistantAgent(memory, taskStateProvider = tasks::state, clientProvider = { client })
             runCatching {

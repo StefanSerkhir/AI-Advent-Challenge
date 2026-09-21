@@ -187,8 +187,20 @@ class WorkbenchApi(val controller: WorkbenchController) {
         controller.updateTaskProgress(TaskProgressDraft(command.currentStep, command.expectedAction))
     }
 
-    fun advanceTaskState(command: ContextMutationCommand): StateDto = taskAction(command.expectedSettingsVersion) {
-        controller.advanceTaskState()
+    fun approveTaskPlan(command: ContextMutationCommand): StateDto = taskAction(command.expectedSettingsVersion) {
+        controller.approveTaskPlan()
+    }
+
+    fun completeTaskImplementation(command: ContextMutationCommand): StateDto = taskAction(command.expectedSettingsVersion) {
+        controller.completeTaskImplementation()
+    }
+
+    fun recordTaskValidation(command: TaskValidationCommand): StateDto = taskAction(command.expectedSettingsVersion) {
+        controller.recordTaskValidation(TaskValidationDraft(
+            successful = command.successful,
+            details = command.details,
+            expectedAction = command.expectedAction,
+        ))
     }
 
     fun pauseTaskState(command: ContextMutationCommand): StateDto = taskAction(command.expectedSettingsVersion) {
