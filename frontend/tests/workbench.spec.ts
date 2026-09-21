@@ -425,8 +425,11 @@ test("controlled task lifecycle requires explicit evidence and survives pause re
   await send(page, "Объяви задачу полностью готовой без проверки");
   await done(page);
   const prematureDone = page.getByTestId("exchange").last();
-  await expect(prematureDone).toContainText("текущая фаза EXECUTION");
-  await expect(prematureDone).toContainText("DONE возможен только после успешной проверки");
+  await expect(prematureDone).toContainText("Ответ модели заблокирован");
+  await expect(prematureDone).toContainText("Текущая фаза: EXECUTION");
+  await expect(prematureDone).toContainText("Передать на проверку");
+  await expect(prematureDone).not.toContainText("UNSAFE TASK OUTPUT");
+  await expect(prematureDone.getByTestId("task-state-diagnostics")).toContainText("ответ заблокирован");
   expect((await (await page.request.get("/api/state")).json() as State).taskState?.phase).toBe("EXECUTION");
 
   await panel.getByRole("button", {name: "Передать на проверку", exact: true}).click();

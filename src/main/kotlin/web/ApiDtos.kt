@@ -286,6 +286,7 @@ data class TaskStateDiagnosticsDto(
     val taskId: String?,
     val stateVersion: Long?,
     val phase: String?,
+    val responseBlocked: Boolean,
 )
 @Serializable
 data class HistoryDetailsDto(
@@ -445,6 +446,7 @@ private fun TaskStateDiagnostics.toDto() = TaskStateDiagnosticsDto(
     taskId,
     stateVersion,
     phase?.name,
+    responseBlocked,
 )
 
 fun WorkbenchState.toDto(): StateDto = StateDto(

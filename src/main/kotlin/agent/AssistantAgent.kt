@@ -69,14 +69,17 @@ class AssistantAgent(
                 schema = ASSISTANT_INVARIANT_RESPONSE_SCHEMA,
             ).takeIf { invariants.invariants.isNotEmpty() },
         )
+        val buffersForPostflight = invariants.invariants.isNotEmpty() || activeTask != null
         val rawCompletion = clientProvider().streamToCompletion(
             preparation.activeMessages,
             options,
-            if (invariants.invariants.isEmpty()) onDelta else { _ -> },
+            if (buffersForPostflight) { _ -> } else onDelta,
         )
-        val enforcement = enforceInvariantResponse(rawCompletion.content, invariants)
-        val completion = rawCompletion.copy(content = enforcement.content)
-        if (invariants.invariants.isNotEmpty()) onDelta(completion.content)
+        val invariantEnforcement = enforceInvariantResponse(rawCompletion.content, invariants)
+        val taskEnforcement = enforceTaskLifecycleResponse(invariantEnforcement.content, activeTask)
+        val responseBlocked = invariantEnforcement.blocked || taskEnforcement.blocked
+        val completion = rawCompletion.copy(content = taskEnforcement.content)
+        if (buffersForPostflight) onDelta(completion.content)
         completion.usage?.let(TokenCostCalculator::validateUsage)
         val billedProfile = completion.model?.let(profileProvider) ?: profile
         val cost = costCalculator.calculate(completion.usage, billedProfile)
@@ -95,13 +98,13 @@ class AssistantAgent(
             LlmMessage(if (it.role == MemoryEntryRole.ASSISTANT) LlmRole.ASSISTANT else LlmRole.USER, it.text)
         }
         val historyTokens = tokenEstimator.estimateMessages(
-            if (enforcement.blocked) persistedHistory else
+            if (responseBlocked) persistedHistory else
                 persistedHistory + LlmMessage(LlmRole.USER, normalized) + LlmMessage(LlmRole.ASSISTANT, completion.content),
         ).tokens
         val completed = withoutTotals.copy(cumulativeTotals = aggregateTotals(candidateTurns, historyTokens, "assistant_memory"))
 
-        // A rejected invariant-protocol response is not a completed assistant turn and must not poison memory.
-        if (!enforcement.blocked) {
+        // A rejected postflight response is not a completed assistant turn and must not poison memory.
+        if (!responseBlocked) {
             memoryManager.commitShortTermPair(normalized, completion.content, shortTermMessageLimit)
         }
         completedMetrics += completed
@@ -142,13 +145,14 @@ class AssistantAgent(
                 taskId = taskApplied?.id,
                 stateVersion = taskApplied?.version,
                 phase = taskApplied?.phase,
+                responseBlocked = taskEnforcement.blocked,
             ),
             AssistantInvariantDiagnostics(
                 applied = invariantsApplied,
                 stateVersion = invariants.version,
                 appliedCount = if (invariantsApplied) invariants.invariants.size else 0,
                 appliedInvariantIds = if (invariantsApplied) invariants.invariants.map(AssistantInvariant::id) else emptyList(),
-                responseBlocked = enforcement.blocked,
+                responseBlocked = invariantEnforcement.blocked,
             ),
         )
     }
@@ -223,6 +227,11 @@ private data class AssistantInvariantAudit(
 )
 
 private data class InvariantEnforcementResult(
+    val content: String,
+    val blocked: Boolean,
+)
+
+private data class TaskLifecycleEnforcementResult(
     val content: String,
     val blocked: Boolean,
 )
@@ -389,6 +398,91 @@ private fun enforceInvariantResponse(rawContent: String, invariants: AssistantIn
     } else {
         InvariantEnforcementResult(blockedInvariantResponse(invariants), blocked = true)
     }
+}
+
+/**
+ * Narrow deterministic postflight for explicit lifecycle claims. Active-task output is buffered,
+ * so a violating draft is never streamed or committed to SHORT_TERM. This is intentionally not a
+ * general semantic classifier: it enforces only concrete claims reserved for a later FSM phase.
+ */
+private fun enforceTaskLifecycleResponse(
+    content: String,
+    task: AgentTaskState?,
+): TaskLifecycleEnforcementResult {
+    if (task == null) return TaskLifecycleEnforcementResult(content, blocked = false)
+    val violation = when (task.phase) {
+        TaskPhase.PLANNING -> content.hasAffirmativeClaim(IMPLEMENTATION_CLAIM_PATTERNS) ||
+            content.hasAffirmativeClaim(COMPLETION_CLAIM_PATTERNS)
+        TaskPhase.EXECUTION -> content.hasAffirmativeClaim(VALIDATION_CLAIM_PATTERNS) ||
+            content.hasAffirmativeClaim(COMPLETION_CLAIM_PATTERNS)
+        TaskPhase.VALIDATION -> content.hasAffirmativeClaim(COMPLETION_CLAIM_PATTERNS)
+        TaskPhase.DONE -> false
+    }
+    return if (violation) {
+        TaskLifecycleEnforcementResult(blockedTaskLifecycleResponse(task), blocked = true)
+    } else {
+        TaskLifecycleEnforcementResult(content, blocked = false)
+    }
+}
+
+private fun String.hasAffirmativeClaim(patterns: List<Regex>): Boolean = patterns.any { pattern ->
+    pattern.findAll(this).any { match -> !hasNearbyNegation(match.range.first) }
+}
+
+private fun String.hasNearbyNegation(matchStart: Int): Boolean {
+    val prefix = take(matchStart).takeLast(32)
+    return TASK_CLAIM_NEGATION_AT_END.containsMatchIn(prefix)
+}
+
+private val lifecycleRegexOptions = setOf(RegexOption.IGNORE_CASE)
+private val TASK_CLAIM_NEGATION_AT_END = Regex(
+    "(?:не|нельзя|невозможно|not|cannot|can't)\\s+(?:[\\p{L}'-]+\\s+){0,2}$",
+    lifecycleRegexOptions,
+)
+private val COMPLETION_CLAIM_PATTERNS = listOf(
+    Regex(
+        "(?:задач[а-яё]*|работ[а-яё]*|дело)\\s+(?:официально\\s+|полностью\\s+|успешно\\s+)?(?:готов[а-яё]*|заверш[а-яё]*|закрыт[а-яё]*)",
+        lifecycleRegexOptions,
+    ),
+    Regex(
+        "(?:task|work|job)\\s+(?:is\\s+)?(?:officially\\s+|fully\\s+)?(?:done|complete(?:d)?|finished|ready|closed)",
+        lifecycleRegexOptions,
+    ),
+)
+private val IMPLEMENTATION_CLAIM_PATTERNS = listOf(
+    Regex(
+        "(?:я|мы)\\s+(?:уже\\s+)?(?:реализовал[а-яё]*|добавил[а-яё]*|внедрил[а-яё]*|изменил[а-яё]*|создал[а-яё]*)",
+        lifecycleRegexOptions,
+    ),
+    Regex(
+        "(?:endpoint|эндпоинт|маршрут|изменени[ея])\\s+(?:уже\\s+)?(?:реализован[а-яё]*|добавлен[а-яё]*|внесен[а-яё]*|готов[а-яё]*)",
+        lifecycleRegexOptions,
+    ),
+    Regex(
+        "(?:i|we)\\s+(?:have\\s+)?(?:implemented|added|introduced|changed|created)",
+        lifecycleRegexOptions,
+    ),
+)
+private val VALIDATION_CLAIM_PATTERNS = listOf(
+    Regex(
+        "(?:тест[а-яё]*|проверка|валидация)\\s+(?:успешно\\s+|уже\\s+)?(?:прош[а-яё]*|пройден[а-яё]*|завершен[а-яё]*|успешн[а-яё]*)",
+        lifecycleRegexOptions,
+    ),
+    Regex(
+        "(?:tests?|checks?|validation)\\s+(?:have\\s+)?(?:passed|succeeded|completed|successful)",
+        lifecycleRegexOptions,
+    ),
+)
+
+private fun blockedTaskLifecycleResponse(task: AgentTaskState): String {
+    val action = when (task.phase) {
+        TaskPhase.PLANNING -> "утвердить план действием «Утвердить план и начать выполнение»"
+        TaskPhase.EXECUTION -> "зафиксировать завершение реализации действием «Передать на проверку»"
+        TaskPhase.VALIDATION -> "зафиксировать результат и нажать «Подтвердить успешную проверку и завершить»"
+        TaskPhase.DONE -> "создать новую задачу"
+    }
+    return "Ответ модели заблокирован: модель попыталась заявить о результате более позднего этапа. " +
+        "Текущая фаза: ${task.phase.name}. Состояние задачи не изменено. Ближайшее разрешённое действие — $action."
 }
 
 private fun normalizedStructuredJson(rawContent: String): String {

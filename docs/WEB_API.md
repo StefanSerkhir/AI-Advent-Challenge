@@ -115,10 +115,15 @@ Task State Machine доступна только при `unrestricted + MEMORY_L
 изменения `revision`/`settingsVersion` и публикации snapshot.
 Текст ответа модели не меняет FSM. System context ограничивает ответ текущей фазой:
 в `PLANNING` нельзя изображать реализацию, а до зафиксированной успешной проверки —
-объявлять задачу завершённой. Приостановленная задача блокирует обычный `POST /api/operations` с кодом
+объявлять задачу завершённой. Дополнительно ответ активной задачи буферизуется:
+backend блокирует явное утверждение о результате более поздней фазы до публикации,
+не записывает пару в `SHORT_TERM` и возвращает безопасный текст с текущей фазой и
+ближайшим разрешённым действием. Токены вызова учитываются, FSM не меняется.
+Приостановленная задача блокирует обычный `POST /api/operations` с кодом
 `409 task_paused` до вызова LLM. Активная незавершённая задача попадает в system
-context, а output diagnostics содержит только `applied`, `taskId`, `stateVersion`
-и `phase`. Известный API-ключ в любом текстовом поле даёт `400 validation`.
+context, а output diagnostics содержит только `applied`, `taskId`, `stateVersion`,
+`phase` и `responseBlocked`. Известный API-ключ в любом текстовом поле даёт
+`400 validation`.
 
 Инварианты доступны для мутаций только при `unrestricted + MEMORY_LAYERS`.
 Категория — одно из `ARCHITECTURE`, `TECH_DECISION`, `STACK`, `BUSINESS_RULE`,

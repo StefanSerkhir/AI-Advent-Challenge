@@ -272,6 +272,55 @@ class TaskStateManagerTest {
     }
 
     @Test
+    fun `premature completion claim is blocked before publication and memory commit`() = runBlocking {
+        val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
+        val tasks = manager().apply { start(draft); approvePlan() }
+        val unsafe = "Задача официально готова, считаем дело закрытым."
+        val client = RecordingTaskClient(unsafe)
+        val published = mutableListOf<String>()
+        val taskBefore = tasks.state()
+        val agent = AssistantAgent(
+            memory,
+            taskStateProvider = tasks::state,
+            clientProvider = { client },
+        )
+
+        val response = agent.respond(
+            "Заверши задачу", "unknown", 100, ContextOverflowPolicy.REJECT, 10, published::add,
+        )
+
+        assertTrue(response.taskStateDiagnostics.responseBlocked)
+        assertContains(response.completion.content, "Ответ модели заблокирован")
+        assertContains(response.completion.content, "Текущая фаза: EXECUTION")
+        assertContains(response.completion.content, "Передать на проверку")
+        assertFalse(response.completion.content.contains(unsafe))
+        assertEquals(listOf(response.completion.content), published)
+        assertTrue(memory.state().shortTerm.isEmpty())
+        assertEquals(taskBefore, tasks.state())
+        assertEquals(1, response.tokenMetrics.turnNumber)
+        assertEquals(1, agent.tokenMetricsSnapshot().size)
+    }
+
+    @Test
+    fun `compliant lifecycle refusal is published and committed`() = runBlocking {
+        val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
+        val tasks = manager().apply { start(draft); approvePlan() }
+        val safe = "Текущая фаза EXECUTION. Задача не завершена; сначала передайте результат на проверку."
+        val published = mutableListOf<String>()
+
+        val response = AssistantAgent(
+            memory,
+            taskStateProvider = tasks::state,
+            clientProvider = { RecordingTaskClient(safe) },
+        ).respond("Можно завершать?", "unknown", 100, ContextOverflowPolicy.REJECT, 10, published::add)
+
+        assertFalse(response.taskStateDiagnostics.responseBlocked)
+        assertEquals(safe, response.completion.content)
+        assertEquals(listOf(safe), published)
+        assertEquals(listOf("Можно завершать?", safe), memory.state().shortTerm.map { it.text })
+    }
+
+    @Test
     fun `paused task is rejected before llm metrics and short term mutation`() = runBlocking {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         val tasks = manager().apply { start(draft); pause() }
@@ -341,10 +390,10 @@ private class CountingTaskStore : TaskStateStore {
     }
 }
 
-private class RecordingTaskClient : LlmClient {
+private class RecordingTaskClient(private val answer: String = "Готово") : LlmClient {
     val calls = mutableListOf<List<LlmMessage>>()
     override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
         calls += messages
-        return CompletionResult("Готово", "stop", TokenUsage(10, 3, 13), "test-model")
+        return CompletionResult(answer, "stop", TokenUsage(10, 3, 13), "test-model")
     }
 }

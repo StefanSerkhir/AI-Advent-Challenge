@@ -260,6 +260,7 @@ export interface TaskStateDiagnostics {
   taskId: string | null;
   stateVersion: number | null;
   phase: TaskPhase | null;
+  responseBlocked: boolean;
 }
 export interface StartCommand {
   requestId: string;

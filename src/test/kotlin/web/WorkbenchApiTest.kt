@@ -417,6 +417,7 @@ class WorkbenchApiTest {
             assertTrue(output.taskStateDiagnostics!!.applied)
             assertEquals(executionTask.id, output.taskStateDiagnostics.taskId)
             assertEquals("EXECUTION", output.taskStateDiagnostics.phase)
+            assertFalse(output.taskStateDiagnostics.responseBlocked)
             assertContains(calls.single().first().content, "\"goal\":\"Подготовить релиз\"")
             assertEquals("Продолжай", calls.single().last().content)
 

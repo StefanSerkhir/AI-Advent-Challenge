@@ -140,6 +140,8 @@ function ResponseCard({ output }: { output: Output }) {
       {output.taskStateDiagnostics?.applied && <div className="task-state-diagnostics" data-testid="task-state-diagnostics">
         <strong>Состояние задачи применено</strong>
         <Badge size="xs" variant="light" color="blue">{output.taskStateDiagnostics.phase}</Badge>
+        {output.taskStateDiagnostics.responseBlocked &&
+          <Badge size="xs" variant="light" color="red">ответ заблокирован</Badge>}
         <code title={output.taskStateDiagnostics.taskId ?? undefined}>
           {output.taskStateDiagnostics.taskId?.slice(0, 12)} · v{output.taskStateDiagnostics.stateVersion}
         </code>

@@ -100,6 +100,7 @@ data class TaskStateDiagnostics(
     val taskId: String? = null,
     val stateVersion: Long? = null,
     val phase: TaskPhase? = null,
+    val responseBlocked: Boolean = false,
 )
 
 interface TaskStateStore {

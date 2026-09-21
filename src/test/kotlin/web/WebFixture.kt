@@ -84,7 +84,7 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             "Начни реализацию" in prompt && taskPhase == "PLANNING" ->
                 "Переход сейчас недопустим: текущая фаза PLANNING. Сначала явно утвердите план действием «Утвердить план и начать выполнение»."
             "готовой без проверки" in prompt && taskPhase != "DONE" ->
-                "Завершение сейчас недопустимо: текущая фаза $taskPhase. Ближайшее разрешённое действие задаётся панелью состояния; DONE возможен только после успешной проверки."
+                "UNSAFE TASK OUTPUT: задача официально готова, считаем дело закрытым."
             "Продолжай" in prompt && "TASK STATE DATA" in assistantProfile ->
                 "Сохранённая задача: цель=${taskField("goal")}; этап=${taskField("phase")}; шаг=${taskField("currentStep")}; следующее действие=${taskField("expectedAction")}."
             "[[invalid-invariant-receipt]]" in prompt ->
