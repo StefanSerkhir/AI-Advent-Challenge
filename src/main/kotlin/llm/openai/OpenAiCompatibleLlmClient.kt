@@ -22,6 +22,7 @@ data class OpenAiCompatibleConfig(
     val supportsStopSequences: Boolean = true,
     val supportsReasoningEffort: Boolean = false,
     val supportsJsonSchema: Boolean = false,
+    val supportsTools: Boolean = false,
 )
 
 class OpenAiCompatibleLlmClient(
@@ -45,11 +46,15 @@ class OpenAiCompatibleLlmClient(
         val response = httpResponse.body<ChatCompletionResponse>()
         val choice = response.choices.firstOrNull()
             ?: throw LlmApiException("провайдер вернул пустой ответ")
+        val toolCalls = choice.message.toolCalls.orEmpty().map { it.toDomain() }
+        val content = choice.message.content.orEmpty()
+        if (content.isEmpty() && toolCalls.isEmpty()) throw LlmApiException("провайдер вернул ответ без текста или вызова инструмента")
         return CompletionResult(
-            content = choice.message.content ?: throw LlmApiException("провайдер вернул ответ без текста"),
+            content = content,
             finishReason = choice.finishReason,
             usage = response.usage?.toTokenUsage(),
             model = response.model,
+            toolCalls = toolCalls,
         )
     }
 
@@ -67,6 +72,7 @@ class OpenAiCompatibleLlmClient(
             var finishReason: String? = null
             var usage: TokenUsage? = null
             var model: String? = null
+            val toolCalls = sortedMapOf<Int, StreamingToolCall>()
 
             suspend fun consumeEvent(): Boolean {
                 if (dataLines.isEmpty()) return false
@@ -88,6 +94,12 @@ class OpenAiCompatibleLlmClient(
                 chunk.choices.forEach { choice ->
                     finishReason = choice.finishReason ?: finishReason
                     choice.delta.content?.takeIf(String::isNotEmpty)?.let { emit(TextDelta(it)) }
+                    choice.delta.toolCalls.forEach { delta ->
+                        val current = toolCalls.getOrPut(delta.index) { StreamingToolCall() }
+                        delta.id?.let { current.id = it }
+                        delta.function?.name?.let(current.name::append)
+                        delta.function?.arguments?.let(current.arguments::append)
+                    }
                 }
                 return false
             }
@@ -105,7 +117,7 @@ class OpenAiCompatibleLlmClient(
             if (!receivedDone) {
                 throw LlmApiException("потоковый ответ провайдера оборвался до завершения")
             }
-            emit(CompletionFinished(finishReason, usage, model))
+            emit(CompletionFinished(finishReason, usage, model, toolCalls.values.map(StreamingToolCall::toDomain)))
         }
     }
 
@@ -123,8 +135,20 @@ class OpenAiCompatibleLlmClient(
                 } else {
                     config.temperatureModel ?: config.model
                 },
-                messages = messages.map {
-                    ChatMessage(role = it.role.apiValue, content = it.content)
+                messages = messages.map { message ->
+                    ChatMessage(
+                        role = message.role.apiValue,
+                        content = message.content.takeUnless { it.isEmpty() && message.toolCalls.isNotEmpty() },
+                        toolCalls = message.toolCalls.takeIf { it.isNotEmpty() }?.map { call ->
+                            ChatToolCall(
+                                id = call.id,
+                                type = "function",
+                                function = ChatToolCallFunction(call.name, call.arguments),
+                            )
+                        },
+                        toolCallId = message.toolCallId,
+                        name = message.name.takeIf { message.role != LlmRole.TOOL },
+                    )
                 },
                 maxTokens = options.maxTokens.takeUnless {
                     config.useMaxCompletionTokens
@@ -152,6 +176,18 @@ class OpenAiCompatibleLlmClient(
                             ),
                         )
                     },
+                tools = options.tools
+                    .takeIf { config.supportsTools && it.isNotEmpty() }
+                    ?.map { tool ->
+                        ChatTool(
+                            type = "function",
+                            function = ChatFunctionDefinition(
+                                name = tool.name,
+                                description = tool.description,
+                                parameters = tool.inputSchema,
+                            ),
+                        )
+                    },
             ),
         )
     }
@@ -163,7 +199,13 @@ class OpenAiCompatibleLlmClient(
         val providerMessage = runCatching {
             val root = streamJson.parseToJsonElement(errorBody).jsonObject
             root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
-        }.getOrNull() ?: errorBody.take(2_000)
+        }.getOrNull() ?: errorBody
+        val safeProviderMessage = providerMessage
+            .replace(apiKey, "<redacted>")
+            .replace(Regex("(?i)bearer\\s+[A-Za-z0-9._-]+"), "Bearer <redacted>")
+            .replace(Regex("sk-[A-Za-z0-9_-]{8,}"), "<redacted>")
+            .filter { it == '\n' || it == '\t' || !it.isISOControl() }
+            .take(2_000)
         if (status.value == 400 && isContextError(providerMessage)) {
             throw LlmContextApiException(
                 "Провайдер отклонил запрос из-за превышения контекстного окна. Уменьшите историю или резерв ответа.",
@@ -179,6 +221,9 @@ class OpenAiCompatibleLlmClient(
             409 -> "провайдер сообщил о конфликте запроса; попробуйте ещё раз"
             429 -> "превышен лимит запросов; подождите и повторите попытку"
             in 500..599 -> "сервис LLM временно недоступен (${status.value})"
+            400 -> safeProviderMessage.takeIf(String::isNotBlank)
+                ?.let { "LLM-провайдер отклонил запрос: $it" }
+                ?: "LLM API вернул ошибку 400"
             else -> "LLM API вернул ошибку ${status.value}"
         }
         throw LlmApiException(message)
@@ -198,4 +243,19 @@ class OpenAiCompatibleLlmClient(
         cacheWritePromptTokens = promptTokensDetails?.cacheWriteTokens ?: 0,
         reasoningTokens = completionTokensDetails?.reasoningTokens ?: 0,
     )
+
+    private fun ChatToolCall.toDomain() = LlmToolCall(id, function.name, function.arguments)
+
+    private class StreamingToolCall {
+        var id: String = ""
+        val name = StringBuilder()
+        val arguments = StringBuilder()
+
+        fun toDomain(): LlmToolCall {
+            if (id.isBlank() || name.isBlank()) {
+                throw LlmApiException("провайдер вернул неполный вызов инструмента")
+            }
+            return LlmToolCall(id, name.toString(), arguments.toString())
+        }
+    }
 }

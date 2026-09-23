@@ -4,6 +4,11 @@
 `src/main/kotlin/web/ApiDtos.kt`; TypeScript: `frontend/src/api/types.ts`.
 Ключи не входят в состояние. Все ошибки JSON имеют `{ "code": "...", "message": "..." }`.
 
+Каждый `outputs[]` содержит `mcpCalls`: массив `{ toolName, arguments, status,
+result }`. `status` равен `success` или `error`; arguments/result уже ограничены и
+очищены для диагностики. Массив пуст для ответа без MCP. Поле входит в обычный
+`StateDto` и SSE snapshot, отдельного MCP endpoint нет.
+
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
 | GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `assistantInvariants`, `taskState`, результаты, операция, уведомление |
@@ -81,6 +86,14 @@ context-state откатывается. При ошибке или отмене 
 в `failed`, не добавляя обмен ни в память, ни в файл. `DELETE /api/history`
 аналогично очищает память только после успешной записи пустого снимка; при ошибке
 возвращает `500 persistence`.
+
+В `unrestricted` при выбранном OpenAI backend получает каталог локального MCP через
+`tools/list`, передаёт definitions модели и исполняет не более трёх `tools/call`.
+Промежуточные assistant/tool messages существуют только во время операции. В
+историю и `SHORT_TERM` попадает только успешная пара user/final assistant; tool
+error, отмена, ошибка или незавершённый цикл не выполняют commit. Usage в output
+агрегирует все LLM-шаги. DeepSeek и остальные режимы не получают MCP tools и
+сохраняют прежний контракт ответа.
 
 В `settings` стратегия передаётся как `SLIDING_WINDOW`, `STICKY_FACTS`,
 `BRANCHING` или `MEMORY_LAYERS`, а N — как положительный `recentMessagesLimit`
@@ -162,3 +175,6 @@ production keyword-классификатора нет.
 
 Ошибки длительного LLM-вызова передаются в `exchange.status`, `exchange.error` или
 `outputs[].error`, а не превращают уже принятый POST в запоздалую HTTP-ошибку.
+Для validation-ответа провайдера `400` сохраняется его очищенная диагностическая
+причина; известный API-ключ, bearer-токен и значения формата `sk-...` редактируются
+до публикации в state/SSE.

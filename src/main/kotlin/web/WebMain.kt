@@ -9,6 +9,7 @@ import org.example.app.WorkbenchController
 import org.example.config.LocalConfig
 import org.example.config.LocalConfigStore
 import org.example.llm.createLlmClient
+import org.example.mcp.LocalMcpGateway
 import org.example.network.createHttpClient
 
 fun main() {
@@ -25,6 +26,7 @@ fun main() {
         assistantMemoryStore = JsonAssistantMemoryStore(),
         assistantInvariantStore = JsonAssistantInvariantStore(),
         taskStateStore = JsonTaskStateStore(),
+        mcpGateway = LocalMcpGateway(),
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort)) }

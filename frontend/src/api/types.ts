@@ -143,6 +143,13 @@ export interface Output {
   assistantMemoryDiagnostics: AssistantMemoryDiagnostics | null;
   taskStateDiagnostics: TaskStateDiagnostics | null;
   assistantInvariantDiagnostics: AssistantInvariantDiagnostics | null;
+  mcpCalls: McpCallDiagnostic[];
+}
+export interface McpCallDiagnostic {
+  toolName: string;
+  arguments: string;
+  status: "success" | "error";
+  result: string;
 }
 export interface Exchange {
   id: number;

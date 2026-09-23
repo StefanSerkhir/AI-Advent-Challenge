@@ -1,21 +1,11 @@
 package org.example.mcp
 
-import io.modelcontextprotocol.kotlin.sdk.client.Client
-import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
-import io.modelcontextprotocol.kotlin.sdk.types.Implementation
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.io.asSink
-import kotlinx.io.asSource
-import kotlinx.io.buffered
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.nio.file.Path
-import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.system.exitProcess
-import kotlin.time.Duration.Companion.seconds
 
 private val schemaJson = Json {
     prettyPrint = true
@@ -33,36 +23,14 @@ public fun main() {
 
 private suspend fun runMcpDemoClient(): Int {
     var stage = "starting the local MCP server"
-    var process: Process? = null
-    val client = Client(
-        clientInfo = Implementation(
-            name = "llm-workbench-mcp-demo-client",
-            version = MCP_DEMO_VERSION,
-        ),
-    )
+    val gateway = LocalMcpGateway()
 
     return try {
-        process = startServerProcess()
-        val transport = StdioClientTransport(
-            input = process.inputStream.asSource().buffered(),
-            output = process.outputStream.asSink().buffered(),
-            error = process.errorStream.asSource().buffered(),
-            classifyStderr = { StdioClientTransport.StderrSeverity.WARNING },
-        )
-
         stage = "establishing the MCP connection"
-        withTimeout(10.seconds) {
-            client.connect(transport)
-        }
-        val server = checkNotNull(client.serverVersion) {
-            "The MCP initialize response did not identify the server"
-        }
-        println("MCP connection established: ${server.name} ${server.version}")
+        val tools = gateway.listTools().sortedBy { it.name }
+        println("MCP connection established: $MCP_DEMO_SERVER_NAME $MCP_DEMO_VERSION")
 
         stage = "requesting tools/list"
-        val tools = withTimeout(10.seconds) {
-            client.listTools().tools.sortedBy { it.name }
-        }
         check(tools.isNotEmpty()) { "The MCP server returned an empty tool list" }
 
         val returnedNames = tools.mapTo(mutableSetOf()) { it.name }
@@ -73,50 +41,29 @@ private suspend fun runMcpDemoClient(): Int {
         println("tools/list returned ${tools.size} tool(s):")
         tools.forEach { tool ->
             println("- name: ${tool.name}")
-            println("  description: ${tool.description ?: "(not provided)"}")
+            println("  description: ${tool.description}")
             println("  inputSchema:")
-            schemaJson.encodeToString(tool.inputSchema).lineSequence().forEach { line ->
+            schemaJson.encodeToString(JsonObject.serializer(), tool.inputSchema).lineSequence().forEach { line ->
                 println("    $line")
             }
         }
-        println("MCP tool discovery verified successfully.")
+        stage = "calling tracker_get_issue"
+        val issue = gateway.callTool(TRACKER_GET_ISSUE_TOOL, buildJsonObject {
+            put("issueId", "DEMO-101")
+            put("includeComments", true)
+        })
+        check(!issue.isError) { "tracker_get_issue returned an error: ${issue.content}" }
+        check("DEMO-101" in issue.content && "nextAction" in issue.content) {
+            "tracker_get_issue returned an unexpected result"
+        }
+        println("tools/call tracker_get_issue returned: ${issue.content}")
+        println("MCP tool discovery and call verified successfully.")
         0
     } catch (error: Exception) {
         System.err.println("MCP demo failed while $stage: ${error.message ?: error::class.simpleName}")
         1
     } finally {
-        withContext(NonCancellable) {
-            runCatching { client.close() }
-                .onFailure { System.err.println("Failed to close MCP client cleanly: ${it.message}") }
-            stopServerProcess(process)
-        }
-    }
-}
-
-private fun startServerProcess(): Process {
-    val executable = Path.of(
-        System.getProperty("java.home"),
-        "bin",
-        if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java",
-    ).toString()
-
-    return ProcessBuilder(
-        executable,
-        "-cp",
-        System.getProperty("java.class.path"),
-        "org.example.mcp.McpDemoServerKt",
-    ).start()
-}
-
-private fun stopServerProcess(process: Process?) {
-    if (process == null) return
-
-    runCatching { process.outputStream.close() }
-    if (process.isAlive && !process.waitFor(2, TimeUnit.SECONDS)) {
-        process.destroy()
-    }
-    if (process.isAlive && !process.waitFor(2, TimeUnit.SECONDS)) {
-        process.destroyForcibly()
-        process.waitFor(2, TimeUnit.SECONDS)
+        runCatching { gateway.close() }
+            .onFailure { System.err.println("Failed to close MCP gateway cleanly: ${it.message}") }
     }
 }

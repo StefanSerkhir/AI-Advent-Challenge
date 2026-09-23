@@ -5,7 +5,41 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
 @Serializable
-data class ChatMessage(val role: String, val content: String? = null)
+data class ChatMessage(
+    val role: String,
+    val content: String? = null,
+    @SerialName("tool_calls")
+    val toolCalls: List<ChatToolCall>? = null,
+    @SerialName("tool_call_id")
+    val toolCallId: String? = null,
+    val name: String? = null,
+)
+
+@Serializable
+data class ChatTool(
+    val type: String,
+    val function: ChatFunctionDefinition,
+)
+
+@Serializable
+data class ChatFunctionDefinition(
+    val name: String,
+    val description: String,
+    val parameters: JsonObject,
+)
+
+@Serializable
+data class ChatToolCall(
+    val id: String,
+    val type: String,
+    val function: ChatToolCallFunction,
+)
+
+@Serializable
+data class ChatToolCallFunction(
+    val name: String,
+    val arguments: String,
+)
 
 @Serializable
 data class ChatCompletionRequest(
@@ -24,6 +58,7 @@ data class ChatCompletionRequest(
     val streamOptions: ChatCompletionStreamOptions? = null,
     @SerialName("response_format")
     val responseFormat: ChatCompletionResponseFormat? = null,
+    val tools: List<ChatTool>? = null,
 )
 
 @Serializable
@@ -77,6 +112,22 @@ data class ChatChunkChoice(
 @Serializable
 data class ChatMessageDelta(
     val content: String? = null,
+    @SerialName("tool_calls")
+    val toolCalls: List<ChatToolCallDelta> = emptyList(),
+)
+
+@Serializable
+data class ChatToolCallDelta(
+    val index: Int,
+    val id: String? = null,
+    val type: String? = null,
+    val function: ChatToolCallFunctionDelta? = null,
+)
+
+@Serializable
+data class ChatToolCallFunctionDelta(
+    val name: String? = null,
+    val arguments: String? = null,
 )
 
 @Serializable

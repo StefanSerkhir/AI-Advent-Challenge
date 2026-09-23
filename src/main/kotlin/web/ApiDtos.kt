@@ -181,6 +181,14 @@ data class OutputDto(
     val assistantMemoryDiagnostics: AssistantMemoryDiagnosticsDto? = null,
     val taskStateDiagnostics: TaskStateDiagnosticsDto? = null,
     val assistantInvariantDiagnostics: AssistantInvariantDiagnosticsDto? = null,
+    val mcpCalls: List<McpCallDiagnosticDto> = emptyList(),
+)
+@Serializable
+data class McpCallDiagnosticDto(
+    val toolName: String,
+    val arguments: String,
+    val status: String,
+    val result: String,
 )
 @Serializable
 data class ExchangeDto(
@@ -347,7 +355,7 @@ fun SettingsDto.toSettings(): AppSettings {
 val modes = listOf(
     ModeDto("compare", "Сравнение ответов", "Два ответа: свободный и с вашими ограничениями. Для каждого сохраняется отдельная ветка истории.", usesTokenLimit = true, usesTextConstraints = true, usesHistory = true),
     ModeDto("controlled", "С ограничениями", "Маркированный список с лимитом слов, пунктов, токенов и stop sequence.", usesTokenLimit = true, usesTextConstraints = true, usesHistory = true),
-    ModeDto("unrestricted", "Простой агент", "Агент учитывает историю, токены, контекстный бюджет и фактическую стоимость каждого завершённого вызова.", usesTokenLimit = true, usesHistory = true),
+    ModeDto("unrestricted", "Простой агент", "Агент учитывает историю, токены и стоимость. При выборе OpenAI ему доступны локальные MCP-инструменты; DeepSeek отвечает без tools.", usesTokenLimit = true, usesHistory = true),
     ModeDto("reasoning", "4 способа рассуждения", "Прямой ответ, пошаговое решение, созданный промпт и группа экспертов. Затем — оценка точности. 6 вызовов, независимые контексты.", independentContext = true),
     ModeDto("temperature", "Сравнение температуры", "Temperature 0, 0.7 и 1.2, затем оценка точности, креативности и разнообразия. Для Luna используется gpt-4.1-mini. 4 независимых вызова.", independentContext = true),
     ModeDto("models", "Сравнение моделей GPT-5.6", "Luna, Terra и Sol последовательно отвечают на один запрос с reasoning_effort=medium. Sol оценивает анонимные ответы A/B/C. Нужен ключ OpenAI.", independentContext = true, connectionLocked = true, usesTokenLimit = true),
@@ -448,6 +456,12 @@ private fun TaskStateDiagnostics.toDto() = TaskStateDiagnosticsDto(
     phase?.name,
     responseBlocked,
 )
+private fun McpCallDiagnostic.toDto() = McpCallDiagnosticDto(
+    toolName,
+    arguments,
+    status.name.lowercase(),
+    result,
+)
 
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
@@ -474,7 +488,7 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                         usage?.cachedPromptTokens, usage?.cacheWritePromptTokens), output.streaming,
                     output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName,
                     output.assistantMemoryDiagnostics?.toDto(), output.taskStateDiagnostics?.toDto(),
-                    output.assistantInvariantDiagnostics?.toDto())
+                    output.assistantInvariantDiagnostics?.toDto(), output.mcpCalls.map(McpCallDiagnostic::toDto))
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null,
             (exchange.outcome as? ExchangeOutcome.Failed)?.code,

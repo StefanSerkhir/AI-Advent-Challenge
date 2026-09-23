@@ -38,7 +38,7 @@ flowchart LR
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
 | `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
-| `src/main/kotlin/mcp` | Изолированный локальный MCP stdio-пример: сервер тестовых инструментов и клиент обнаружения `tools/list` |
+| `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -63,14 +63,23 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 `runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution.
 
-Отдельная задача `./gradlew runMcpDemo` запускает `McpDemoClientKt`. Клиент
-создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime classpath и
-соединяет их официальными `StdioClientTransport`/`StdioServerTransport` Kotlin
-MCP SDK. Сервер объявляет только безопасные локальные инструменты `ping` и `echo`;
-клиент выполняет стандартный handshake и `tools/list`, печатает полученные
-описания и JSON-схемы, проверяет каталог, затем закрывает клиент, транспорт и
-процесс. Этот пример не входит в HTTP API, не читает `.env` и не обращается к LLM
-или внешним сервисам.
+Отдельная задача `./gradlew runMcpDemo` использует тот же `LocalMcpGateway`, что и
+web runtime. Шлюз создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime
+classpath и соединяет его официальными `StdioClientTransport`/`StdioServerTransport`
+Kotlin MCP SDK. Сервер объявляет безопасные локальные инструменты `ping`, `echo` и
+`tracker_get_issue`; stdout зарезервирован только для JSON-RPC. CLI выполняет
+handshake, `tools/list` и реальный `tools/call` для `DEMO-101`, затем закрывает
+client, transport и process. Mock Tracker не читает `.env`, не использует сеть и
+не требует ключей.
+
+`LocalMcpGateway` подключается лениво при первом запросе Простого агента с OpenAI,
+кэширует полученный каталог на время соединения и сериализует protocol operations.
+Транспортная ошибка или отмена закрывает соединение и дочерний процесс; следующий
+запрос может создать новое соединение. При штатном завершении шлюз закрывает
+`WorkbenchController.shutdown`. DeepSeek и остальные response modes не получают
+tool definitions. OpenAI transport сериализует обязательный `type: "function"`
+явно и для tool definition, и для assistant tool call, не полагаясь на
+пропускаемые сериализатором значения по умолчанию.
 
 ## Доменная orchestration
 
@@ -109,6 +118,44 @@ MCP SDK. Сервер объявляет только безопасные ло�
 Все команды и worker transitions синхронизированы на контроллере. Одновременно разрешена одна операция. Настройки и мутации состояния во время неё отклоняются. `WorkbenchState` — серверный источник истины; React получает первоначальный снимок через REST, а последующие полные снимки через SSE.
 
 При `UNRESTRICTED + MEMORY_LAYERS` контроллер направляет запрос прямо в `AssistantAgent`. Любой другой вариант `UNRESTRICTED` идёт через `PromptRunner` → `LlmAgent` → `ContextManager`. Эта развилка — главная граница, предотвращающая смешивание memory layers со старыми хранилищами.
+
+Обе ветки вызывают общий bounded tool-calling executor. Для OpenAI он преобразует
+каталог MCP в Chat Completions `tools`, собирает streaming `tool_calls`, проверяет
+имя по каталогу, выполняет `tools/call` и добавляет assistant tool-call и tool-result
+только во временный контекст текущего выполнения. MCP-результат имеет роль `tool`
+и считается недоверенными данными, а не system instruction. После не более чем
+трёх вызовов модель должна вернуть финальный текст; именно он продолжает стримиться
+в output. Usage суммируется по всем LLM-шагам, а стоимость вычисляется для каждого
+шага отдельно и затем складывается, чтобы high-context тариф одного запроса не
+применялся ошибочно к агрегату нескольких запросов.
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI
+    participant A as LlmAgent / AssistantAgent
+    participant L as OpenAI-compatible LLM
+    participant G as LocalMcpGateway
+    participant S as MCP child process
+    A->>G: tools/list (lazy connect)
+    G->>S: initialize + tools/list over stdio
+    A->>L: messages + discovered tool definitions
+    L-->>A: assistant tool_calls
+    A->>G: tools/call tracker_get_issue
+    G->>S: tools/call over stdio
+    S-->>A: structured untrusted result
+    A->>L: temporary assistant tool-call + tool result
+    L-->>A: streamed final answer + usage
+    A-->>UI: final answer + MCP diagnostics in StateDto/SSE
+```
+
+При успешном цикле старый `LlmAgent` и `AssistantAgent` фиксируют только исходный
+user prompt и финальный assistant answer. Tool messages и сырой результат отдельно
+не попадают в `.llm-history.json`, `.llm-context-state.json` или `SHORT_TERM`.
+Tool error отображается в diagnostics и передаётся модели для безопасного ответа,
+но такой обмен не коммитится. Ошибка модели, неизвестный инструмент, превышение
+лимита, отмена и незавершённый поток также оставляют persistent state неизменным.
+В ветке `MEMORY_LAYERS` invariant structured output и task-state postflight
+применяются к финальному ответу после MCP-цикла.
 
 ### Обычный агент и история
 
@@ -331,6 +378,10 @@ streaming/final outputs, метрики и диагностику инвариа
 управляет тремя слоями, а `AssistantInvariants` — отдельной коллекцией правил.
 
 `useWorkbench` принимает snapshot, только если его `revision` не старее текущего. SSE является основным каналом состояния; REST-ответ после команды помогает быстро синхронизироваться. На неопределённой сетевой ошибке start command сохраняется с исходным `requestId`, чтобы проверка отправки не создала повторный платный запрос. `TaskStatePanel` показывает FSM только рядом со слоями памяти, строит доступность по серверному `availableActions`, называет переходы по смыслу, требует текст результата проверки, скрывает недопустимые переходы и оставляет resume доступным во время паузы.
+
+Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: имя,
+безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
+том же полном SSE snapshot; отдельного endpoint и клиентского источника истины нет.
 
 Условный UI должен следовать доменной доступности:
 

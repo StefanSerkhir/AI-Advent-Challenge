@@ -1,10 +1,8 @@
 package org.example.app
 
 import org.example.agent.*
-import org.example.llm.CompletionOptions
-import org.example.llm.CompletionResult
-import org.example.llm.LlmClient
-import org.example.llm.LlmMessage
+import org.example.llm.*
+import org.example.mcp.McpGateway
 import org.example.tokens.*
 
 data class LabeledResponse(
@@ -18,6 +16,7 @@ data class LabeledResponse(
     val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
     val taskStateDiagnostics: TaskStateDiagnostics? = null,
     val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
+    val mcpCalls: List<McpCallDiagnostic> = emptyList(),
 ) {
     val content: String
         get() = completion.content
@@ -35,6 +34,8 @@ class PromptRunner(
     private val onResponse: (LabeledResponse) -> Unit = {},
     private val historyStore: ConversationHistoryStore = NoOpConversationHistoryStore,
     private val contextStateStore: ContextStateStore = InMemoryContextStateStore(),
+    private val mcpGateway: McpGateway? = null,
+    private val containsSensitiveText: (String) -> Boolean = { false },
     private val clientProvider: () -> LlmClient,
 ) {
     val historyLoadWarning: String?
@@ -62,6 +63,8 @@ class PromptRunner(
                 persistConversation = { completedHistory, turns -> persist(variant, completedHistory, turns) },
                 contextManager = contextManager.takeIf { variant == ResponseVariant.UNRESTRICTED },
                 contextSessionId = variant.historyId,
+                mcpGateway = mcpGateway.takeIf { variant == ResponseVariant.UNRESTRICTED },
+                containsSensitiveText = containsSensitiveText,
             )
         }
     }
@@ -181,6 +184,7 @@ class PromptRunner(
                 overflowPolicy = settings.contextOverflowPolicy,
                 contextStrategy = settings.contextStrategy.takeIf { settings.responseMode == ResponseMode.UNRESTRICTED },
                 recentMessagesLimit = settings.recentMessagesLimit,
+                mcpEnabled = settings.responseMode == ResponseMode.UNRESTRICTED && settings.llmKind == LlmKind.OPENAI,
                 onContextPrepared = {
                     if (sticky) onProgress(PromptProgress(2, 2, "Агент формирует ответ"))
                 },
@@ -202,6 +206,7 @@ class PromptRunner(
             contextStrategy = response.contextStrategy,
             branchId = response.branchId,
             branchName = response.branchName,
+            mcpCalls = response.mcpCalls,
         )
     }
 

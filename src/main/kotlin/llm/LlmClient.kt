@@ -35,6 +35,7 @@ interface LlmClient {
                 finishReason = completion.finishReason,
                 usage = completion.usage,
                 model = completion.model,
+                toolCalls = completion.toolCalls,
             ),
         )
     }
@@ -56,6 +57,7 @@ data class CompletionFinished(
     val finishReason: String?,
     val usage: TokenUsage?,
     val model: String? = null,
+    val toolCalls: List<LlmToolCall> = emptyList(),
 ) : CompletionEvent
 
 suspend fun LlmClient.streamToCompletion(
@@ -81,6 +83,7 @@ suspend fun LlmClient.streamToCompletion(
         finishReason = metadata.finishReason,
         usage = metadata.usage,
         model = metadata.model,
+        toolCalls = metadata.toolCalls,
     )
 }
 
@@ -99,6 +102,7 @@ data class CompletionResult(
     val finishReason: String?,
     val usage: TokenUsage?,
     val model: String? = null,
+    val toolCalls: List<LlmToolCall> = emptyList(),
 )
 
 data class TokenUsage(
@@ -114,11 +118,28 @@ enum class LlmRole(val apiValue: String) {
     SYSTEM("system"),
     USER("user"),
     ASSISTANT("assistant"),
+    TOOL("tool"),
 }
 
 data class LlmMessage(
     val role: LlmRole,
     val content: String,
+    val toolCalls: List<LlmToolCall> = emptyList(),
+    val toolCallId: String? = null,
+    val name: String? = null,
+)
+
+data class LlmToolCall(
+    val id: String,
+    val name: String,
+    /** JSON object encoded as a string by the OpenAI-compatible protocol. */
+    val arguments: String,
+)
+
+data class LlmToolDefinition(
+    val name: String,
+    val description: String,
+    val inputSchema: JsonObject,
 )
 
 data class CompletionOptions(
@@ -127,6 +148,7 @@ data class CompletionOptions(
     val temperature: Double? = null,
     val reasoningEffort: ReasoningEffort? = null,
     val structuredOutput: StructuredOutput? = null,
+    val tools: List<LlmToolDefinition> = emptyList(),
 ) {
     init {
         require(maxTokens == null || maxTokens > 0) {

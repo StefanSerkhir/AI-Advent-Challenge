@@ -9,6 +9,8 @@ import io.ktor.server.testing.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.DEFAULT_STOP_SEQUENCE
@@ -16,6 +18,9 @@ import org.example.app.ResponseMode
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.llm.*
+import org.example.mcp.McpGateway
+import org.example.mcp.McpTool
+import org.example.mcp.McpToolResult
 import java.io.IOException
 import java.nio.file.Files
 import java.util.*
@@ -34,12 +39,13 @@ class WorkbenchApiTest {
         },
         assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
         taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
+        mcpGateway: McpGateway? = null,
         answer: suspend (String, List<LlmMessage>, CompletionOptions) -> CompletionResult = { model, _, _ -> completion(model) },
     ) = WorkbenchController(AppSettings(LlmKind.OPENAI, responseMode = mode), keys,
         clientFactory = { _, _, model -> object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = answer(model, messages, options)
         } }, assistantMemoryStore = assistantMemoryStore, assistantInvariantStore = assistantInvariantStore,
-        taskStateStore = taskStateStore, persistSettings = persist)
+        taskStateStore = taskStateStore, mcpGateway = mcpGateway, persistSettings = persist)
 
     private fun command(version: Long = 0, prompt: String = "Тест", demo: String? = null) = StartCommand(UUID.randomUUID().toString(), version, prompt, demo)
     private fun HttpRequestBuilder.localJson(body: String = "{}") {
@@ -47,6 +53,52 @@ class WorkbenchApiTest {
         header(HttpHeaders.Origin, "http://localhost:8080")
         contentType(ContentType.Application.Json)
         setBody(body)
+    }
+
+    @Test
+    fun `output DTO exposes safe MCP call diagnostics`() = runBlocking {
+        var gatewayCalls = 0
+        val gateway = object : McpGateway {
+            override suspend fun listTools() = listOf(McpTool(
+                "tracker_get_issue",
+                "Gets an issue",
+                buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("issueId", buildJsonObject { put("type", "string") })
+                    })
+                },
+            ))
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject): McpToolResult {
+                gatewayCalls++
+                return McpToolResult(false, "{\"id\":\"DEMO-101\",\"status\":\"In Progress\",\"nextAction\":\"Validate\"}")
+            }
+            override suspend fun close() = Unit
+        }
+        val c = controller(mode = ResponseMode.UNRESTRICTED, mcpGateway = gateway) { model, messages, _ ->
+            if (messages.none { it.role == LlmRole.TOOL }) {
+                CompletionResult("", "tool_calls", TokenUsage(3, 1, 4), model, listOf(
+                    LlmToolCall("dto-call", "tracker_get_issue", "{\"issueId\":\"DEMO-101\"}"),
+                ))
+            } else {
+                CompletionResult("DEMO-101: In Progress; далее Validate.", "stop", TokenUsage(5, 2, 7), model)
+            }
+        }
+        try {
+            val api = WorkbenchApi(c)
+            api.start(command(prompt = "Получи DEMO-101"))
+            c.awaitCurrentRequest()
+            val output = c.state.value.toDto().exchanges.last().outputs.single()
+            val diagnostic = output.mcpCalls.single()
+            assertEquals(1, gatewayCalls)
+            assertEquals("tracker_get_issue", diagnostic.toolName)
+            assertEquals("success", diagnostic.status)
+            assertEquals("{\"issueId\":\"DEMO-101\"}", diagnostic.arguments)
+            assertContains(diagnostic.result, "In Progress")
+            assertFalse(diagnostic.result.contains("test-secret-key"))
+        } finally {
+            c.close()
+        }
     }
 
     @Test

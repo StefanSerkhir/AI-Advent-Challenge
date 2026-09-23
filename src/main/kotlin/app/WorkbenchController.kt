@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerializationException
 import org.example.agent.*
 import org.example.llm.*
+import org.example.mcp.McpGateway
 import org.example.tokens.ContextLimitExceededException
 import org.example.tokens.ConversationTokenTotals
 import org.example.tokens.TurnTokenMetrics
@@ -91,6 +92,7 @@ class WorkbenchController(
     assistantMemoryStore: AssistantMemoryStore = InMemoryAssistantMemoryStore(),
     assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
     taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
+    private val mcpGateway: McpGateway? = null,
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -121,6 +123,8 @@ class WorkbenchController(
         assistantMemoryManager,
         taskStateProvider = taskStateManager::state,
         invariantStateProvider = assistantInvariantManager::state,
+        mcpGateway = mcpGateway,
+        containsSensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
     ) {
         requestClient.get() ?: error("Клиент запроса не инициализирован")
     }
@@ -129,13 +133,16 @@ class WorkbenchController(
         onDelta = { publishStreamingOutput(it.asOutput()) },
         onResponse = {
             addOutput(ExperimentOutput(it.variant.name, it.heading, it.completion, tokenMetrics = it.tokenMetrics,
-                contextStrategy = it.contextStrategy, branchId = it.branchId, branchName = it.branchName))
+                contextStrategy = it.contextStrategy, branchId = it.branchId, branchName = it.branchName,
+                mcpCalls = it.mcpCalls))
             publish { it.copy(historyMessages = promptRunner.historySnapshot(), historyTurnCounts = promptRunner.historyTurnCounts(),
                 tokenMetrics = promptRunner.tokenMetricsSnapshot(), tokenTotals = promptRunner.tokenTotalsSnapshot(),
                 context = promptRunner.contextDiagnostics(it.settings)) }
         },
         historyStore = historyStore,
         contextStateStore = contextStateStore,
+        mcpGateway = mcpGateway,
+        containsSensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
         clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
     )
     private val _state = MutableStateFlow(
@@ -491,6 +498,7 @@ class WorkbenchController(
     suspend fun shutdown() {
         close()
         workerScope.coroutineContext[Job]?.join()
+        mcpGateway?.close()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
@@ -581,6 +589,7 @@ class WorkbenchController(
                                 maxTokens = settings.maxTokens,
                                 overflowPolicy = settings.contextOverflowPolicy,
                                 shortTermMessageLimit = settings.recentMessagesLimit,
+                                mcpEnabled = settings.llmKind == LlmKind.OPENAI,
                                 onDelta = { content -> publishStreamingOutput(ExperimentOutputDelta(
                                     "assistant", "ОТВЕТ АГЕНТА", content, tokenMetrics = preparedMetrics,
                                 ).asOutput()) },
@@ -600,6 +609,7 @@ class WorkbenchController(
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
                                 taskStateDiagnostics = response.taskStateDiagnostics,
                                 assistantInvariantDiagnostics = response.invariantDiagnostics,
+                                mcpCalls = response.mcpCalls,
                             ))
                             publish { it.copy(
                                 assistantMemory = assistantMemoryManager.state(),
@@ -615,6 +625,7 @@ class WorkbenchController(
                                 assistantMemoryDiagnostics = response.memoryDiagnostics,
                                 taskStateDiagnostics = response.taskStateDiagnostics,
                                 assistantInvariantDiagnostics = response.invariantDiagnostics,
+                                mcpCalls = response.mcpCalls,
                             )))
                         } else {
                             RequestResult.Responses(promptRunner.complete(normalizedPrompt, settings))

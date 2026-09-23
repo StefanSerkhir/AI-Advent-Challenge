@@ -284,6 +284,7 @@ private enum class StoredRole {
     companion object {
         fun from(role: LlmRole): StoredRole = when (role) {
             LlmRole.SYSTEM -> error("System messages are request-only and cannot be stored in dialogue history")
+            LlmRole.TOOL -> error("Tool messages are request-only and cannot be stored in dialogue history")
             LlmRole.USER -> USER
             LlmRole.ASSISTANT -> ASSISTANT
         }

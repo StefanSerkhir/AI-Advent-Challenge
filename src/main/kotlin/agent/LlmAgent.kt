@@ -1,7 +1,9 @@
 package org.example.agent
 
 import org.example.llm.*
+import org.example.mcp.McpGateway
 import org.example.tokens.*
+import java.math.BigDecimal
 
 /** A user request handled by an [Agent]. */
 data class AgentRequest(
@@ -12,6 +14,7 @@ data class AgentRequest(
     val overflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
     val contextStrategy: ContextStrategy? = null,
     val recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
+    val mcpEnabled: Boolean = false,
     val onContextPrepared: () -> Unit = {},
 )
 
@@ -22,6 +25,7 @@ data class AgentResponse(
     val contextStrategy: ContextStrategy? = null,
     val branchId: String? = null,
     val branchName: String? = null,
+    val mcpCalls: List<McpCallDiagnostic> = emptyList(),
 ) {
     val content: String
         get() = completion.content
@@ -57,6 +61,8 @@ class LlmAgent(
     private val costCalculator: TokenCostCalculator = TokenCostCalculator(),
     private val contextManager: ContextManager? = null,
     private val contextSessionId: String = "default",
+    private val mcpGateway: McpGateway? = null,
+    private val containsSensitiveText: (String) -> Boolean = { false },
     private val clientProvider: () -> LlmClient,
 ) : Agent {
     private val history = initialHistory.toMutableList()
@@ -99,18 +105,28 @@ class LlmAgent(
         }
         val prepared = preparedMetrics(request, preparation, profile)
         onMetrics(prepared)
-        val completion = clientProvider().streamToCompletion(preparation.activeMessages, request.options, onDelta)
+        val execution = executeWithMcpTools(
+            client = clientProvider(),
+            messages = preparation.activeMessages,
+            options = request.options,
+            gateway = mcpGateway,
+            mcpEnabled = request.mcpEnabled,
+            containsSensitiveText = containsSensitiveText,
+            onDelta = onDelta,
+        )
+        val completion = execution.completion
         completion.usage?.let(TokenCostCalculator::validateUsage)
         val billedProfile = if (completion.model != null) profileProvider(completion.model) else profile
 
         val assistantMessage = LlmMessage(LlmRole.ASSISTANT, completion.content)
         var committedContext: ContextSessionState? = null
-        val candidateHistory = if (!request.historyEnabled) history.toList() else if (preparedContext != null) {
+        val persistCompletedTurn = execution.mcpSucceeded
+        val candidateHistory = if (!request.historyEnabled || !persistCompletedTurn) history.toList() else if (preparedContext != null) {
             committedContext = requireNotNull(contextManager).commit(preparedContext, assistantMessage)
             contextManager.activeMessages(contextSessionId, request.contextStrategy!!)
         } else history + userMessage + assistantMessage
         val baseTurns = if (request.historyEnabled) completedMetrics.toList() else runtimeMetrics.toList()
-        val cost = costCalculator.calculate(completion.usage, billedProfile)
+        val cost = aggregateStepCost(execution.llmSteps, profileProvider, costCalculator, request.model)
         val withoutTotals = prepared.copy(
             model = completion.model ?: request.model,
             assistantMessage = completion.content,
@@ -134,7 +150,7 @@ class LlmAgent(
         )
         val completed = withoutTotals.copy(cumulativeTotals = totals)
 
-        if (request.historyEnabled) {
+        if (request.historyEnabled && persistCompletedTurn) {
             val completedHistory = candidateHistory
             val turns = completedMetrics + completed
             try {
@@ -147,12 +163,15 @@ class LlmAgent(
             history.addAll(completedHistory)
             completedMetrics.clear()
             completedMetrics.addAll(turns)
-        } else {
+        } else if (!request.historyEnabled && persistCompletedTurn) {
             runtimeMetrics += completed
         }
 
         onMetrics(completed)
-        return AgentResponse(completion, completed, preparedContext?.strategy, preparedContext?.branchId, preparedContext?.branchName)
+        return AgentResponse(
+            completion, completed, preparedContext?.strategy, preparedContext?.branchId, preparedContext?.branchName,
+            execution.mcpCalls,
+        )
     }
 
     fun historySnapshot(): List<LlmMessage> = history.toList()
@@ -209,4 +228,17 @@ class LlmAgent(
             contextProfileSimulated = profile?.simulated == true,
         )
     }
+}
+
+internal fun aggregateStepCost(
+    steps: List<LlmCallStep>,
+    profileProvider: (String) -> ModelContextProfile?,
+    costCalculator: TokenCostCalculator,
+    fallbackModel: String,
+): BigDecimal? {
+    val costs = steps.map { step ->
+        val usage = step.usage ?: return null
+        costCalculator.calculate(usage, profileProvider(step.model ?: fallbackModel)) ?: return null
+    }
+    return costs.fold(BigDecimal.ZERO, BigDecimal::add)
 }

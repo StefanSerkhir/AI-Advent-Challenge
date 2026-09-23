@@ -421,6 +421,40 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mcp-diagnostics {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid #cfe8df;
+  border-radius: 8px;
+  background: #f4fbf8;
+  font-size: 11px;
+}
+.mcp-call,
+.mcp-call details {
+  display: grid;
+  gap: 5px;
+}
+.mcp-call > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.mcp-call summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.mcp-call p {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 6px;
+  margin: 0;
+}
+.mcp-call code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .workspace {
   min-width: 0;
   min-height: 0;

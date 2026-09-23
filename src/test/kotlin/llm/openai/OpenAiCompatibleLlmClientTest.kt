@@ -15,6 +15,89 @@ import kotlin.test.*
 
 class OpenAiCompatibleLlmClientTest {
     @Test
+    fun `tools are serialized and assistant tool calls plus tool results form the next request`() = runBlocking {
+        val requests = mutableListOf<JsonObject>()
+        val http = HttpClient(MockEngine { captured ->
+            requests += Json.parseToJsonElement((captured.body as TextContent).text).jsonObject
+            val response = if (requests.size == 1) {
+                """{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"tracker_get_issue","arguments":"{\"issueId\":\"DEMO-101\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13},"model":"gpt-test"}"""
+            } else {
+                """{"choices":[{"message":{"role":"assistant","content":"Статус: In Progress"},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25},"model":"gpt-test"}"""
+            }
+            respond(response, headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()))
+        }) { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
+        try {
+            val client = OpenAiLlmClient("fake-key", http, "gpt-test")
+            val schema = buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject {
+                    put("issueId", buildJsonObject { put("type", "string") })
+                })
+                put("required", buildJsonArray { add("issueId") })
+            }
+            val options = CompletionOptions(tools = listOf(LlmToolDefinition(
+                "tracker_get_issue", "Gets an issue", schema,
+            )))
+            val first = client.complete(listOf(LlmMessage(LlmRole.USER, "Get DEMO-101")), options)
+
+            assertEquals("tool_calls", first.finishReason)
+            assertEquals(listOf(LlmToolCall("call-1", "tracker_get_issue", "{\"issueId\":\"DEMO-101\"}")), first.toolCalls)
+            val serializedTool = requests[0]["tools"]?.jsonArray?.single()?.jsonObject
+            assertEquals("function", serializedTool?.get("type")?.jsonPrimitive?.content)
+            val function = serializedTool?.get("function")?.jsonObject
+            assertEquals("tracker_get_issue", function?.get("name")?.jsonPrimitive?.content)
+            assertEquals("Gets an issue", function?.get("description")?.jsonPrimitive?.content)
+            assertEquals(schema, function?.get("parameters"))
+
+            val second = client.complete(listOf(
+                LlmMessage(LlmRole.USER, "Get DEMO-101"),
+                LlmMessage(LlmRole.ASSISTANT, "", toolCalls = first.toolCalls),
+                LlmMessage(LlmRole.TOOL, "{\"status\":\"In Progress\"}", toolCallId = "call-1", name = "tracker_get_issue"),
+            ), options)
+            assertEquals("Статус: In Progress", second.content)
+            val messages = requests[1]["messages"]?.jsonArray.orEmpty().map(JsonElement::jsonObject)
+            assertEquals("function", messages[1]["tool_calls"]?.jsonArray?.single()?.jsonObject
+                ?.get("type")?.jsonPrimitive?.content)
+            assertEquals("tracker_get_issue", messages[1]["tool_calls"]?.jsonArray?.single()?.jsonObject
+                ?.get("function")?.jsonObject?.get("name")?.jsonPrimitive?.content)
+            assertEquals("call-1", messages[2]["tool_call_id"]?.jsonPrimitive?.content)
+            assertNull(messages[2]["name"])
+            assertEquals("tool", messages[2]["role"]?.jsonPrimitive?.content)
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
+    fun `stream reassembles fragmented tool call arguments`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                content = """
+                    data: {"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-7","type":"function","function":{"name":"tracker_get_issue","arguments":"{\"issueId\":"}}]},"finish_reason":null}]}
+
+                    data: {"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"DEMO-101\"}"}}]},"finish_reason":"tool_calls"}]}
+
+                    data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}
+
+                    data: [DONE]
+
+                """.trimIndent(),
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
+            )
+        }) { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
+        try {
+            val finished = assertIs<CompletionFinished>(OpenAiLlmClient("fake-key", http, "gpt-test")
+                .stream("DEMO-101", CompletionOptions(tools = listOf(LlmToolDefinition(
+                    "tracker_get_issue", "Gets an issue", buildJsonObject { put("type", "object") },
+                )))).toList().last())
+            assertEquals("tool_calls", finished.finishReason)
+            assertEquals(listOf(LlmToolCall("call-7", "tracker_get_issue", "{\"issueId\":\"DEMO-101\"}")), finished.toolCalls)
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
     fun `stream sends streaming options and emits text deltas before final metadata`() = runBlocking {
         lateinit var request: JsonObject
         val http = HttpClient(MockEngine { captured ->
@@ -89,6 +172,25 @@ class OpenAiCompatibleLlmClientTest {
             assertEquals(400, error.providerStatus)
             assertContains(error.message.orEmpty(), "контекстного окна")
             assertFalse(error.message.orEmpty().contains("LLM API вернул ошибку 400"))
+        } finally { http.close() }
+    }
+
+    @Test
+    fun `provider validation details are preserved while API keys are redacted`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                content = """{"error":{"message":"Invalid parameter for sk-test-secret-value","type":"invalid_request_error","param":"messages"}}""",
+                status = HttpStatusCode.BadRequest,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }) { install(ContentNegotiation) { json() } }
+        try {
+            val error = assertFailsWith<LlmApiException> {
+                OpenAiLlmClient("sk-test-secret-value", http).complete("invalid request")
+            }
+            assertContains(error.message.orEmpty(), "Invalid parameter")
+            assertContains(error.message.orEmpty(), "<redacted>")
+            assertFalse(error.message.orEmpty().contains("sk-test-secret-value"))
         } finally { http.close() }
     }
 

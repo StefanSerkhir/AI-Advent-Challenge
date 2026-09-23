@@ -3,6 +3,7 @@ package org.example.agent
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import org.example.llm.*
+import org.example.mcp.McpGateway
 import org.example.tokens.*
 
 data class AssistantAgentResponse(
@@ -11,6 +12,7 @@ data class AssistantAgentResponse(
     val memoryDiagnostics: AssistantMemoryDiagnostics,
     val taskStateDiagnostics: TaskStateDiagnostics,
     val invariantDiagnostics: AssistantInvariantDiagnostics,
+    val mcpCalls: List<McpCallDiagnostic> = emptyList(),
 )
 
 /** Independent assistant pipeline. It never reads or writes LlmAgent/ContextManager history. */
@@ -21,6 +23,8 @@ class AssistantAgent(
     private val costCalculator: TokenCostCalculator = TokenCostCalculator(),
     private val taskStateProvider: () -> AgentTaskState? = { null },
     private val invariantStateProvider: () -> AssistantInvariantState = { AssistantInvariantState() },
+    private val mcpGateway: McpGateway? = null,
+    private val containsSensitiveText: (String) -> Boolean = { false },
     private val clientProvider: () -> LlmClient,
 ) {
     private val completedMetrics = mutableListOf<TurnTokenMetrics>()
@@ -33,6 +37,7 @@ class AssistantAgent(
         shortTermMessageLimit: Int,
         onDelta: (String) -> Unit = {},
         onMetrics: (TurnTokenMetrics) -> Unit = {},
+        mcpEnabled: Boolean = false,
     ): AssistantAgentResponse {
         val normalized = prompt.trim()
         require(normalized.isNotEmpty()) { "Запрос ассистенту не может быть пустым." }
@@ -70,11 +75,16 @@ class AssistantAgent(
             ).takeIf { invariants.invariants.isNotEmpty() },
         )
         val buffersForPostflight = invariants.invariants.isNotEmpty() || activeTask != null
-        val rawCompletion = clientProvider().streamToCompletion(
-            preparation.activeMessages,
-            options,
-            if (buffersForPostflight) { _ -> } else onDelta,
+        val execution = executeWithMcpTools(
+            client = clientProvider(),
+            messages = preparation.activeMessages,
+            options = options,
+            gateway = mcpGateway,
+            mcpEnabled = mcpEnabled,
+            containsSensitiveText = containsSensitiveText,
+            onDelta = if (buffersForPostflight) { _ -> } else onDelta,
         )
+        val rawCompletion = execution.completion
         val invariantEnforcement = enforceInvariantResponse(rawCompletion.content, invariants)
         val taskEnforcement = enforceTaskLifecycleResponse(invariantEnforcement.content, activeTask)
         val responseBlocked = invariantEnforcement.blocked || taskEnforcement.blocked
@@ -82,7 +92,7 @@ class AssistantAgent(
         if (buffersForPostflight) onDelta(completion.content)
         completion.usage?.let(TokenCostCalculator::validateUsage)
         val billedProfile = completion.model?.let(profileProvider) ?: profile
-        val cost = costCalculator.calculate(completion.usage, billedProfile)
+        val cost = aggregateStepCost(execution.llmSteps, profileProvider, costCalculator, model)
         val withoutTotals = prepared.copy(
             model = completion.model ?: model,
             assistantMessage = completion.content,
@@ -97,14 +107,15 @@ class AssistantAgent(
         val persistedHistory = memory.state.shortTerm.map {
             LlmMessage(if (it.role == MemoryEntryRole.ASSISTANT) LlmRole.ASSISTANT else LlmRole.USER, it.text)
         }
+        val persistCompletedTurn = !responseBlocked && execution.mcpSucceeded
         val historyTokens = tokenEstimator.estimateMessages(
-            if (responseBlocked) persistedHistory else
+            if (!persistCompletedTurn) persistedHistory else
                 persistedHistory + LlmMessage(LlmRole.USER, normalized) + LlmMessage(LlmRole.ASSISTANT, completion.content),
         ).tokens
         val completed = withoutTotals.copy(cumulativeTotals = aggregateTotals(candidateTurns, historyTokens, "assistant_memory"))
 
         // A rejected postflight response is not a completed assistant turn and must not poison memory.
-        if (!responseBlocked) {
+        if (persistCompletedTurn) {
             memoryManager.commitShortTermPair(normalized, completion.content, shortTermMessageLimit)
         }
         completedMetrics += completed
@@ -154,6 +165,7 @@ class AssistantAgent(
                 appliedInvariantIds = if (invariantsApplied) invariants.invariants.map(AssistantInvariant::id) else emptyList(),
                 responseBlocked = invariantEnforcement.blocked,
             ),
+            execution.mcpCalls,
         )
     }
 

@@ -1,9 +1,6 @@
 package org.example.app
 
-import org.example.agent.AssistantInvariantDiagnostics
-import org.example.agent.AssistantMemoryDiagnostics
-import org.example.agent.ContextStrategy
-import org.example.agent.TaskStateDiagnostics
+import org.example.agent.*
 import org.example.llm.CompletionResult
 import org.example.tokens.TurnTokenMetrics
 
@@ -24,6 +21,7 @@ data class ExperimentOutput(
     val assistantMemoryDiagnostics: AssistantMemoryDiagnostics? = null,
     val taskStateDiagnostics: TaskStateDiagnostics? = null,
     val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
+    val mcpCalls: List<McpCallDiagnostic> = emptyList(),
 )
 
 data class ExperimentOutputDelta(

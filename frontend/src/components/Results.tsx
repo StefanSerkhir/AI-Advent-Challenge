@@ -62,6 +62,7 @@ const thinkingOutput: Output = {
   assistantMemoryDiagnostics: null,
   taskStateDiagnostics: null,
   assistantInvariantDiagnostics: null,
+  mcpCalls: [],
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -105,6 +106,22 @@ function ResponseCard({ output }: { output: Output }) {
         )}
       </div>
       {output.model && <div className="model-label">{output.model}</div>}
+      {output.mcpCalls.length > 0 && <div className="mcp-diagnostics" data-testid="mcp-diagnostics">
+        <strong>MCP-инструменты</strong>
+        {output.mcpCalls.map((call, index) => <div className="mcp-call" key={`${call.toolName}-${index}`}>
+          <div>
+            <code>{call.toolName}</code>
+            <Badge size="xs" variant="light" color={call.status === "success" ? "teal" : "red"}>
+              {call.status === "success" ? "успех" : "ошибка"}
+            </Badge>
+          </div>
+          <details>
+            <summary>Аргументы и результат</summary>
+            <p><span>Аргументы</span><code>{call.arguments}</code></p>
+            <p><span>Результат</span><code>{call.result}</code></p>
+          </details>
+        </div>)}
+      </div>}
       {output.assistantInvariantDiagnostics && <div className="invariant-diagnostics" data-testid="invariant-diagnostics">
         <strong>Инварианты этого вызова</strong>
         <Badge size="xs" variant="light" color={output.assistantInvariantDiagnostics.responseBlocked ? "red" : output.assistantInvariantDiagnostics.applied ? "violet" : "gray"}>

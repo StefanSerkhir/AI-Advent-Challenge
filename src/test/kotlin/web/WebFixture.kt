@@ -15,6 +15,7 @@ import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.llm.*
+import org.example.mcp.LocalMcpGateway
 import java.io.IOException
 import java.nio.file.Files
 
@@ -30,6 +31,7 @@ fun main() {
         assistantMemoryStore = JsonAssistantMemoryStore(directory.resolve(".llm-assistant-memory.json")),
         assistantInvariantStore = JsonAssistantInvariantStore(directory.resolve(".llm-assistant-invariants.json")),
         taskStateStore = JsonTaskStateStore(directory.resolve(".llm-task-state.json")),
+        mcpGateway = LocalMcpGateway(),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -45,20 +47,22 @@ fun main() {
 private class FixtureLlmClient(private val model: String) : LlmClient {
     override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
         val completion = complete(messages, options)
-        val chunks = if ("[[stream]]" in messages.last().content) {
+        val prompt = messages.lastOrNull { it.role == LlmRole.USER }?.content.orEmpty()
+        val chunks = if ("[[stream]]" in prompt) {
             completion.content.chunked(7)
         } else {
             completion.content.chunked((completion.content.length / 6).coerceAtLeast(1))
         }
         chunks.forEach { chunk ->
             emit(TextDelta(chunk))
-            delay(if ("[[stream]]" in messages.last().content) 120 else 5)
+            delay(if ("[[stream]]" in prompt) 120 else 5)
         }
-        emit(CompletionFinished(completion.finishReason, completion.usage, completion.model))
+        emit(CompletionFinished(completion.finishReason, completion.usage, completion.model, completion.toolCalls))
     }
 
     override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
-        val prompt = messages.last().content
+        val prompt = messages.lastOrNull { it.role == LlmRole.USER }?.content.orEmpty()
+        val toolResult = messages.lastOrNull { it.role == LlmRole.TOOL }
         val assistantProfile = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
         delay(
             when {
@@ -69,6 +73,19 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
+        if (options.tools.any { it.name == "tracker_get_issue" } && "DEMO-101" in prompt && toolResult == null) {
+            return CompletionResult(
+                content = "",
+                finishReason = "tool_calls",
+                usage = TokenUsage(35, 12, 47),
+                model = model,
+                toolCalls = listOf(LlmToolCall(
+                    id = "fixture-tracker-call-1",
+                    name = "tracker_get_issue",
+                    arguments = "{\"issueId\":\"DEMO-101\",\"includeComments\":false}",
+                )),
+            )
+        }
         fun taskField(name: String) = Regex("\\\"$name\\\":\\\"([^\\\"]*)\\\"")
             .find(assistantProfile)?.groupValues?.get(1).orEmpty()
         val taskPhase = taskField("phase")
@@ -77,6 +94,8 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
+            toolResult?.name == "tracker_get_issue" && "DEMO-101" in toolResult.content ->
+                "Задача **DEMO-101** имеет статус **In Progress**. Следующее действие: завершить сквозные тесты и отправить изменение на проверку."
             messages.firstOrNull()?.content?.contains("key-value memory") == true -> {
                 val value = Regex("меня зовут\\s+([\\p{L}-]+)", RegexOption.IGNORE_CASE).find(prompt)?.groupValues?.get(1)
                 if (value != null) "{\"upsert\":{\"name\":\"$value\"},\"delete\":[]}" else "{\"upsert\":{},\"delete\":[]}"

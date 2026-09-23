@@ -180,6 +180,30 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
+test("simple agent calls tracker through MCP and shows diagnostics", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");
+
+  await send(page, "Получи через трекер данные задачи DEMO-101 и кратко скажи её статус и следующее действие");
+  await done(page);
+
+  const exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("DEMO-101");
+  await expect(exchange).toContainText("In Progress");
+  await expect(exchange).toContainText("завершить сквозные тесты");
+  const diagnostics = exchange.getByTestId("mcp-diagnostics");
+  await expect(diagnostics).toBeVisible();
+  await expect(diagnostics).toContainText("MCP-инструменты");
+  await expect(diagnostics).toContainText("tracker_get_issue");
+  await expect(diagnostics).toContainText("успех");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const call = state.exchanges.at(-1)!.outputs[0].mcpCalls[0];
+  expect(call.toolName).toBe("tracker_get_issue");
+  expect(call.arguments).toContain("DEMO-101");
+  expect(call.result).toContain("nextAction");
+});
+
 test("assistant profile personalizes neutral requests and current format overrides it", async ({page}) => {
   await setMode(page, "unrestricted");
   await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");

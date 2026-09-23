@@ -6,9 +6,164 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.example.llm.*
+import org.example.mcp.LocalMcpGateway
+import org.example.tokens.ModelContextProfiles
+import org.example.tokens.TokenCostCalculator
 import kotlin.test.*
 
 class LlmAgentTest {
+    @Test
+    fun `multi-step MCP cost is summed per request before high-context pricing`() {
+        val calculator = TokenCostCalculator()
+        val profile = requireNotNull(ModelContextProfiles.find("gpt-5.6-sol"))
+        val stepUsage = TokenUsage(200_000, 100, 200_100)
+        val expected = requireNotNull(calculator.calculate(stepUsage, profile)).multiply(java.math.BigDecimal(2))
+
+        val actual = aggregateStepCost(
+            listOf(LlmCallStep(stepUsage, profile.modelId), LlmCallStep(stepUsage, profile.modelId)),
+            ModelContextProfiles::find,
+            calculator,
+            profile.modelId,
+        )
+        val incorrectlyTieredAggregate = calculator.calculate(TokenUsage(400_000, 200, 400_200), profile)
+
+        assertEquals(expected, actual)
+        assertNotEquals(incorrectlyTieredAggregate, actual)
+    }
+
+    @Test
+    fun `agent performs a real MCP call and persists only user plus final assistant`() = runBlocking {
+        val gateway = LocalMcpGateway()
+        val calls = mutableListOf<List<LlmMessage>>()
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                calls += messages
+                return if (step++ == 0) {
+                    assertTrue(options.tools.any { it.name == "tracker_get_issue" })
+                    CompletionResult("", "tool_calls", TokenUsage(10, 3, 13), "test-model", listOf(
+                        LlmToolCall("call-1", "tracker_get_issue", "{\"issueId\":\"DEMO-101\"}"),
+                    ))
+                } else {
+                    val tool = messages.last()
+                    assertEquals(LlmRole.TOOL, tool.role)
+                    assertContains(tool.content, "UNTRUSTED MCP TOOL DATA")
+                    assertContains(tool.content, "\"status\":\"In Progress\"")
+                    assertContains(tool.content, "\"nextAction\"")
+                    CompletionResult("Статус: In Progress. Следующее действие: завершить сквозные тесты.",
+                        "stop", TokenUsage(30, 8, 38), "test-model")
+                }
+            }
+        }
+        var persisted = emptyList<LlmMessage>()
+        val agent = LlmAgent(
+            persistHistory = { persisted = it },
+            mcpGateway = gateway,
+            clientProvider = { client },
+        )
+        try {
+            val response = agent.respond(AgentRequest(
+                "Получи через трекер DEMO-101", model = "test-model", mcpEnabled = true,
+            ))
+
+            assertEquals(2, calls.size)
+            assertEquals(listOf(LlmRole.USER, LlmRole.ASSISTANT, LlmRole.TOOL), calls[1].map(LlmMessage::role))
+            assertEquals(40, response.completion.usage?.promptTokens)
+            assertEquals(11, response.completion.usage?.completionTokens)
+            assertEquals(51, response.completion.usage?.totalTokens)
+            assertEquals(McpCallStatus.SUCCESS, response.mcpCalls.single().status)
+            assertEquals("tracker_get_issue", response.mcpCalls.single().toolName)
+            assertEquals(listOf(LlmRole.USER, LlmRole.ASSISTANT), persisted.map(LlmMessage::role))
+            assertEquals(listOf("Получи через трекер DEMO-101", response.content), persisted.map(LlmMessage::content))
+            assertTrue(persisted.none { it.role == LlmRole.TOOL || it.toolCalls.isNotEmpty() })
+        } finally {
+            gateway.close()
+        }
+    }
+
+    @Test
+    fun `MCP tool error is diagnosed and final response is not persisted`() = runBlocking {
+        val gateway = LocalMcpGateway()
+        var step = 0
+        var persistenceCalls = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = if (step++ == 0) {
+                CompletionResult("", "tool_calls", TokenUsage(2, 1, 3), "test-model", listOf(
+                    LlmToolCall("missing", "tracker_get_issue", "{\"issueId\":\"DEMO-404\"}"),
+                ))
+            } else {
+                assertContains(messages.last().content, "was not found")
+                CompletionResult("Задача не найдена.", "stop", TokenUsage(3, 2, 5), "test-model")
+            }
+        }
+        val agent = LlmAgent(
+            persistHistory = { persistenceCalls++ },
+            mcpGateway = gateway,
+            clientProvider = { client },
+        )
+        try {
+            val response = agent.respond(AgentRequest("Найди DEMO-404", mcpEnabled = true))
+            assertEquals(McpCallStatus.ERROR, response.mcpCalls.single().status)
+            assertEquals("Задача не найдена.", response.content)
+            assertTrue(agent.historySnapshot().isEmpty())
+            assertEquals(0, persistenceCalls)
+        } finally {
+            gateway.close()
+        }
+    }
+
+    @Test
+    fun `agent rejects a fourth MCP call without committing history`() = runBlocking {
+        val gateway = LocalMcpGateway()
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = CompletionResult(
+                "", "tool_calls", TokenUsage(1, 1, 2), "test-model",
+                listOf(LlmToolCall("ping-${step++}", "ping", "{}")),
+            )
+        }
+        val agent = LlmAgent(mcpGateway = gateway, clientProvider = { client })
+        try {
+            val error = assertFailsWith<LlmApiException> {
+                agent.respond(AgentRequest("Проверь MCP", mcpEnabled = true))
+            }
+            assertContains(error.message.orEmpty(), "не более 3")
+            assertEquals(4, step)
+            assertTrue(agent.historySnapshot().isEmpty())
+        } finally {
+            gateway.close()
+        }
+    }
+
+    @Test
+    fun `cancellation during MCP loop does not commit history`() = runBlocking {
+        val gateway = LocalMcpGateway()
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")
+            override fun stream(messages: List<LlmMessage>, options: CompletionOptions): Flow<CompletionEvent> = flow {
+                if (step++ == 0) {
+                    emit(CompletionFinished("tool_calls", TokenUsage(1, 1, 2), "test-model", listOf(
+                        LlmToolCall("ping-cancel", "ping", "{}"),
+                    )))
+                } else {
+                    awaitCancellation()
+                }
+            }
+        }
+        val agent = LlmAgent(mcpGateway = gateway, clientProvider = { client })
+        try {
+            assertFailsWith<CancellationException> {
+                kotlinx.coroutines.withTimeout(500) {
+                    agent.respond(AgentRequest("Проверь отмену MCP", mcpEnabled = true))
+                }
+            }
+            assertTrue(agent.historySnapshot().isEmpty())
+        } finally {
+            gateway.close()
+        }
+    }
+
     @Test
     fun `sliding strategy controls request and persistent agent memory`() = runBlocking {
         val client = RecordingClient()

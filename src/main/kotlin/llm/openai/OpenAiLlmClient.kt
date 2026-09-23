@@ -18,5 +18,6 @@ class OpenAiLlmClient(
         supportsStopSequences = false,
         supportsReasoningEffort = true,
         supportsJsonSchema = true,
+        supportsTools = true,
     ),
 )
