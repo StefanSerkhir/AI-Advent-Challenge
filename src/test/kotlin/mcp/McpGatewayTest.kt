@@ -9,6 +9,38 @@ import kotlin.test.*
 
 class McpGatewayTest {
     @Test
+    fun `registry aggregates catalogs from three independent stdio processes`() = runBlocking {
+        val directory = Files.createTempDirectory("mcp-registry-test")
+        val processes = mutableListOf<Process>()
+        val registrations = listOf(OPERATIONS_SERVER_ID, KNOWLEDGE_SERVER_ID, WORKSPACE_SERVER_ID).map { serverId ->
+            localMcpServerRegistration(
+                serverId,
+                directory.resolve("scheduler.json"),
+                directory.resolve("output"),
+                processes::add,
+            )
+        }
+        val gateway = LocalMcpGateway(
+            directory.resolve("scheduler.json"),
+            directory.resolve("output"),
+            registrations,
+        )
+        try {
+            gateway.start()
+            val tools = gateway.listTools()
+            assertEquals(3, processes.map(Process::pid).distinct().size)
+            assertTrue(processes.all(Process::isAlive))
+            assertEquals(MCP_DEMO_TOOL_NAMES, tools.mapTo(mutableSetOf(), McpTool::name))
+            assertEquals(MCP_TOOL_NAMES_BY_SERVER, tools.groupBy(McpTool::serverId)
+                .mapValues { (_, serverTools) -> serverTools.mapTo(mutableSetOf(), McpTool::name) })
+        } finally {
+            gateway.close()
+            assertTrue(processes.none(Process::isAlive))
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `real stdio server exposes strict pipeline schemas and passes actual data through all three tools`() = runBlocking {
         val directory = Files.createTempDirectory("mcp-gateway-test")
         val outputDirectory = directory.resolve("output")
@@ -16,6 +48,10 @@ class McpGatewayTest {
         try {
             val tools = gateway.listTools().associateBy(McpTool::name)
             assertEquals(MCP_DEMO_TOOL_NAMES, tools.keys)
+            assertEquals(KNOWLEDGE_SERVER_ID, tools.getValue(SEARCH_TOOL).serverId)
+            assertEquals(KNOWLEDGE_SERVER_ID, tools.getValue(SUMMARIZE_TOOL).serverId)
+            assertEquals(WORKSPACE_SERVER_ID, tools.getValue(SAVE_TO_FILE_TOOL).serverId)
+            assertEquals(OPERATIONS_SERVER_ID, tools.getValue(TRACKER_GET_ISSUE_TOOL).serverId)
 
             val searchSchema = requireNotNull(tools[SEARCH_TOOL]).inputSchema
             assertEquals("https://json-schema.org/draft/2020-12/schema", searchSchema["${'$'}schema"]?.jsonPrimitive?.content)
@@ -81,6 +117,76 @@ class McpGatewayTest {
             assertEquals(summary, Files.readString(outputDirectory.resolve("pipeline-summary.md")))
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `gateway starts independent real processes and rejects duplicate discovered tool names`() = runBlocking {
+        val directory = Files.createTempDirectory("mcp-collision-test")
+        val processes = mutableListOf<Process>()
+        val registrations = listOf("knowledge-a", "knowledge-b").map { registrationId ->
+            McpServerRegistration(registrationId) {
+                startServerProcess(
+                    KNOWLEDGE_SERVER_ID,
+                    directory.resolve("scheduler.json"),
+                    directory.resolve("output"),
+                ).also(processes::add)
+            }
+        }
+        val gateway = LocalMcpGateway(
+            schedulerStateFile = directory.resolve("scheduler.json"),
+            outputDirectory = directory.resolve("output"),
+            registrations = registrations,
+        )
+        try {
+            gateway.start()
+            assertEquals(2, processes.map(Process::pid).distinct().size)
+            assertTrue(processes.all(Process::isAlive))
+            val error = assertFailsWith<McpCatalogException> { gateway.listTools() }
+            assertContains(error.message.orEmpty(), "search")
+            assertContains(error.message.orEmpty(), "knowledge-a")
+            assertContains(error.message.orEmpty(), "knowledge-b")
+        } finally {
+            gateway.close()
+            assertTrue(processes.none(Process::isAlive))
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dead server session reconnects without restarting healthy owners`() = runBlocking {
+        val directory = Files.createTempDirectory("mcp-reconnect-test")
+        val processes = mutableMapOf<String, MutableList<Process>>()
+        val registrations = listOf(OPERATIONS_SERVER_ID, KNOWLEDGE_SERVER_ID, WORKSPACE_SERVER_ID).map { serverId ->
+            localMcpServerRegistration(
+                serverId,
+                directory.resolve("scheduler.json"),
+                directory.resolve("output"),
+            ) { process -> processes.getOrPut(serverId, ::mutableListOf).add(process) }
+        }
+        val gateway = LocalMcpGateway(
+            directory.resolve("scheduler.json"),
+            directory.resolve("output"),
+            registrations,
+        )
+        try {
+            gateway.listTools()
+            val healthyPids = listOf(OPERATIONS_SERVER_ID, WORKSPACE_SERVER_ID)
+                .associateWith { requireNotNull(processes[it]).single().pid() }
+            requireNotNull(processes[KNOWLEDGE_SERVER_ID]).single().destroyForcibly().waitFor()
+
+            val result = gateway.callTool(SEARCH_TOOL, buildJsonObject { put("query", "композиция MCP") })
+
+            assertFalse(result.isError)
+            assertEquals(2, requireNotNull(processes[KNOWLEDGE_SERVER_ID]).size)
+            healthyPids.forEach { (serverId, pid) ->
+                assertEquals(pid, requireNotNull(processes[serverId]).single().pid())
+                assertTrue(requireNotNull(processes[serverId]).single().isAlive)
+            }
+        } finally {
+            gateway.close()
+            assertTrue(processes.values.flatten().none(Process::isAlive))
             directory.toFile().deleteRecursively()
         }
     }

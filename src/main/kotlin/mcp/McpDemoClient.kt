@@ -39,10 +39,14 @@ private suspend fun runMcpDemoClient(): Int {
         check(returnedNames == MCP_DEMO_TOOL_NAMES) {
             "Unexpected MCP tool catalog. Missing: ${MCP_DEMO_TOOL_NAMES - returnedNames}; extra: ${returnedNames - MCP_DEMO_TOOL_NAMES}"
         }
+        val unexpectedOrigins = tools.filter { tool -> tool.name !in requireNotNull(MCP_TOOL_NAMES_BY_SERVER[tool.serverId]) }
+        check(unexpectedOrigins.isEmpty()) {
+            "Unexpected tool provenance: ${unexpectedOrigins.joinToString { "${it.serverId}/${it.name}" }}"
+        }
 
-        println("tools/list returned ${tools.size} tool(s):")
+        println("tools/list returned ${tools.size} tool(s) from ${tools.map(McpTool::serverId).distinct().size} server(s):")
         tools.forEach { tool ->
-            println("- name: ${tool.name}")
+            println("- server/name: ${tool.serverId}/${tool.name}")
             println("  description: ${tool.description}")
             println("  inputSchema:")
             schemaJson.encodeToString(JsonObject.serializer(), tool.inputSchema).lineSequence().forEach { line ->
@@ -57,7 +61,7 @@ private suspend fun runMcpDemoClient(): Int {
         val searchJson = Json.parseToJsonElement(search.content).jsonObject
         val matches = searchJson["matches"]?.jsonArray ?: error("search did not return matches")
         check(matches.isNotEmpty()) { "search returned no matches for the deterministic demo query" }
-        println("tools/call search returned ${matches.size} match(es)")
+        println("tools/call $KNOWLEDGE_SERVER_ID/$SEARCH_TOOL returned ${matches.size} match(es)")
 
         stage = "summarizing search matches"
         val summarized = gateway.callTool(SUMMARIZE_TOOL, buildJsonObject {
@@ -70,7 +74,7 @@ private suspend fun runMcpDemoClient(): Int {
             ?: error("summarize did not return summary")
         val sourceIds = summaryJson["sourceIds"]?.jsonArray ?: error("summarize did not return sourceIds")
         check(sourceIds.isNotEmpty()) { "summarize lost source provenance" }
-        println("tools/call summarize returned sourceIds: ${sourceIds.joinToString()}")
+        println("tools/call $KNOWLEDGE_SERVER_ID/$SUMMARIZE_TOOL returned sourceIds: ${sourceIds.joinToString()}")
 
         stage = "saving the pipeline summary"
         val saved = gateway.callTool(SAVE_TO_FILE_TOOL, buildJsonObject {
@@ -93,7 +97,7 @@ private suspend fun runMcpDemoClient(): Int {
         check(Files.exists(savedPath) && Files.readAllBytes(savedPath).contentEquals(summaryText.toByteArray(Charsets.UTF_8))) {
             "save_to_file did not persist the exact summary"
         }
-        println("tools/call save_to_file created pipeline-summary.md with exact summary content")
+        println("tools/call $WORKSPACE_SERVER_ID/$SAVE_TO_FILE_TOOL created pipeline-summary.md with exact summary content")
 
         stage = "calling tracker_get_issue"
         val issue = gateway.callTool(TRACKER_GET_ISSUE_TOOL, buildJsonObject {

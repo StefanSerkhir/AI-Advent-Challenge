@@ -108,9 +108,9 @@ function ResponseCard({ output }: { output: Output }) {
       {output.model && <div className="model-label">{output.model}</div>}
       {output.mcpCalls.length > 0 && <div className="mcp-diagnostics" data-testid="mcp-diagnostics">
         <strong>MCP-инструменты</strong>
-        {output.mcpCalls.map((call, index) => <div className="mcp-call" key={`${call.toolName}-${index}`}>
+        {output.mcpCalls.map((call, index) => <div className="mcp-call" key={`${call.serverId}-${call.toolName}-${index}`}>
           <div>
-            <code>{call.toolName}</code>
+            <code>{index + 1}. {call.serverId} / {call.toolName}</code>
             <Badge size="xs" variant="light" color={call.status === "success" ? "teal" : "red"}>
               {call.status === "success" ? "успех" : "ошибка"}
             </Badge>

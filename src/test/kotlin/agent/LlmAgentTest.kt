@@ -7,10 +7,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.example.llm.*
-import org.example.mcp.LocalMcpGateway
-import org.example.mcp.SAVE_TO_FILE_TOOL
-import org.example.mcp.SEARCH_TOOL
-import org.example.mcp.SUMMARIZE_TOOL
+import org.example.mcp.*
 import org.example.tokens.ModelContextProfiles
 import org.example.tokens.TokenCostCalculator
 import java.nio.file.Files
@@ -78,6 +75,7 @@ class LlmAgentTest {
             assertEquals(11, response.completion.usage?.completionTokens)
             assertEquals(51, response.completion.usage?.totalTokens)
             assertEquals(McpCallStatus.SUCCESS, response.mcpCalls.single().status)
+            assertEquals("operations", response.mcpCalls.single().serverId)
             assertEquals("tracker_get_issue", response.mcpCalls.single().toolName)
             assertEquals(listOf(LlmRole.USER, LlmRole.ASSISTANT), persisted.map(LlmMessage::role))
             assertEquals(listOf("Получи через трекер DEMO-101", response.content), persisted.map(LlmMessage::content))
@@ -171,6 +169,7 @@ class LlmAgentTest {
 
             assertEquals(4, calls.size)
             assertEquals(listOf(SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL), response.mcpCalls.map { it.toolName })
+            assertEquals(listOf("knowledge", "knowledge", "workspace"), response.mcpCalls.map { it.serverId })
             assertTrue(response.mcpCalls.all { it.status == McpCallStatus.SUCCESS })
             assertContains(response.mcpCalls[0].result, "mcp-composition-001")
             assertContains(response.mcpCalls[1].result, "sourceIds")
@@ -244,9 +243,41 @@ class LlmAgentTest {
     }
 
     @Test
+    fun `agent rejects an unknown discovered tool without committing history`() = runBlocking {
+        val gateway = object : McpGateway {
+            override suspend fun listTools() = listOf(McpTool("ping", "Reachability", buildJsonObject {}, "operations"))
+            override suspend fun callTool(name: String, arguments: JsonObject) = McpToolResult(false, "unexpected")
+            override suspend fun close() = Unit
+        }
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = CompletionResult(
+                "", "tool_calls", TokenUsage(1, 1, 2), "test-model",
+                listOf(LlmToolCall("unknown-call", "not_registered", "{}")),
+            )
+        }
+        val agent = LlmAgent(mcpGateway = gateway, clientProvider = { client })
+
+        val error = assertFailsWith<LlmApiException> {
+            agent.respond(AgentRequest("Вызови неизвестный инструмент", mcpEnabled = true))
+        }
+
+        assertContains(error.message.orEmpty(), "недоступный")
+        assertTrue(agent.historySnapshot().isEmpty())
+    }
+
+    @Test
     fun `cancellation during MCP loop does not commit history`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
+        val processes = mutableListOf<Process>()
+        val registrations = listOf(OPERATIONS_SERVER_ID, KNOWLEDGE_SERVER_ID, WORKSPACE_SERVER_ID).map { serverId ->
+            localMcpServerRegistration(
+                serverId,
+                directory.resolve("scheduler.json"),
+                directory.resolve("output"),
+                processes::add,
+            )
+        }
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"), registrations)
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")
@@ -263,11 +294,13 @@ class LlmAgentTest {
         val agent = LlmAgent(mcpGateway = gateway, clientProvider = { client })
         try {
             assertFailsWith<CancellationException> {
-                kotlinx.coroutines.withTimeout(500) {
+                kotlinx.coroutines.withTimeout(4_000) {
                     agent.respond(AgentRequest("Проверь отмену MCP", mcpEnabled = true))
                 }
             }
             assertTrue(agent.historySnapshot().isEmpty())
+            assertEquals(3, processes.size)
+            assertTrue(processes.none(Process::isAlive))
         } finally {
             gateway.close()
             directory.toFile().deleteRecursively()

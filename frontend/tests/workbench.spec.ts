@@ -199,6 +199,7 @@ test("simple agent calls tracker through MCP and shows diagnostics", async ({pag
 
   const state = await (await page.request.get("/api/state")).json() as State;
   const call = state.exchanges.at(-1)!.outputs[0].mcpCalls[0];
+  expect(call.serverId).toBe("operations");
   expect(call.toolName).toBe("tracker_get_issue");
   expect(call.arguments).toContain("DEMO-101");
   expect(call.result).toContain("nextAction");
@@ -216,12 +217,17 @@ test("simple agent composes search summarize and save_to_file through MCP", asyn
   await expect(exchange).toContainText("pipeline-summary.md");
   const diagnostics = exchange.getByTestId("mcp-diagnostics");
   await expect(diagnostics).toBeVisible();
-  await expect(diagnostics).toContainText("search");
-  await expect(diagnostics).toContainText("summarize");
-  await expect(diagnostics).toContainText("save_to_file");
+  await expect(diagnostics).toContainText("1. knowledge / search");
+  await expect(diagnostics).toContainText("2. knowledge / summarize");
+  await expect(diagnostics).toContainText("3. workspace / save_to_file");
 
   const state = await (await page.request.get("/api/state")).json() as State;
   const calls = state.exchanges.at(-1)!.outputs[0].mcpCalls;
+  expect(calls.map((call) => `${call.serverId}/${call.toolName}`)).toEqual([
+    "knowledge/search",
+    "knowledge/summarize",
+    "workspace/save_to_file",
+  ]);
   expect(calls.map((call) => call.toolName)).toEqual(["search", "summarize", "save_to_file"]);
   expect(calls.every((call) => call.status === "success")).toBe(true);
   expect(calls[0].result).toContain("mcp-composition-001");

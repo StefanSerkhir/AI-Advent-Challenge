@@ -123,6 +123,7 @@ class WorkbenchApiTest {
                         put("issueId", buildJsonObject { put("type", "string") })
                     })
                 },
+                "operations",
             ))
             override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject): McpToolResult {
                 gatewayCalls++
@@ -146,6 +147,7 @@ class WorkbenchApiTest {
             val output = c.state.value.toDto().exchanges.last().outputs.single()
             val diagnostic = output.mcpCalls.single()
             assertEquals(1, gatewayCalls)
+            assertEquals("operations", diagnostic.serverId)
             assertEquals("tracker_get_issue", diagnostic.toolName)
             assertEquals("success", diagnostic.status)
             assertEquals("{\"issueId\":\"DEMO-101\"}", diagnostic.arguments)

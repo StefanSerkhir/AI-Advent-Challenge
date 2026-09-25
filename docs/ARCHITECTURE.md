@@ -63,21 +63,32 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 `runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler и output-каталог в fixture также настоящие, но получают отдельные пути во временном каталоге теста.
 
-Отдельная задача `./gradlew runMcpDemo` использует тот же `LocalMcpGateway`, что и
-web runtime. Шлюз создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime
-classpath и соединяет его официальными `StdioClientTransport`/`StdioServerTransport`
-Kotlin MCP SDK. Сервер объявляет безопасные локальные инструменты `ping`, `echo`,
-`tracker_get_issue`, `scheduler_create`, `scheduler_list`, `scheduler_cancel`,
-`scheduler_get_summary`, `search`, `summarize` и `save_to_file`; stdout
-зарезервирован только для JSON-RPC. CLI выполняет handshake, проверяет полный
-каталог через `tools/list`, затем настоящий pipeline: передаёт фактические
-`matches` из `search` в `summarize`, а фактические `summary`/`sourceIds` — в
-`save_to_file`, после чего сверяет файл побайтно с резюме. Затем выполняются
+Отдельная задача `./gradlew runMcpDemo` использует тот же registry-backed
+`LocalMcpGateway`, что и web runtime. Явные регистрации имеют безопасные стабильные
+ID и инъецируемые process factories. Для `operations`, `knowledge` и `workspace`
+шлюз создаёт отдельные JVM-процессы `McpDemoServerKt`, MCP clients, stdio transports,
+mutex и caches каталога. Каждый процесс объявляет только свой набор:
+`operations` — `ping`, `echo`, Tracker и scheduler; `knowledge` — `search` и
+`summarize`; `workspace` — `save_to_file`. Только `operations` создаёт
+`SchedulerService`. Stdout каждого процесса зарезервирован для JSON-RPC.
+
+Шлюз получает настоящий `tools/list` каждой сессии, добавляет каждому `McpTool`
+origin `serverId`, сортирует каталог по server ID и имени и строит routing table
+`tool name → discovered owner server`. `callTool` использует только эту таблицу,
+без условий по конкретным именам. Коллизия публичного имени отклоняется fail-closed
+до выполнения инструмента и сообщает только безопасные конфликтующие server ID.
+Ошибка транспорта закрывает и инвалидирует соответствующую сессию; следующая
+операция переподключает её, не перезапуская здоровых владельцев. Shutdown и отмена
+закрывают все clients/transports/processes.
+
+CLI выполняет handshake, проверяет объединённый каталог, затем настоящий pipeline:
+передаёт фактические `matches` из `knowledge/search` в `knowledge/summarize`, а
+фактические `summary`/`sourceIds` — в `workspace/save_to_file`, после чего сверяет
+файл побайтно с резюме. Затем выполняются
 прежние Tracker и scheduler lifecycle-вызовы. Demo использует один временный root
 для scheduler store и output-каталога, закрывает client/transport/process и удаляет
 root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
-или LLM и не требуют ключей. Добавление трёх инструментов подняло версию MCP demo
-server до `1.1.0`.
+или LLM и не требуют ключей. Версия набора MCP demo servers — `2.0.0`.
 
 `search` работает только с встроенным каталогом стабильных `id`, `title` и
 `content`. `summarize` детерминированно ограничивает число обработанных записей и
@@ -90,11 +101,11 @@ file и применяет atomic replace с fallback. Результат сод
 
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
-Шлюз кэширует каталог на время соединения и сериализует protocol operations.
-Транспортная ошибка или отмена закрывает соединение и дочерний процесс; фоновый
-monitor подключает новый процесс, который восстанавливается из JSON. При штатном
-`WorkbenchController.shutdown` monitor, scheduler/gateway и дочерний процесс
-закрываются. DeepSeek и остальные response modes не получают tool definitions.
+Шлюз кэширует каталог отдельно для каждой сессии и сериализует её protocol operations.
+Транспортная ошибка закрывает процесс владельца; scheduler monitor переподключает
+`operations`, который восстанавливается из JSON. Отмена и штатный
+`WorkbenchController.shutdown` закрывают monitor, gateway и все дочерние процессы.
+DeepSeek и остальные response modes не получают tool definitions.
 OpenAI transport сериализует обязательный `type: "function"` явно и для tool
 definition, и для assistant tool call, не полагаясь на пропускаемые
 сериализатором значения по умолчанию.
@@ -123,8 +134,8 @@ MCP-клиенту.
 ```mermaid
 flowchart LR
     Agent[OpenAI Простой агент] -->|tools/call| Gateway[LocalMcpGateway]
-    Gateway -->|stdio JSON-RPC| MCP[MCP child process]
-    MCP --> Service[SchedulerService]
+    Gateway -->|route scheduler_*| MCP[operations process]
+    MCP -->|stdio JSON-RPC| Service[SchedulerService]
     Service --> Store[.llm-scheduler-state.json]
     Service --> Tracker[Local TrackerSource]
     Gateway -->|scheduler_list monitor| Controller[WorkbenchController]
@@ -195,24 +206,26 @@ sequenceDiagram
     participant A as LlmAgent / AssistantAgent
     participant L as OpenAI-compatible LLM
     participant G as LocalMcpGateway
-    participant S as MCP child process
+    participant K as knowledge process
+    participant W as workspace process
     A->>G: tools/list (уже активный gateway)
-    G->>S: initialize + tools/list over stdio
+    G->>K: initialize + tools/list over stdio
+    G->>W: initialize + tools/list over stdio
     A->>L: user + discovered tool definitions
     L-->>A: tool_call search
     A->>G: tools/call search(query)
-    G->>S: tools/call over stdio
-    S-->>A: query + matches[]
+    G->>K: route by discovered owner
+    K-->>A: query + matches[]
     A->>L: transient search result
     L-->>A: tool_call summarize(matches)
     A->>G: tools/call summarize
-    G->>S: tools/call over stdio
-    S-->>A: summary + sourceIds
+    G->>K: route by discovered owner
+    K-->>A: summary + sourceIds
     A->>L: transient summarize result
     L-->>A: tool_call save_to_file(summary, sourceIds)
     A->>G: tools/call save_to_file
-    G->>S: tools/call over stdio
-    S-->>A: relative name + bytes + sourceIds
+    G->>W: route by discovered owner
+    W-->>A: relative name + bytes + sourceIds
     A->>L: transient save result
     L-->>A: streamed final answer + usage
     A-->>UI: final answer + MCP diagnostics in StateDto/SSE
@@ -455,8 +468,8 @@ streaming/final outputs, метрики и диагностику инвариа
 разговорным MCP-сценарием; browser storage и отдельный REST mutation не
 используются. Панель отображает `StateDto.backgroundTasks` из REST/SSE.
 
-Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: имя,
-безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
+Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: порядковый
+номер, `serverId / toolName`, безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
 том же полном SSE snapshot; отдельного endpoint и клиентского источника истины нет.
 
 Условный UI должен следовать доменной доступности:
@@ -513,9 +526,10 @@ API-ключ сохраняется только в локальном `.env`; A
 - `SchedulerServiceTest` проверяет once/interval, idempotency, строгую валидацию,
   cancel, due/parallel execution, success/error reschedule, restart/overdue,
   отсутствие catch-up storm, versioned atomic JSON, history cap и Tracker aggregation;
-- `McpGatewayTest` проверяет настоящий `tools/list`/`tools/call`, схемы и строгую
-  валидацию pipeline, передачу provenance, точный файл, traversal/absolute/symlink
-  защиту и обратную совместимость Tracker/scheduler/ping/echo;
+- `McpGatewayTest` проверяет три настоящих stdio-процесса, объединение каталогов,
+  origin/routing, fail-closed коллизии, reconnect одной сессии, настоящий
+  `tools/list`/`tools/call`, строгую валидацию pipeline, точный файл,
+  traversal/absolute/symlink защиту и обратную совместимость Tracker/scheduler/ping/echo;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 
@@ -529,7 +543,8 @@ API-ключ сохраняется только в локальном `.env`; A
 
 Browser tests проверяют режимы, memory layers, streaming, refresh, две вкладки,
 offline/reconnect, идемпотентный retry, отмену, Markdown, узкий экран и точный
-порядок `search` → `summarize` → `save_to_file` в существующей MCP-диагностике.
+порядок `knowledge/search` → `knowledge/summarize` → `workspace/save_to_file`
+в существующей MCP-диагностике.
 Fixture использует временные persistence/output paths и фиктивные ключи; внешние
 платные API не вызываются. Для pipeline используется точный prompt «Найди локальные
 сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в

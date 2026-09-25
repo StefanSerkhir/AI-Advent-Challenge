@@ -24,18 +24,25 @@ Gradle установит frontend-зависимости из lock-файла, 
 
 ## Локальный пример MCP
 
-В проекте есть воспроизводимый клиент и сервер Model Context Protocol, который не
-требует API-ключей или внешних сервисов. Используется официальный Kotlin MCP SDK
-и транспорт stdio. Lifecycle-aware шлюз запускает локальный сервер отдельным
-JVM-процессом вместе с web-приложением, выполняет MCP handshake, получает каталог
-через `tools/list` и вызывает инструменты через настоящий `tools/call`. Сервер
-сохраняет прежние `ping`, `echo`, `tracker_get_issue` и `scheduler_*`, а также
-объявляет композицию `search` → `summarize` → `save_to_file`. `search` читает
+В проекте есть воспроизводимая локальная orchestration Model Context Protocol,
+которая не требует API-ключей или внешних сервисов. Registry содержит три
+стабильные регистрации, и для каждой официальный Kotlin MCP SDK создаёт отдельные
+client, stdio transport, JVM-процесс, mutex и cache `tools/list`:
+
+- `operations`: `ping`, `echo`, `tracker_get_issue`, `scheduler_*`;
+- `knowledge`: `search`, `summarize`;
+- `workspace`: `save_to_file`.
+
+Lifecycle-aware `LocalMcpGateway` объединяет реальные каталоги в детерминированном
+порядке и строит таблицу `tool name → discovered owner server`. Каждый
+`tools/call` маршрутизируется по этой таблице, без switch по именам инструментов.
+Одинаковое публичное имя у нескольких серверов отклоняет весь каталог до вызова;
+сбой инвалидирует только сессию владельца и позволяет переподключить её. `search` читает
 только небольшой детерминированный каталог, `summarize` локально формирует резюме
 с `sourceIds`, а `save_to_file` атомарно записывает UTF-8 в специально
 настроенный output-каталог. Ни один из этих трёх инструментов не вызывает сеть
 или LLM. Tracker по-прежнему читает задачу `DEMO-101` из локального источника.
-Версия расширенного каталога MCP demo server — `1.1.0`.
+Версия набора MCP demo servers — `2.0.0`.
 
 Gradle Wrapper автоматически загрузит зависимости, соберёт код и запустит пример:
 
@@ -43,9 +50,10 @@ Gradle Wrapper автоматически загрузит зависимост�
 ./gradlew runMcpDemo
 ```
 
-Успешный запуск содержит строки `MCP connection established`, сведения о десяти
-инструментах и выполняет настоящие `tools/call`: результат `search` становится
-входом `summarize`, его `summary` и `sourceIds` передаются в `save_to_file`, после
+Успешный запуск содержит строки `MCP connection established`, provenance десяти
+инструментов и выполняет настоящие межсерверные `tools/call`: результат
+`knowledge/search` становится входом `knowledge/summarize`, его `summary` и
+`sourceIds` передаются в `workspace/save_to_file`, после
 чего demo сверяет точное содержимое созданного файла. Затем проверяются прежние
 `tracker_get_issue`, `scheduler_create` и `scheduler_get_summary`, а временное
 расписание отменяется. Scheduler store и output-каталог создаются внутри одного
@@ -83,8 +91,9 @@ HTTP-кода. Перед публикацией backend удаляет изве
 Fixture LLM детерминированно выполнит три последовательных шага, анализируя полную
 историю tool messages, но MCP client/server и все `tools/call` останутся
 настоящими. Карточка покажет финальный ответ и диагностический блок
-**«MCP-инструменты»** с `search`, `summarize`, `save_to_file`, безопасными
-аргументами, статусами и признаками передачи `matches`/`sourceIds`. Fixture пишет
+**«MCP-инструменты»** с точным порядком `1. knowledge / search`,
+`2. knowledge / summarize`, `3. workspace / save_to_file`, безопасными аргументами,
+статусами и признаками передачи `matches`/`sourceIds`. Fixture пишет
 только во временный output-каталог и удаляет его при остановке. Старый fixture
 prompt для `DEMO-101` также продолжает работать.
 

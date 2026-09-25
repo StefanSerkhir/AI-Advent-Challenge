@@ -4,10 +4,12 @@
 `src/main/kotlin/web/ApiDtos.kt`; TypeScript: `frontend/src/api/types.ts`.
 Ключи не входят в состояние. Все ошибки JSON имеют `{ "code": "...", "message": "..." }`.
 
-Каждый `outputs[]` содержит `mcpCalls`: массив `{ toolName, arguments, status,
-result }`. `status` равен `success` или `error`; arguments/result уже ограничены и
-очищены для диагностики. Массив пуст для ответа без MCP. Поле входит в обычный
-`StateDto` и SSE snapshot, отдельного MCP endpoint нет.
+Каждый `outputs[]` содержит `mcpCalls`: упорядоченный массив
+`{ serverId, toolName, arguments, status, result }`. `serverId` — безопасный
+стабильный ID фактического server-owner из объединённого `tools/list`; позиция в
+массиве — фактический порядок вызова. `status` равен `success` или `error`, а
+arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
+без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
 `StateDto.backgroundTasks` — отдельный read-only snapshot планировщика:
 `{ available, error, schedules[] }`. Каждый элемент `schedules[]` содержит `id`,
@@ -70,11 +72,12 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
 рабочей корутине до освобождения активной операции.
 
-Фоновый MCP monitor запускается вместе с controller, восстанавливает scheduler до
+Фоновый MCP monitor запускается вместе с controller, поднимает MCP registry и
+восстанавливает scheduler в `operations` до
 первого LLM-запроса и сравнивает полные snapshots. `revision`/SSE обновляются
 только когда доступность, расписание, результат или агрегат действительно
 изменились; ожидание таймера само по себе событий не создаёт. Сбой дочернего MCP
-процесса публикует безопасный unavailable status и запускает переподключение без
+процесса `operations` публикует безопасный unavailable status и запускает переподключение этой сессии без
 раскрытия exception/секретов.
 
 Одновременно работает один эксперимент. Другой запуск, изменение настроек/ключа,

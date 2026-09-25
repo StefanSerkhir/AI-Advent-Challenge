@@ -187,6 +187,7 @@ data class OutputDto(
 )
 @Serializable
 data class McpCallDiagnosticDto(
+    val serverId: String,
     val toolName: String,
     val arguments: String,
     val status: String,
@@ -488,6 +489,7 @@ private fun TaskStateDiagnostics.toDto() = TaskStateDiagnosticsDto(
     responseBlocked,
 )
 private fun McpCallDiagnostic.toDto() = McpCallDiagnosticDto(
+    serverId,
     toolName,
     arguments,
     status.name.lowercase(),

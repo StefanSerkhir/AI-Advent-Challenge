@@ -14,6 +14,7 @@ import org.example.tokens.TokenCostCalculator
 enum class McpCallStatus { SUCCESS, ERROR }
 
 data class McpCallDiagnostic(
+    val serverId: String,
     val toolName: String,
     val arguments: String,
     val status: McpCallStatus,
@@ -96,7 +97,13 @@ suspend fun executeWithMcpTools(
                 val parsed = parseArguments(call.arguments)
                 if (parsed == null) {
                     val error = "Аргументы инструмента не являются JSON-объектом."
-                    diagnostics += McpCallDiagnostic(call.name, "{\"invalid\":true}", McpCallStatus.ERROR, error)
+                    diagnostics += McpCallDiagnostic(
+                        serverId = requireNotNull(catalogByName[call.name]).serverId,
+                        toolName = call.name,
+                        arguments = "{\"invalid\":true}",
+                        status = McpCallStatus.ERROR,
+                        result = error,
+                    )
                     transientMessages += toolResultMessage(call, McpToolResult(true, error))
                     return@forEach
                 }
@@ -110,6 +117,7 @@ suspend fun executeWithMcpTools(
                 }
                 val safeResult = diagnosticText(toolResult.content)
                 diagnostics += McpCallDiagnostic(
+                    serverId = requireNotNull(catalogByName[call.name]).serverId,
                     toolName = call.name,
                     arguments = diagnosticText(encodedArguments),
                     status = if (toolResult.isError) McpCallStatus.ERROR else McpCallStatus.SUCCESS,
@@ -122,7 +130,6 @@ suspend fun executeWithMcpTools(
         withContext(NonCancellable) { runCatching { gateway.close() } }
         throw error
     } catch (error: Exception) {
-        withContext(NonCancellable) { runCatching { gateway.close() } }
         if (error is LlmApiException) throw error
         throw LlmApiException("Не удалось выполнить локальный MCP-вызов.")
     }

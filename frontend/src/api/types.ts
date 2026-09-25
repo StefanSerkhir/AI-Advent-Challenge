@@ -146,6 +146,7 @@ export interface Output {
   mcpCalls: McpCallDiagnostic[];
 }
 export interface McpCallDiagnostic {
+  serverId: string;
   toolName: string;
   arguments: string;
   status: "success" | "error";
