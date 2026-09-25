@@ -61,25 +61,67 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 Для разработки UI backend запускается с `WEB_DEV_PORT=5173`, а Vite отдельно через `npm --prefix frontend run dev`. Vite проксирует `/api`; произвольный CORS не включён.
 
-`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution.
+`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler в fixture также настоящий, но получает путь во временном каталоге теста.
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же `LocalMcpGateway`, что и
 web runtime. Шлюз создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime
 classpath и соединяет его официальными `StdioClientTransport`/`StdioServerTransport`
-Kotlin MCP SDK. Сервер объявляет безопасные локальные инструменты `ping`, `echo` и
-`tracker_get_issue`; stdout зарезервирован только для JSON-RPC. CLI выполняет
-handshake, `tools/list` и реальный `tools/call` для `DEMO-101`, затем закрывает
-client, transport и process. Mock Tracker не читает `.env`, не использует сеть и
-не требует ключей.
+Kotlin MCP SDK. Сервер объявляет безопасные локальные инструменты `ping`, `echo`,
+`tracker_get_issue`, `scheduler_create`, `scheduler_list`, `scheduler_cancel` и
+`scheduler_get_summary`; stdout зарезервирован только для JSON-RPC. CLI выполняет
+handshake, `tools/list`, реальный `tools/call` для `DEMO-101`, создание, чтение
+сводки и отмену расписания, затем закрывает client, transport и process. Demo
+использует отдельный временный scheduler store. Mock Tracker не читает `.env`, не
+использует сеть и не требует ключей.
 
-`LocalMcpGateway` подключается лениво при первом запросе Простого агента с OpenAI,
-кэширует полученный каталог на время соединения и сериализует protocol operations.
-Транспортная ошибка или отмена закрывает соединение и дочерний процесс; следующий
-запрос может создать новое соединение. При штатном завершении шлюз закрывает
-`WorkbenchController.shutdown`. DeepSeek и остальные response modes не получают
-tool definitions. OpenAI transport сериализует обязательный `type: "function"`
-явно и для tool definition, и для assistant tool call, не полагаясь на
-пропускаемые сериализатором значения по умолчанию.
+`WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
+поэтому восстановленные расписания работают до первого пользовательского запроса.
+Шлюз кэширует каталог на время соединения и сериализует protocol operations.
+Транспортная ошибка или отмена закрывает соединение и дочерний процесс; фоновый
+monitor подключает новый процесс, который восстанавливается из JSON. При штатном
+`WorkbenchController.shutdown` monitor, scheduler/gateway и дочерний процесс
+закрываются. DeepSeek и остальные response modes не получают tool definitions.
+OpenAI transport сериализует обязательный `type: "function"` явно и для tool
+definition, и для assistant tool call, не полагаясь на пропускаемые
+сериализатором значения по умолчанию.
+
+### Планировщик MCP
+
+`mcp/Scheduler.kt` разделяет модели, `SchedulerStore`, `SchedulerService`,
+`ScheduledTaskExecutor` и `TrackerSource`. Production service использует
+`java.time.Clock`, `SupervisorJob`, `Mutex`, conflated wake channel и один
+последовательный due-loop. Множество `inFlight` дополнительно защищает ручной
+`runDue(now)` от параллельного запуска одного расписания. Создание/отмена и каждый
+результат сначала проходят atomic store commit и только затем становятся видимыми
+MCP-клиенту.
+
+Поддерживаются `once` и `fixed_interval`, задачи `reminder` и
+`tracker_snapshot`. Периодическая ошибка сохраняется как результат, но расписание
+остаётся активным. После долгого простоя due-loop выполняет один запуск и считает
+новый `nextRunAt` от текущего времени; missed intervals не проигрываются серией.
+Одноразовая задача после успеха становится `COMPLETED`, после ошибки — `FAILED`.
+Локальный executor не вызывает LLM.
+
+Агрегаты хранят общие success/error/snapshot counters, последнее состояние Tracker
+и числа изменений `status`/`nextAction`. Подробная история ограничена 100 последними
+запусками на расписание, но общие счётчики при отсечении не сбрасываются.
+
+```mermaid
+flowchart LR
+    Agent[OpenAI Простой агент] -->|tools/call| Gateway[LocalMcpGateway]
+    Gateway -->|stdio JSON-RPC| MCP[MCP child process]
+    MCP --> Service[SchedulerService]
+    Service --> Store[.llm-scheduler-state.json]
+    Service --> Tracker[Local TrackerSource]
+    Gateway -->|scheduler_list monitor| Controller[WorkbenchController]
+    Controller -->|changed StateFlow snapshot| SSE[Ktor SSE]
+    SSE --> Panel[Панель Фоновые задачи]
+```
+
+Monitor запрашивает snapshot через настоящий `scheduler_list`, но публикует новый
+`WorkbenchState` только при структурном изменении. Поэтому heartbeat/ожидание
+следующего времени не создают частые SSE-события. Это локальная фоновая работа
+только во время жизни JVM, не системный daemon и не облачный сервис.
 
 ## Доменная orchestration
 
@@ -113,7 +155,8 @@ tool definitions. OpenAI transport сериализует обязательны
 - отдельным `AssistantInvariantManager` и версионированной коллекцией обязательных правил;
 - отдельным `TaskStateManager` и состоянием задачи Простого агента;
 - специализированными runners экспериментов;
-- монотонными номерами exchange/revision и streaming snapshots.
+- монотонными номерами exchange/revision и streaming snapshots;
+- read-only monitor снимков фоновых задач из MCP scheduler.
 
 Все команды и worker transitions синхронизированы на контроллере. Одновременно разрешена одна операция. Настройки и мутации состояния во время неё отклоняются. `WorkbenchState` — серверный источник истины; React получает первоначальный снимок через REST, а последующие полные снимки через SSE.
 
@@ -136,7 +179,7 @@ sequenceDiagram
     participant L as OpenAI-compatible LLM
     participant G as LocalMcpGateway
     participant S as MCP child process
-    A->>G: tools/list (lazy connect)
+    A->>G: tools/list (уже активный gateway)
     G->>S: initialize + tools/list over stdio
     A->>L: messages + discovered tool definitions
     L-->>A: assistant tool_calls
@@ -336,6 +379,7 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-assistant-memory.json` | `JsonAssistantMemoryStore` | v2: профиль и три слоя, записи, роли/пары, timestamps и enable flags; v1 читается с явной миграцией в пустой профиль |
 | `.llm-assistant-invariants.json` | `JsonAssistantInvariantStore` | v1: версия коллекции и отдельные обязательные правила с ID, категориями и timestamps |
 | `.llm-task-state.json` | `JsonTaskStateStore` | v2: задача FSM, transition timestamps и результат валидации; v1 мигрирует по сохранённой фазе |
+| `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации
@@ -378,6 +422,10 @@ streaming/final outputs, метрики и диагностику инвариа
 управляет тремя слоями, а `AssistantInvariants` — отдельной коллекцией правил.
 
 `useWorkbench` принимает snapshot, только если его `revision` не старее текущего. SSE является основным каналом состояния; REST-ответ после команды помогает быстро синхронизироваться. На неопределённой сетевой ошибке start command сохраняется с исходным `requestId`, чтобы проверка отправки не создала повторный платный запрос. `TaskStatePanel` показывает FSM только рядом со слоями памяти, строит доступность по серверному `availableActions`, называет переходы по смыслу, требует текст результата проверки, скрывает недопустимые переходы и оставляет resume доступным во время паузы.
+
+`BackgroundTasks` — read-only панель общего workspace. Создание остаётся
+разговорным MCP-сценарием; browser storage и отдельный REST mutation не
+используются. Панель отображает `StateDto.backgroundTasks` из REST/SSE.
 
 Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: имя,
 безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
@@ -434,6 +482,10 @@ API-ключ сохраняется только в локальном `.env`; A
 - `AssistantInvariantManagerTest` проверяет CRUD/version, v1 persistence,
   fail-closed load, секреты, порядок контекста, диагностику и конфликтные fake-ответы;
 - тесты `app` проверяют runners, controller concurrency, persistence и demos;
+- `SchedulerServiceTest` проверяет once/interval, idempotency, строгую валидацию,
+  cancel, due/parallel execution, success/error reschedule, restart/overdue,
+  отсутствие catch-up storm, versioned atomic JSON, history cap и Tracker aggregation;
+- `McpGatewayTest` проверяет настоящий `tools/list`/`tools/call` для всех scheduler tools;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 

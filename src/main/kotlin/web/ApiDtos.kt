@@ -7,6 +7,8 @@ import org.example.llm.LlmKind
 import org.example.llm.LlmMessage
 import org.example.llm.LlmModel
 import org.example.llm.LlmModels
+import org.example.mcp.SchedulerSnapshot
+import org.example.mcp.SchedulerSummary
 import org.example.tokens.ContextOverflowPolicy
 import org.example.tokens.ConversationTokenTotals
 import org.example.tokens.TurnTokenMetrics
@@ -297,6 +299,34 @@ data class TaskStateDiagnosticsDto(
     val responseBlocked: Boolean,
 )
 @Serializable
+data class BackgroundTaskDto(
+    val id: String,
+    val title: String,
+    val taskType: String,
+    val status: String,
+    val scheduleType: String,
+    val aggregationPeriod: String,
+    val totalRuns: Int,
+    val successfulRuns: Int,
+    val failedRuns: Int,
+    val lastRunAt: String?,
+    val nextRunAt: String?,
+    val lastResult: String?,
+    val lastError: String?,
+    val snapshotCount: Int,
+    val latestTrackerStatus: String?,
+    val latestTrackerNextAction: String?,
+    val statusChanges: Int,
+    val nextActionChanges: Int,
+    val summary: String,
+)
+@Serializable
+data class BackgroundTasksDto(
+    val available: Boolean,
+    val error: String?,
+    val schedules: List<BackgroundTaskDto>,
+)
+@Serializable
 data class HistoryDetailsDto(
     val counts: HistoryDto,
     val branches: Map<String, List<HistoryMessageDto>>,
@@ -317,6 +347,7 @@ data class StateDto(
     val assistantProfile: AssistantProfileDto,
     val assistantInvariants: AssistantInvariantStateDto,
     val taskState: TaskStateDto?,
+    val backgroundTasks: BackgroundTasksDto,
 )
 
 fun AppSettings.toDto() = SettingsDto(
@@ -463,6 +494,34 @@ private fun McpCallDiagnostic.toDto() = McpCallDiagnosticDto(
     result,
 )
 
+private fun SchedulerSummary.toDto() = BackgroundTaskDto(
+    id = id,
+    title = title,
+    taskType = taskType.name.lowercase(),
+    status = status.name.lowercase(),
+    scheduleType = scheduleType.name.lowercase(),
+    aggregationPeriod = aggregationPeriod,
+    totalRuns = totalRuns,
+    successfulRuns = successfulRuns,
+    failedRuns = failedRuns,
+    lastRunAt = lastRunAt?.toString(),
+    nextRunAt = nextRunAt?.toString(),
+    lastResult = lastResult,
+    lastError = lastError,
+    snapshotCount = snapshotCount,
+    latestTrackerStatus = latestTrackerStatus,
+    latestTrackerNextAction = latestTrackerNextAction,
+    statusChanges = statusChanges,
+    nextActionChanges = nextActionChanges,
+    summary = summary,
+)
+
+private fun SchedulerSnapshot.toDto() = BackgroundTasksDto(
+    available = available,
+    error = error,
+    schedules = schedules.map(SchedulerSummary::toDto),
+)
+
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
     providers = LlmKind.entries.map { kind -> ProviderDto(kind.name, kind.displayName(), kind in configuredProviders,
@@ -509,4 +568,5 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
     assistantProfile = assistantMemory.profile.toDto(),
     assistantInvariants = assistantInvariants.toDto(),
     taskState = taskState?.toDto(),
+    backgroundTasks = backgroundTasks.toDto(),
 )

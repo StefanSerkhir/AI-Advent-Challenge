@@ -9,9 +9,18 @@ result }`. `status` равен `success` или `error`; arguments/result уже
 очищены для диагностики. Массив пуст для ответа без MCP. Поле входит в обычный
 `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
+`StateDto.backgroundTasks` — отдельный read-only snapshot планировщика:
+`{ available, error, schedules[] }`. Каждый элемент `schedules[]` содержит `id`,
+`title`, `taskType`, `status`, `scheduleType`, `aggregationPeriod`, `totalRuns`,
+`successfulRuns`, `failedRuns`, `lastRunAt`, `nextRunAt`, `lastResult`,
+`lastError`, `snapshotCount`, последнее состояние/следующее действие Tracker,
+счётчики их изменений и детерминированный `summary`. Timestamp — ISO-8601 строка
+или `null`. Создание/отмена через REST намеренно отсутствуют: ими управляет агент
+через MCP, а REST/SSE только публикуют серверный источник истины.
+
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
-| GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `assistantInvariants`, `taskState`, результаты, операция, уведомление |
+| GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `assistantInvariants`, `taskState`, `backgroundTasks`, результаты, операция, уведомление |
 | GET | `/api/settings` | Тот же полный снимок; ключи представлены только `hasKey` |
 | PUT | `/api/settings` | `{ expectedSettingsVersion, settings: SettingsDto }` → снимок после сохранения |
 | PUT | `/api/key` | `{ expectedSettingsVersion, provider, key }` → снимок без ключа |
@@ -61,6 +70,13 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 Рабочая корутина публикует состояние под тем же монитором; история принадлежит
 рабочей корутине до освобождения активной операции.
 
+Фоновый MCP monitor запускается вместе с controller, восстанавливает scheduler до
+первого LLM-запроса и сравнивает полные snapshots. `revision`/SSE обновляются
+только когда доступность, расписание, результат или агрегат действительно
+изменились; ожидание таймера само по себе событий не создаёт. Сбой дочернего MCP
+процесса публикует безопасный unavailable status и запускает переподключение без
+раскрытия exception/секретов.
+
 Одновременно работает один эксперимент. Другой запуск, изменение настроек/ключа,
 checkpoint/branch-команды, мутации FSM/инвариантов и очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
 запоздалая отмена из вкладки не остановит следующий запрос.
@@ -94,6 +110,14 @@ context-state откатывается. При ошибке или отмене 
 error, отмена, ошибка или незавершённый цикл не выполняют commit. Usage в output
 агрегирует все LLM-шаги. DeepSeek и остальные режимы не получают MCP tools и
 сохраняют прежний контракт ответа.
+
+Scheduler tools имеют строгие аргументы. `scheduler_create` требует `requestId`,
+`title`, `scheduleType`, `taskType` и поля выбранных видов; `scheduler_list`
+принимает пустой объект; `scheduler_cancel` требует `scheduleId`;
+`scheduler_get_summary` принимает необязательный `scheduleId`. Неизвестные,
+взаимоисключающие и похожие на секреты поля дают MCP `CallToolResult(isError=true)`,
+а не HTTP error. Эти результаты остаются недоверенными tool data и не попадают в
+историю или слои памяти.
 
 В `settings` стратегия передаётся как `SLIDING_WINDOW`, `STICKY_FACTS`,
 `BRANCHING` или `MEMORY_LAYERS`, а N — как положительный `recentMessagesLimit`

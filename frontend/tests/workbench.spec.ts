@@ -204,6 +204,38 @@ test("simple agent calls tracker through MCP and shows diagnostics", async ({pag
   expect(call.result).toContain("nextAction");
 });
 
+test("simple agent creates a persisted background task and SSE updates the panel", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await send(page, "Напомни через 10 минут проверить DEMO-101");
+  await done(page);
+
+  const exchange = page.getByTestId("exchange").last();
+  await expect(exchange.getByTestId("mcp-diagnostics")).toContainText("scheduler_create");
+  const panel = page.getByTestId("background-tasks");
+  await expect(panel).toBeVisible();
+  await expect.poll(async () => page.getByTestId("background-task").count()).toBeGreaterThan(0);
+  const task = page.getByTestId("background-task").filter({hasText: "Проверить DEMO-101"}).last();
+  await expect(task).toContainText("активна");
+  await expect(task).toContainText("однократно");
+  await expect(task).toContainText("Напоминание ожидает выполнения");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const scheduled = state.backgroundTasks.schedules.find((item) => item.title === "Проверить DEMO-101");
+  expect(scheduled?.nextRunAt).not.toBeNull();
+  expect(scheduled?.totalRuns).toBe(0);
+
+  await send(page, "Напомни через секунду выполнить фоновую проверку");
+  await done(page);
+  const exchangeCount = await page.getByTestId("exchange").count();
+  await expect.poll(async () => {
+    const current = await (await page.request.get("/api/state")).json() as State;
+    return current.backgroundTasks.schedules.find((item) => item.title === "Быстрое напоминание")?.status;
+  }, {timeout: 10_000}).toBe("completed");
+  await expect(page.getByTestId("background-task").filter({hasText: "Быстрое напоминание"}).last())
+    .toContainText("Напоминание выполнено");
+  expect(await page.getByTestId("exchange").count()).toBe(exchangeCount);
+});
+
 test("assistant profile personalizes neutral requests and current format overrides it", async ({page}) => {
   await setMode(page, "unrestricted");
   await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");

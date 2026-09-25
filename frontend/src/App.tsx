@@ -16,6 +16,7 @@ import {
 import {useWorkbench} from "./state/useWorkbench";
 import {Sidebar} from "./components/Sidebar";
 import {ExchangeView, TokenMetricsPanel} from "./components/Results";
+import {BackgroundTasks} from "./components/BackgroundTasks";
 
 export default function App() {
   const w = useWorkbench();
@@ -149,6 +150,7 @@ export default function App() {
             </Button>
           </Tooltip>
         </div>
+        <BackgroundTasks state={s.backgroundTasks}/>
         <div
           className="conversation"
           ref={feed}

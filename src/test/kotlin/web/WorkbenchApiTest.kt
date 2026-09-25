@@ -18,11 +18,10 @@ import org.example.app.ResponseMode
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.llm.*
-import org.example.mcp.McpGateway
-import org.example.mcp.McpTool
-import org.example.mcp.McpToolResult
+import org.example.mcp.*
 import java.io.IOException
 import java.nio.file.Files
+import java.time.Instant
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
@@ -53,6 +52,62 @@ class WorkbenchApiTest {
         header(HttpHeaders.Origin, "http://localhost:8080")
         contentType(ContentType.Application.Json)
         setBody(body)
+    }
+
+    @Test
+    fun `background scheduler snapshot is exposed by REST and SSE`() = testApplication {
+        engine { connector { host = "localhost"; port = 8080 } }
+        val expected = SchedulerSummary(
+            id = "schedule-api-1",
+            title = "API reminder",
+            taskType = ScheduledTaskType.REMINDER,
+            status = ScheduleStatus.ACTIVE,
+            scheduleType = ScheduleType.ONCE,
+            aggregationPeriod = "2026-09-23T12:00:00Z/2026-09-23T12:00:00Z",
+            totalRuns = 0,
+            successfulRuns = 0,
+            failedRuns = 0,
+            lastRunAt = null,
+            nextRunAt = Instant.parse("2026-09-23T12:10:00Z"),
+            lastResult = null,
+            lastError = null,
+            snapshotCount = 0,
+            latestTrackerStatus = null,
+            latestTrackerNextAction = null,
+            statusChanges = 0,
+            nextActionChanges = 0,
+            summary = "Напоминание ожидает выполнения.",
+        )
+        val gateway = object : McpGateway {
+            override suspend fun listTools() = emptyList<McpTool>()
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject) =
+                McpToolResult(true, "not used")
+            override suspend fun schedulerSnapshot() = SchedulerSnapshot(schedules = listOf(expected))
+            override suspend fun close() = Unit
+        }
+        val c = controller(mcpGateway = gateway)
+        application { workbenchModule(WorkbenchApi(c)) }
+        val client = createClient {
+            defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") }
+        }
+        try {
+            withTimeout(2_000) { c.state.first { it.backgroundTasks.available } }
+            val rest = client.get("$base/state").state()
+            assertEquals("schedule-api-1", rest.backgroundTasks.schedules.single().id)
+            assertEquals("2026-09-23T12:10:00Z", rest.backgroundTasks.schedules.single().nextRunAt)
+            withTimeout(2_000) {
+                client.prepareGet("$base/events").execute { events ->
+                    val channel = events.bodyAsChannel()
+                    var snapshot: StateDto? = null
+                    while (snapshot == null) {
+                        val line = channel.readUTF8Line() ?: error("SSE closed")
+                        if (line.startsWith("data:")) snapshot = apiJson.decodeFromString(line.removePrefix("data:").trim())
+                    }
+                    assertEquals(rest.backgroundTasks, snapshot.backgroundTasks)
+                    channel.cancel()
+                }
+            }
+        } finally { c.shutdown() }
     }
 
     @Test

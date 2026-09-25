@@ -62,7 +62,7 @@ tasks.register<JavaExec>("runWeb") {
 }
 tasks.register<JavaExec>("runMcpDemo") {
     group = "application"
-    description = "Start the local MCP stdio server, list its tools and call tracker_get_issue"
+    description = "Start the local MCP stdio server and verify Tracker plus scheduler tools"
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.mcp.McpDemoClientKt"
 }

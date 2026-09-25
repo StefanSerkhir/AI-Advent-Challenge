@@ -10,6 +10,7 @@ import kotlinx.serialization.SerializationException
 import org.example.agent.*
 import org.example.llm.*
 import org.example.mcp.McpGateway
+import org.example.mcp.SchedulerSnapshot
 import org.example.tokens.ContextLimitExceededException
 import org.example.tokens.ConversationTokenTotals
 import org.example.tokens.TurnTokenMetrics
@@ -73,6 +74,7 @@ data class WorkbenchState(
     val taskState: AgentTaskState? = null,
     val assistantTokenMetrics: List<TurnTokenMetrics> = emptyList(),
     val assistantTokenTotals: ConversationTokenTotals = ConversationTokenTotals(scope = "assistant_memory"),
+    val backgroundTasks: SchedulerSnapshot = SchedulerSnapshot.unavailable(),
     val exchanges: List<ConversationExchange> = emptyList(),
     val operation: OperationState = OperationState.Idle,
     val notice: UiNotice? = null,
@@ -175,6 +177,27 @@ class WorkbenchController(
 
     @Volatile
     private var currentJob: Job? = null
+
+    private val schedulerMonitorJob: Job? = mcpGateway?.let { gateway ->
+        workerScope.launch {
+            while (isActive) {
+                val snapshot = try {
+                    gateway.start()
+                    gateway.schedulerSnapshot() ?: SchedulerSnapshot.unavailable()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    SchedulerSnapshot.unavailable()
+                }
+                synchronized(this@WorkbenchController) {
+                    if (!closed && _state.value.backgroundTasks != snapshot) {
+                        publish { it.copy(backgroundTasks = snapshot) }
+                    }
+                }
+                delay(SCHEDULER_SNAPSHOT_INTERVAL_MILLIS)
+            }
+        }
+    }
 
     @Synchronized
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
@@ -492,6 +515,7 @@ class WorkbenchController(
     override fun close() {
         closed = true
         currentJob?.cancel()
+        schedulerMonitorJob?.cancel()
         workerScope.cancel()
     }
 
@@ -794,6 +818,7 @@ class WorkbenchController(
 }
 
 private const val STREAM_PUBLISH_INTERVAL_NANOS = 50_000_000L
+private const val SCHEDULER_SNAPSHOT_INTERVAL_MILLIS = 500L
 
 internal fun userFacingError(error: Throwable, secrets: Collection<String> = emptyList()): String {
     val message = when (error) {

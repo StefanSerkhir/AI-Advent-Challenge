@@ -2,12 +2,16 @@ package org.example.mcp
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
+import java.nio.file.Files
+import java.time.Instant
+import java.util.*
 import kotlin.test.*
 
 class McpGatewayTest {
     @Test
     fun `real stdio server lists tracker schema and returns structured issue and controlled error`() = runBlocking {
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("mcp-gateway-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         try {
             val tool = gateway.listTools().single { it.name == TRACKER_GET_ISSUE_TOOL }
             assertEquals("Gets one issue from the local deterministic Tracker by its identifier.", tool.description)
@@ -40,8 +44,52 @@ class McpGatewayTest {
             assertTrue(invalid.isError)
             assertEquals("issueId must be a non-empty string.", invalid.content)
             assertFalse(invalid.content.contains("Exception"))
+
+            val tools = gateway.listTools().associateBy(McpTool::name)
+            assertTrue(MCP_DEMO_TOOL_NAMES.all { it in tools })
+            val createSchema = requireNotNull(tools[SCHEDULER_CREATE_TOOL]).inputSchema
+            assertEquals(
+                listOf("requestId", "title", "scheduleType", "taskType"),
+                createSchema["required"]?.jsonArray?.map { it.jsonPrimitive.content },
+            )
+
+            val requestId = UUID.randomUUID().toString()
+            val createArguments = buildJsonObject {
+                put("requestId", requestId)
+                put("title", "MCP reminder")
+                put("scheduleType", "once")
+                put("runAt", Instant.now().plusSeconds(3_600).toString())
+                put("taskType", "reminder")
+                put("reminderText", "Проверить DEMO-101")
+            }
+            val created = gateway.callTool(SCHEDULER_CREATE_TOOL, createArguments)
+            assertFalse(created.isError)
+            val scheduleId = Json.parseToJsonElement(created.content).jsonObject["schedules"]!!
+                .jsonArray.single().jsonObject["id"]!!.jsonPrimitive.content
+            val repeated = gateway.callTool(SCHEDULER_CREATE_TOOL, createArguments)
+            assertFalse(repeated.isError)
+            assertContains(repeated.content, scheduleId)
+
+            val strictError = gateway.callTool(SCHEDULER_CREATE_TOOL, buildJsonObject {
+                createArguments.forEach { (key, value) -> put(key, value) }
+                put("unexpected", true)
+            })
+            assertTrue(strictError.isError)
+            assertContains(strictError.content, "неизвестные поля")
+
+            val listed = gateway.callTool(SCHEDULER_LIST_TOOL, buildJsonObject {})
+            assertFalse(listed.isError)
+            assertContains(listed.content, scheduleId)
+            val summary = gateway.callTool(SCHEDULER_SUMMARY_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
+            assertFalse(summary.isError)
+            assertContains(summary.content, "MCP reminder")
+            val cancelled = gateway.callTool(SCHEDULER_CANCEL_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
+            assertFalse(cancelled.isError)
+            assertContains(cancelled.content, "cancelled")
+            assertFalse(gateway.callTool(SCHEDULER_CANCEL_TOOL, buildJsonObject { put("scheduleId", scheduleId) }).isError)
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 }

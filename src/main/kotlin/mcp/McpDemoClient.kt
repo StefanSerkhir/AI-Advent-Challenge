@@ -1,10 +1,10 @@
 package org.example.mcp
 
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
+import java.nio.file.Files
+import java.time.Instant
+import java.util.*
 import kotlin.system.exitProcess
 
 private val schemaJson = Json {
@@ -23,7 +23,8 @@ public fun main() {
 
 private suspend fun runMcpDemoClient(): Int {
     var stage = "starting the local MCP server"
-    val gateway = LocalMcpGateway()
+    val directory = Files.createTempDirectory("llm-workbench-mcp-demo")
+    val gateway = LocalMcpGateway(directory.resolve(".llm-scheduler-state.json"))
 
     return try {
         stage = "establishing the MCP connection"
@@ -57,7 +58,30 @@ private suspend fun runMcpDemoClient(): Int {
             "tracker_get_issue returned an unexpected result"
         }
         println("tools/call tracker_get_issue returned: ${issue.content}")
-        println("MCP tool discovery and call verified successfully.")
+        stage = "creating a persisted scheduler task"
+        val created = gateway.callTool(SCHEDULER_CREATE_TOOL, buildJsonObject {
+            put("requestId", UUID.randomUUID().toString())
+            put("title", "Демонстрационный снимок DEMO-101")
+            put("scheduleType", "fixed_interval")
+            put("everySeconds", 1800)
+            put("startAt", Instant.now().plusSeconds(3600).toString())
+            put("taskType", "tracker_snapshot")
+            put("issueId", "DEMO-101")
+        })
+        check(!created.isError) { "scheduler_create returned an error: ${created.content}" }
+        val scheduleId = Json.parseToJsonElement(created.content).jsonObject["schedules"]
+            ?.jsonArray?.single()?.jsonObject?.get("id")?.jsonPrimitive?.content
+            ?: error("scheduler_create did not return schedule id")
+        println("tools/call scheduler_create returned schedule: $scheduleId")
+
+        stage = "requesting scheduler summary"
+        val summary = gateway.callTool(SCHEDULER_SUMMARY_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
+        check(!summary.isError && "Демонстрационный снимок" in summary.content) {
+            "scheduler_get_summary returned an unexpected result"
+        }
+        println("tools/call scheduler_get_summary returned: ${summary.content}")
+        gateway.callTool(SCHEDULER_CANCEL_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
+        println("MCP tool discovery, Tracker call and scheduler lifecycle verified successfully.")
         0
     } catch (error: Exception) {
         System.err.println("MCP demo failed while $stage: ${error.message ?: error::class.simpleName}")
@@ -65,5 +89,6 @@ private suspend fun runMcpDemoClient(): Int {
     } finally {
         runCatching { gateway.close() }
             .onFailure { System.err.println("Failed to close MCP gateway cleanly: ${it.message}") }
+        directory.toFile().deleteRecursively()
     }
 }

@@ -9,6 +9,7 @@ import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
 import org.example.tokens.ModelContextProfiles
 import org.example.tokens.TokenCostCalculator
+import java.nio.file.Files
 import kotlin.test.*
 
 class LlmAgentTest {
@@ -33,7 +34,8 @@ class LlmAgentTest {
 
     @Test
     fun `agent performs a real MCP call and persists only user plus final assistant`() = runBlocking {
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("llm-agent-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         val calls = mutableListOf<List<LlmMessage>>()
         var step = 0
         val client = object : LlmClient {
@@ -78,12 +80,14 @@ class LlmAgentTest {
             assertTrue(persisted.none { it.role == LlmRole.TOOL || it.toolCalls.isNotEmpty() })
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 
     @Test
     fun `MCP tool error is diagnosed and final response is not persisted`() = runBlocking {
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("llm-agent-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         var step = 0
         var persistenceCalls = 0
         val client = object : LlmClient {
@@ -109,12 +113,14 @@ class LlmAgentTest {
             assertEquals(0, persistenceCalls)
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 
     @Test
     fun `agent rejects a fourth MCP call without committing history`() = runBlocking {
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("llm-agent-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = CompletionResult(
@@ -132,12 +138,14 @@ class LlmAgentTest {
             assertTrue(agent.historySnapshot().isEmpty())
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 
     @Test
     fun `cancellation during MCP loop does not commit history`() = runBlocking {
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("llm-agent-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")
@@ -161,6 +169,7 @@ class LlmAgentTest {
             assertTrue(agent.historySnapshot().isEmpty())
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 

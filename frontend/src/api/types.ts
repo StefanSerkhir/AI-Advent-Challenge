@@ -185,6 +185,33 @@ export interface State {
   assistantProfile: AssistantProfile;
   assistantInvariants: AssistantInvariantState;
   taskState: AgentTaskState | null;
+  backgroundTasks: BackgroundTasksState;
+}
+export interface BackgroundTask {
+  id: string;
+  title: string;
+  taskType: "reminder" | "tracker_snapshot";
+  status: "active" | "completed" | "failed" | "cancelled";
+  scheduleType: "once" | "fixed_interval";
+  aggregationPeriod: string;
+  totalRuns: number;
+  successfulRuns: number;
+  failedRuns: number;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  lastResult: string | null;
+  lastError: string | null;
+  snapshotCount: number;
+  latestTrackerStatus: string | null;
+  latestTrackerNextAction: string | null;
+  statusChanges: number;
+  nextActionChanges: number;
+  summary: string;
+}
+export interface BackgroundTasksState {
+  available: boolean;
+  error: string | null;
+  schedules: BackgroundTask[];
 }
 export interface ContextState {
   strategy: ContextStrategy;

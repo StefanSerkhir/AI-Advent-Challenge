@@ -18,6 +18,7 @@ import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
 import java.io.IOException
 import java.nio.file.Files
+import java.time.Instant
 
 /** Deliberately in test sources: no fixture switch or fake client in the production artifact. */
 fun main() {
@@ -31,7 +32,7 @@ fun main() {
         assistantMemoryStore = JsonAssistantMemoryStore(directory.resolve(".llm-assistant-memory.json")),
         assistantInvariantStore = JsonAssistantInvariantStore(directory.resolve(".llm-assistant-invariants.json")),
         taskStateStore = JsonTaskStateStore(directory.resolve(".llm-task-state.json")),
-        mcpGateway = LocalMcpGateway(),
+        mcpGateway = LocalMcpGateway(directory.resolve(".llm-scheduler-state.json")),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -73,6 +74,49 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
+        if (options.tools.any { it.name == "scheduler_create" } &&
+            ("Напомни через 10 минут" in prompt || "Напомни через секунду" in prompt || "[[schedule-reminder]]" in prompt) && toolResult == null) {
+            val quick = "Напомни через секунду" in prompt
+            return CompletionResult(
+                content = "",
+                finishReason = "tool_calls",
+                usage = TokenUsage(38, 14, 52),
+                model = model,
+                toolCalls = listOf(LlmToolCall(
+                    id = "fixture-scheduler-call-1",
+                    name = "scheduler_create",
+                    arguments = buildJsonObject {
+                        put("requestId", "fixture-${prompt.hashCode().toUInt()}")
+                        put("title", if (quick) "Быстрое напоминание" else "Проверить DEMO-101")
+                        put("scheduleType", "once")
+                        put("runAt", Instant.now().plusSeconds(if (quick) 1 else 600).toString())
+                        put("taskType", "reminder")
+                        put("reminderText", if (quick) "Проверить фоновое выполнение" else "Проверить DEMO-101")
+                    }.toString(),
+                )),
+            )
+        }
+        if (options.tools.any { it.name == "scheduler_create" } &&
+            "Каждые 30 минут" in prompt && toolResult == null) {
+            return CompletionResult(
+                content = "",
+                finishReason = "tool_calls",
+                usage = TokenUsage(42, 14, 56),
+                model = model,
+                toolCalls = listOf(LlmToolCall(
+                    id = "fixture-scheduler-call-2",
+                    name = "scheduler_create",
+                    arguments = buildJsonObject {
+                        put("requestId", "fixture-${prompt.hashCode().toUInt()}")
+                        put("title", "Снимки DEMO-101")
+                        put("scheduleType", "fixed_interval")
+                        put("everySeconds", 1800)
+                        put("taskType", "tracker_snapshot")
+                        put("issueId", "DEMO-101")
+                    }.toString(),
+                )),
+            )
+        }
         if (options.tools.any { it.name == "tracker_get_issue" } && "DEMO-101" in prompt && toolResult == null) {
             return CompletionResult(
                 content = "",
@@ -94,6 +138,8 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
+            toolResult?.name == "scheduler_create" && "schedules" in toolResult.content ->
+                "Фоновая задача создана и сохранена локально. Статус и следующее выполнение уже доступны в панели «Фоновые задачи»."
             toolResult?.name == "tracker_get_issue" && "DEMO-101" in toolResult.content ->
                 "Задача **DEMO-101** имеет статус **In Progress**. Следующее действие: завершить сквозные тесты и отправить изменение на проверку."
             messages.firstOrNull()?.content?.contains("key-value memory") == true -> {

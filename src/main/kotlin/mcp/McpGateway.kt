@@ -31,17 +31,25 @@ data class McpToolResult(
 )
 
 interface McpGateway {
+    suspend fun start() = Unit
     suspend fun listTools(): List<McpTool>
     suspend fun callTool(name: String, arguments: JsonObject): McpToolResult
+    suspend fun schedulerSnapshot(): SchedulerSnapshot? = null
     suspend fun close()
 }
 
-/** Lazy, reusable stdio gateway. A failed or cancelled protocol operation tears down the child process. */
-class LocalMcpGateway : McpGateway {
+/** Reusable stdio gateway, activated eagerly by web runtime. Failed protocol operations tear down the child process. */
+class LocalMcpGateway(
+    private val schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
+) : McpGateway {
     private val mutex = Mutex()
     private var process: Process? = null
     private var client: Client? = null
     private var cachedTools: List<McpTool>? = null
+
+    override suspend fun start() {
+        protocolOperation { Unit }
+    }
 
     override suspend fun listTools(): List<McpTool> = protocolOperation {
         cachedTools ?: withTimeout(MCP_TIMEOUT) {
@@ -63,6 +71,16 @@ class LocalMcpGateway : McpGateway {
     }
 
     override suspend fun callTool(name: String, arguments: JsonObject): McpToolResult = protocolOperation {
+        callToolLocked(name, arguments)
+    }
+
+    override suspend fun schedulerSnapshot(): SchedulerSnapshot = protocolOperation {
+        val result = callToolLocked(SCHEDULER_LIST_TOOL, buildJsonObject {})
+        check(!result.isError) { "Scheduler snapshot is unavailable" }
+        schedulerSnapshotFromJson(Json.parseToJsonElement(result.content))
+    }
+
+    private suspend fun callToolLocked(name: String, arguments: JsonObject): McpToolResult {
         val result = withTimeout(MCP_TIMEOUT) {
             requireClient().callTool(
                 CallToolRequest(CallToolRequestParams(name = name, arguments = arguments)),
@@ -70,7 +88,7 @@ class LocalMcpGateway : McpGateway {
         }
         val content = result.structuredContent?.toString()
             ?: result.content.filterIsInstance<TextContent>().joinToString("\n", transform = TextContent::text)
-        McpToolResult(result.isError == true, content)
+        return McpToolResult(result.isError == true, content)
     }
 
     override suspend fun close() {
@@ -90,7 +108,7 @@ class LocalMcpGateway : McpGateway {
     private suspend fun connectLocked() {
         if (client != null && process?.isAlive == true) return
         closeLocked()
-        val started = startServerProcess()
+        val started = startServerProcess(schedulerStateFile)
         val connectedClient = Client(
             clientInfo = Implementation(
                 name = "llm-workbench-mcp-client",
@@ -123,7 +141,7 @@ class LocalMcpGateway : McpGateway {
 
 private val MCP_TIMEOUT = 10.seconds
 
-internal fun startServerProcess(): Process {
+internal fun startServerProcess(schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME)): Process {
     val executable = Path.of(
         System.getProperty("java.home"),
         "bin",
@@ -134,7 +152,9 @@ internal fun startServerProcess(): Process {
         "-cp",
         System.getProperty("java.class.path"),
         "org.example.mcp.McpDemoServerKt",
-    ).start()
+    ).also { builder ->
+        builder.environment()["LLM_SCHEDULER_STATE_FILE"] = schedulerStateFile.toAbsolutePath().toString()
+    }.start()
 }
 
 internal fun stopServerProcess(process: Process?) {

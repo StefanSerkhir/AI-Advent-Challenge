@@ -4,13 +4,56 @@ import kotlinx.coroutines.runBlocking
 import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
 import org.example.tokens.ContextOverflowPolicy
+import java.nio.file.Files
+import java.time.Instant
 import kotlin.test.*
 
 class AssistantMcpTest {
     @Test
+    fun `scheduler tool payload stays transient and memory stores only user plus final answer`() = runBlocking {
+        val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
+        val directory = Files.createTempDirectory("assistant-scheduler-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult =
+                if (step++ == 0) {
+                    CompletionResult("", "tool_calls", TokenUsage(5, 2, 7), "test-model", listOf(
+                        LlmToolCall(
+                            "scheduler-call",
+                            "scheduler_create",
+                            """{"requestId":"memory-test","title":"Reminder","scheduleType":"once","runAt":"${Instant.now().plusSeconds(3600)}","taskType":"reminder","reminderText":"Check"}""",
+                        ),
+                    ))
+                } else {
+                    assertEquals(LlmRole.TOOL, messages.last().role)
+                    assertContains(messages.last().content, "schedules")
+                    CompletionResult("Напоминание создано.", "stop", TokenUsage(8, 3, 11), "test-model")
+                }
+        }
+        val agent = AssistantAgent(memory, mcpGateway = gateway, clientProvider = { client })
+        try {
+            val response = agent.respond(
+                "Создай напоминание", "test-model", 200,
+                ContextOverflowPolicy.REJECT, 10, mcpEnabled = true,
+            )
+            assertEquals("scheduler_create", response.mcpCalls.single().toolName)
+            assertEquals(
+                listOf("Создай напоминание", "Напоминание создано."),
+                memory.state().shortTerm.map(MemoryEntry::text),
+            )
+            assertTrue(memory.state().shortTerm.none { "schedules" in it.text || "scheduler-call" in it.text })
+        } finally {
+            gateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `MCP final answer still passes invariant structured postflight`() = runBlocking {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("assistant-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         val invariant = AssistantInvariant("inv-stack", AssistantInvariantCategory.STACK, "Отвечай по-русски", 1)
         var step = 0
         val client = object : LlmClient {
@@ -46,6 +89,7 @@ class AssistantMcpTest {
             assertEquals(2, memory.state().shortTerm.size)
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 
@@ -53,7 +97,8 @@ class AssistantMcpTest {
     fun `memory layers assistant uses real MCP and commits only the final pair`() = runBlocking {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         memory.add(MemoryLayer.LONG_TERM, "Отвечай по-русски")
-        val gateway = LocalMcpGateway()
+        val directory = Files.createTempDirectory("assistant-mcp-test")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
         val calls = mutableListOf<List<LlmMessage>>()
         var step = 0
         val client = object : LlmClient {
@@ -96,6 +141,7 @@ class AssistantMcpTest {
             assertTrue(memory.state().shortTerm.none { "nextAction" in it.text })
         } finally {
             gateway.close()
+            directory.toFile().deleteRecursively()
         }
     }
 }

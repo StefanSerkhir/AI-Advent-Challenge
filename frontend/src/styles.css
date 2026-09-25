@@ -495,6 +495,64 @@ button {
   min-height: 0;
   padding: 0 34px;
 }
+.background-tasks {
+  margin: 0 30px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+  max-height: 190px;
+  overflow: auto;
+}
+.background-tasks-heading,
+.background-tasks-heading > div,
+.background-task-title,
+.background-task-times {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.background-tasks-heading {
+  justify-content: space-between;
+  color: #4d5265;
+  font-size: 12px;
+}
+.background-tasks-empty {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.background-task-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 7px;
+}
+.background-task {
+  border-top: 1px solid #eff0f4;
+  padding-top: 7px;
+}
+.background-task-title strong {
+  font-size: 12px;
+}
+.background-task-times {
+  flex-wrap: wrap;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.background-task p {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.background-task code {
+  display: block;
+  margin-top: 3px;
+  color: #8a8e9b;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .conversation-inner {
   max-width: 1180px;
   margin: 0 auto;
