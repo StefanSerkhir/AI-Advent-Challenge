@@ -6,16 +6,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
 import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
+import org.example.mcp.SAVE_TO_FILE_TOOL
+import org.example.mcp.SEARCH_TOOL
+import org.example.mcp.SUMMARIZE_TOOL
 import java.io.IOException
 import java.nio.file.Files
 import java.time.Instant
@@ -32,7 +32,10 @@ fun main() {
         assistantMemoryStore = JsonAssistantMemoryStore(directory.resolve(".llm-assistant-memory.json")),
         assistantInvariantStore = JsonAssistantInvariantStore(directory.resolve(".llm-assistant-invariants.json")),
         taskStateStore = JsonTaskStateStore(directory.resolve(".llm-task-state.json")),
-        mcpGateway = LocalMcpGateway(directory.resolve(".llm-scheduler-state.json")),
+        mcpGateway = LocalMcpGateway(
+            directory.resolve(".llm-scheduler-state.json"),
+            directory.resolve(".llm-mcp-output"),
+        ),
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -74,6 +77,38 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
+        val pipelineResults = messages.filter { it.role == LlmRole.TOOL && it.name in PIPELINE_TOOL_NAMES }
+            .associateBy { requireNotNull(it.name) }
+        if (prompt == PIPELINE_FIXTURE_PROMPT && options.tools.any { it.name == SEARCH_TOOL } && SEARCH_TOOL !in pipelineResults) {
+            return fixtureToolCall(
+                id = "fixture-pipeline-search",
+                name = SEARCH_TOOL,
+                arguments = buildJsonObject { put("query", "композиция MCP-инструментов") },
+            )
+        }
+        if (prompt == PIPELINE_FIXTURE_PROMPT && SEARCH_TOOL in pipelineResults && SUMMARIZE_TOOL !in pipelineResults) {
+            val searchResult = parseFixtureToolResult(requireNotNull(pipelineResults[SEARCH_TOOL]))
+            return fixtureToolCall(
+                id = "fixture-pipeline-summarize",
+                name = SUMMARIZE_TOOL,
+                arguments = buildJsonObject {
+                    put("matches", requireNotNull(searchResult["matches"]))
+                    put("maxSentences", 3)
+                },
+            )
+        }
+        if (prompt == PIPELINE_FIXTURE_PROMPT && SUMMARIZE_TOOL in pipelineResults && SAVE_TO_FILE_TOOL !in pipelineResults) {
+            val summaryResult = parseFixtureToolResult(requireNotNull(pipelineResults[SUMMARIZE_TOOL]))
+            return fixtureToolCall(
+                id = "fixture-pipeline-save",
+                name = SAVE_TO_FILE_TOOL,
+                arguments = buildJsonObject {
+                    put("fileName", "pipeline-summary.md")
+                    put("content", requireNotNull(summaryResult["summary"]))
+                    put("sourceIds", requireNotNull(summaryResult["sourceIds"]))
+                },
+            )
+        }
         if (options.tools.any { it.name == "scheduler_create" } &&
             ("Напомни через 10 минут" in prompt || "Напомни через секунду" in prompt || "[[schedule-reminder]]" in prompt) && toolResult == null) {
             val quick = "Напомни через секунду" in prompt
@@ -138,6 +173,11 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
+            prompt == PIPELINE_FIXTURE_PROMPT && SAVE_TO_FILE_TOOL in pipelineResults -> {
+                val saved = parseFixtureToolResult(requireNotNull(pipelineResults[SAVE_TO_FILE_TOOL]))
+                val fileName = saved["fileName"]?.jsonPrimitive?.content.orEmpty()
+                "Локальные сведения о композиции MCP-инструментов найдены, кратко суммированы и сохранены в `$fileName`."
+            }
             toolResult?.name == "scheduler_create" && "schedules" in toolResult.content ->
                 "Фоновая задача создана и сохранена локально. Статус и следующее выполнение уже доступны в панели «Фоновые задачи»."
             toolResult?.name == "tracker_get_issue" && "DEMO-101" in toolResult.content ->
@@ -220,4 +260,19 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             TokenUsage(120, 80, 200, cachedPromptTokens = 20, cacheWritePromptTokens = 5, reasoningTokens = 10),
             if (model == "gpt-5.6-luna" && options.temperature != null) "gpt-4.1-mini" else model)
     }
+
+    private fun fixtureToolCall(id: String, name: String, arguments: JsonObject) = CompletionResult(
+        content = "",
+        finishReason = "tool_calls",
+        usage = TokenUsage(36, 12, 48),
+        model = model,
+        toolCalls = listOf(LlmToolCall(id = id, name = name, arguments = arguments.toString())),
+    )
 }
+
+private fun parseFixtureToolResult(message: LlmMessage): JsonObject =
+    Json.parseToJsonElement(message.content.substringAfter('\n')).jsonObject
+
+private const val PIPELINE_FIXTURE_PROMPT =
+    "Найди локальные сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в pipeline-summary.md"
+private val PIPELINE_TOOL_NAMES = setOf(SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL)

@@ -204,6 +204,35 @@ test("simple agent calls tracker through MCP and shows diagnostics", async ({pag
   expect(call.result).toContain("nextAction");
 });
 
+test("simple agent composes search summarize and save_to_file through MCP", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");
+
+  await send(page, "Найди локальные сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в pipeline-summary.md");
+  await done(page);
+
+  const exchange = page.getByTestId("exchange").last();
+  await expect(exchange).toContainText("найдены, кратко суммированы и сохранены");
+  await expect(exchange).toContainText("pipeline-summary.md");
+  const diagnostics = exchange.getByTestId("mcp-diagnostics");
+  await expect(diagnostics).toBeVisible();
+  await expect(diagnostics).toContainText("search");
+  await expect(diagnostics).toContainText("summarize");
+  await expect(diagnostics).toContainText("save_to_file");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const calls = state.exchanges.at(-1)!.outputs[0].mcpCalls;
+  expect(calls.map((call) => call.toolName)).toEqual(["search", "summarize", "save_to_file"]);
+  expect(calls.every((call) => call.status === "success")).toBe(true);
+  expect(calls[0].result).toContain("mcp-composition-001");
+  expect(calls[0].result).toContain("matches");
+  expect(calls[1].arguments).toContain("mcp-composition-001");
+  expect(calls[1].result).toContain("sourceIds");
+  expect(calls[2].arguments).toContain("Композиция MCP-инструментов");
+  expect(calls[2].result).toContain("pipeline-summary.md");
+  expect(calls[2].result).toContain("mcp-composition-001");
+});
+
 test("simple agent creates a persisted background task and SSE updates the panel", async ({page}) => {
   await setMode(page, "unrestricted");
   await send(page, "Напомни через 10 минут проверить DEMO-101");

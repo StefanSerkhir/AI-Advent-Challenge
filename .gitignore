@@ -8,6 +8,7 @@ build/
 .llm-assistant-invariants.json
 .llm-task-state.json
 .llm-scheduler-state.json
+.llm-mcp-output/
 .llm-context-*.json
 /video/
 !gradle/wrapper/gradle-wrapper.jar

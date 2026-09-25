@@ -5,8 +5,12 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.*
 import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
+import org.example.mcp.SAVE_TO_FILE_TOOL
+import org.example.mcp.SEARCH_TOOL
+import org.example.mcp.SUMMARIZE_TOOL
 import org.example.tokens.ModelContextProfiles
 import org.example.tokens.TokenCostCalculator
 import java.nio.file.Files
@@ -35,7 +39,7 @@ class LlmAgentTest {
     @Test
     fun `agent performs a real MCP call and persists only user plus final assistant`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         val calls = mutableListOf<List<LlmMessage>>()
         var step = 0
         val client = object : LlmClient {
@@ -85,9 +89,106 @@ class LlmAgentTest {
     }
 
     @Test
+    fun `agent composes search summarize and save results through transient tool messages`() = runBlocking {
+        val directory = Files.createTempDirectory("llm-agent-pipeline-test")
+        val outputDirectory = directory.resolve("output")
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), outputDirectory)
+        val calls = mutableListOf<List<LlmMessage>>()
+        var expectedSourceIds = emptyList<JsonElement>()
+        var expectedSummary = ""
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                calls += messages
+                return when (step++) {
+                    0 -> {
+                        assertTrue(options.tools.map { it.name }.containsAll(listOf(SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL)))
+                        assertTrue(messages.none { it.role == LlmRole.TOOL })
+                        CompletionResult("", "tool_calls", TokenUsage(10, 2, 12), "test-model", listOf(
+                            LlmToolCall("pipeline-search", SEARCH_TOOL, "{\"query\":\"композиция MCP-инструментов\"}"),
+                        ))
+                    }
+                    1 -> {
+                        val searchMessage = messages.last()
+                        assertEquals(LlmRole.TOOL, searchMessage.role)
+                        assertEquals(SEARCH_TOOL, searchMessage.name)
+                        assertContains(searchMessage.content, "UNTRUSTED MCP TOOL DATA")
+                        val searchResult = Json.parseToJsonElement(searchMessage.content.substringAfter('\n')).jsonObject
+                        val matches = searchResult["matches"]!!.jsonArray
+                        expectedSourceIds = matches.map { it.jsonObject["id"]!! }
+                        assertTrue(expectedSourceIds.isNotEmpty())
+                        CompletionResult("", "tool_calls", TokenUsage(12, 2, 14), "test-model", listOf(
+                            LlmToolCall("pipeline-summarize", SUMMARIZE_TOOL, buildJsonObject {
+                                put("matches", matches)
+                                put("maxSentences", 3)
+                            }.toString()),
+                        ))
+                    }
+                    2 -> {
+                        val summaryMessage = messages.last()
+                        assertEquals(LlmRole.TOOL, summaryMessage.role)
+                        assertEquals(SUMMARIZE_TOOL, summaryMessage.name)
+                        val summaryResult = Json.parseToJsonElement(summaryMessage.content.substringAfter('\n')).jsonObject
+                        expectedSummary = summaryResult["summary"]!!.jsonPrimitive.content
+                        assertEquals(expectedSourceIds, summaryResult["sourceIds"]!!.jsonArray)
+                        assertContains(expectedSummary, "Композиция MCP-инструментов")
+                        CompletionResult("", "tool_calls", TokenUsage(14, 2, 16), "test-model", listOf(
+                            LlmToolCall("pipeline-save", SAVE_TO_FILE_TOOL, buildJsonObject {
+                                put("fileName", "pipeline-summary.md")
+                                put("content", expectedSummary)
+                                put("sourceIds", summaryResult["sourceIds"]!!)
+                            }.toString()),
+                        ))
+                    }
+                    3 -> {
+                        val saveMessage = messages.last()
+                        assertEquals(LlmRole.TOOL, saveMessage.role)
+                        assertEquals(SAVE_TO_FILE_TOOL, saveMessage.name)
+                        val saveResult = Json.parseToJsonElement(saveMessage.content.substringAfter('\n')).jsonObject
+                        assertEquals("pipeline-summary.md", saveResult["fileName"]?.jsonPrimitive?.content)
+                        assertEquals(expectedSourceIds, saveResult["sourceIds"]!!.jsonArray)
+                        assertEquals(3, messages.count { it.role == LlmRole.TOOL })
+                        CompletionResult(
+                            "Локальные сведения найдены, суммированы и сохранены в pipeline-summary.md.",
+                            "stop",
+                            TokenUsage(16, 8, 24),
+                            "test-model",
+                        )
+                    }
+                    else -> error("Unexpected LLM step")
+                }
+            }
+        }
+        var persisted = emptyList<LlmMessage>()
+        val agent = LlmAgent(
+            persistHistory = { persisted = it },
+            mcpGateway = gateway,
+            clientProvider = { client },
+        )
+        try {
+            val prompt = "Найди локальные сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в pipeline-summary.md"
+            val response = agent.respond(AgentRequest(prompt, model = "test-model", mcpEnabled = true))
+
+            assertEquals(4, calls.size)
+            assertEquals(listOf(SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL), response.mcpCalls.map { it.toolName })
+            assertTrue(response.mcpCalls.all { it.status == McpCallStatus.SUCCESS })
+            assertContains(response.mcpCalls[0].result, "mcp-composition-001")
+            assertContains(response.mcpCalls[1].result, "sourceIds")
+            assertContains(response.mcpCalls[2].result, "pipeline-summary.md")
+            assertEquals(expectedSummary, Files.readString(outputDirectory.resolve("pipeline-summary.md")))
+            assertEquals(listOf(LlmRole.USER, LlmRole.ASSISTANT), persisted.map { it.role })
+            assertEquals(listOf(prompt, response.content), persisted.map { it.content })
+            assertTrue(persisted.none { it.role == LlmRole.TOOL || it.toolCalls.isNotEmpty() })
+        } finally {
+            gateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `MCP tool error is diagnosed and final response is not persisted`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         var step = 0
         var persistenceCalls = 0
         val client = object : LlmClient {
@@ -120,7 +221,7 @@ class LlmAgentTest {
     @Test
     fun `agent rejects a fourth MCP call without committing history`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = CompletionResult(
@@ -145,7 +246,7 @@ class LlmAgentTest {
     @Test
     fun `cancellation during MCP loop does not commit history`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = error("unused")

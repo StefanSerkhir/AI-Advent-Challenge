@@ -61,18 +61,32 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 
 Для разработки UI backend запускается с `WEB_DEV_PORT=5173`, а Vite отдельно через `npm --prefix frontend run dev`. Vite проксирует `/api`; произвольный CORS не включён.
 
-`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler в fixture также настоящий, но получает путь во временном каталоге теста.
+`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler и output-каталог в fixture также настоящие, но получают отдельные пути во временном каталоге теста.
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же `LocalMcpGateway`, что и
 web runtime. Шлюз создаёт дочерний JVM-процесс `McpDemoServerKt` с тем же runtime
 classpath и соединяет его официальными `StdioClientTransport`/`StdioServerTransport`
 Kotlin MCP SDK. Сервер объявляет безопасные локальные инструменты `ping`, `echo`,
-`tracker_get_issue`, `scheduler_create`, `scheduler_list`, `scheduler_cancel` и
-`scheduler_get_summary`; stdout зарезервирован только для JSON-RPC. CLI выполняет
-handshake, `tools/list`, реальный `tools/call` для `DEMO-101`, создание, чтение
-сводки и отмену расписания, затем закрывает client, transport и process. Demo
-использует отдельный временный scheduler store. Mock Tracker не читает `.env`, не
-использует сеть и не требует ключей.
+`tracker_get_issue`, `scheduler_create`, `scheduler_list`, `scheduler_cancel`,
+`scheduler_get_summary`, `search`, `summarize` и `save_to_file`; stdout
+зарезервирован только для JSON-RPC. CLI выполняет handshake, проверяет полный
+каталог через `tools/list`, затем настоящий pipeline: передаёт фактические
+`matches` из `search` в `summarize`, а фактические `summary`/`sourceIds` — в
+`save_to_file`, после чего сверяет файл побайтно с резюме. Затем выполняются
+прежние Tracker и scheduler lifecycle-вызовы. Demo использует один временный root
+для scheduler store и output-каталога, закрывает client/transport/process и удаляет
+root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
+или LLM и не требуют ключей. Добавление трёх инструментов подняло версию MCP demo
+server до `1.1.0`.
+
+`search` работает только с встроенным каталогом стабильных `id`, `title` и
+`content`. `summarize` детерминированно ограничивает число обработанных записей и
+возвращает provenance в `sourceIds`. `save_to_file` получает output root от
+родительского процесса через `LLM_MCP_OUTPUT_DIR` (production default —
+`.llm-mcp-output`), принимает только безопасное имя без пути, запрещает absolute/
+`..`/разделители/управляющие символы и существующую symlink-цель, пишет temporary
+file и применяет atomic replace с fallback. Результат содержит только относительное
+имя, UTF-8 byte count и `sourceIds`, но не абсолютный путь.
 
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
@@ -172,6 +186,9 @@ Monitor запрашивает snapshot через настоящий `scheduler
 шага отдельно и затем складывается, чтобы high-context тариф одного запроса не
 применялся ошибочно к агрегату нескольких запросов.
 
+Каноническая последовательность композиции: user → LLM → `search` → LLM →
+`summarize` → LLM → `save_to_file` → LLM final.
+
 ```mermaid
 sequenceDiagram
     participant UI as React UI
@@ -181,12 +198,22 @@ sequenceDiagram
     participant S as MCP child process
     A->>G: tools/list (уже активный gateway)
     G->>S: initialize + tools/list over stdio
-    A->>L: messages + discovered tool definitions
-    L-->>A: assistant tool_calls
-    A->>G: tools/call tracker_get_issue
+    A->>L: user + discovered tool definitions
+    L-->>A: tool_call search
+    A->>G: tools/call search(query)
     G->>S: tools/call over stdio
-    S-->>A: structured untrusted result
-    A->>L: temporary assistant tool-call + tool result
+    S-->>A: query + matches[]
+    A->>L: transient search result
+    L-->>A: tool_call summarize(matches)
+    A->>G: tools/call summarize
+    G->>S: tools/call over stdio
+    S-->>A: summary + sourceIds
+    A->>L: transient summarize result
+    L-->>A: tool_call save_to_file(summary, sourceIds)
+    A->>G: tools/call save_to_file
+    G->>S: tools/call over stdio
+    S-->>A: relative name + bytes + sourceIds
+    A->>L: transient save result
     L-->>A: streamed final answer + usage
     A-->>UI: final answer + MCP diagnostics in StateDto/SSE
 ```
@@ -380,6 +407,7 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-assistant-invariants.json` | `JsonAssistantInvariantStore` | v1: версия коллекции и отдельные обязательные правила с ID, категориями и timestamps |
 | `.llm-task-state.json` | `JsonTaskStateStore` | v2: задача FSM, transition timestamps и результат валидации; v1 мигрирует по сохранённой фазе |
 | `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
+| `.llm-mcp-output/` | MCP `save_to_file` | Только явно сохранённые UTF-8 результаты; путь никогда не возвращается в diagnostics |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации
@@ -485,7 +513,9 @@ API-ключ сохраняется только в локальном `.env`; A
 - `SchedulerServiceTest` проверяет once/interval, idempotency, строгую валидацию,
   cancel, due/parallel execution, success/error reschedule, restart/overdue,
   отсутствие catch-up storm, versioned atomic JSON, history cap и Tracker aggregation;
-- `McpGatewayTest` проверяет настоящий `tools/list`/`tools/call` для всех scheduler tools;
+- `McpGatewayTest` проверяет настоящий `tools/list`/`tools/call`, схемы и строгую
+  валидацию pipeline, передачу provenance, точный файл, traversal/absolute/symlink
+  защиту и обратную совместимость Tracker/scheduler/ping/echo;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 
@@ -497,7 +527,13 @@ API-ключ сохраняется только в локальном `.env`; A
 - `npm --prefix frontend run build` — typecheck + production Vite bundle;
 - `npm --prefix frontend run test:e2e` — Playwright против настоящего Ktor `runWebFixture`.
 
-Browser tests проверяют режимы, memory layers, streaming, refresh, две вкладки, offline/reconnect, идемпотентный retry, отмену, Markdown и узкий экран. Fixture использует временные persistence paths и фиктивные ключи; внешние платные API не вызываются.
+Browser tests проверяют режимы, memory layers, streaming, refresh, две вкладки,
+offline/reconnect, идемпотентный retry, отмену, Markdown, узкий экран и точный
+порядок `search` → `summarize` → `save_to_file` в существующей MCP-диагностике.
+Fixture использует временные persistence/output paths и фиктивные ключи; внешние
+платные API не вызываются. Для pipeline используется точный prompt «Найди локальные
+сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в
+pipeline-summary.md».
 
 ### Минимальная матрица для изменений
 

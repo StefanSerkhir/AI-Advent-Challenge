@@ -41,6 +41,7 @@ interface McpGateway {
 /** Reusable stdio gateway, activated eagerly by web runtime. Failed protocol operations tear down the child process. */
 class LocalMcpGateway(
     private val schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
+    private val outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
 ) : McpGateway {
     private val mutex = Mutex()
     private var process: Process? = null
@@ -59,6 +60,7 @@ class LocalMcpGateway(
                     description = tool.description.orEmpty(),
                     inputSchema = buildJsonObject {
                         put("type", "object")
+                        tool.inputSchema.schema?.let { put("${'$'}schema", it) }
                         put("properties", tool.inputSchema.properties ?: buildJsonObject {})
                         if (!tool.inputSchema.required.isNullOrEmpty()) {
                             put("required", buildJsonArray { tool.inputSchema.required.orEmpty().forEach(::add) })
@@ -108,7 +110,7 @@ class LocalMcpGateway(
     private suspend fun connectLocked() {
         if (client != null && process?.isAlive == true) return
         closeLocked()
-        val started = startServerProcess(schedulerStateFile)
+        val started = startServerProcess(schedulerStateFile, outputDirectory)
         val connectedClient = Client(
             clientInfo = Implementation(
                 name = "llm-workbench-mcp-client",
@@ -141,7 +143,10 @@ class LocalMcpGateway(
 
 private val MCP_TIMEOUT = 10.seconds
 
-internal fun startServerProcess(schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME)): Process {
+internal fun startServerProcess(
+    schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
+    outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
+): Process {
     val executable = Path.of(
         System.getProperty("java.home"),
         "bin",
@@ -154,6 +159,7 @@ internal fun startServerProcess(schedulerStateFile: Path = Path.of(DEFAULT_SCHED
         "org.example.mcp.McpDemoServerKt",
     ).also { builder ->
         builder.environment()["LLM_SCHEDULER_STATE_FILE"] = schedulerStateFile.toAbsolutePath().toString()
+        builder.environment()["LLM_MCP_OUTPUT_DIR"] = outputDirectory.toAbsolutePath().toString()
     }.start()
 }
 

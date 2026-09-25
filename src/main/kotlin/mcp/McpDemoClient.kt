@@ -24,7 +24,8 @@ public fun main() {
 private suspend fun runMcpDemoClient(): Int {
     var stage = "starting the local MCP server"
     val directory = Files.createTempDirectory("llm-workbench-mcp-demo")
-    val gateway = LocalMcpGateway(directory.resolve(".llm-scheduler-state.json"))
+    val outputDirectory = directory.resolve("output")
+    val gateway = LocalMcpGateway(directory.resolve(".llm-scheduler-state.json"), outputDirectory)
 
     return try {
         stage = "establishing the MCP connection"
@@ -35,8 +36,8 @@ private suspend fun runMcpDemoClient(): Int {
         check(tools.isNotEmpty()) { "The MCP server returned an empty tool list" }
 
         val returnedNames = tools.mapTo(mutableSetOf()) { it.name }
-        check(returnedNames.containsAll(MCP_DEMO_TOOL_NAMES)) {
-            "The MCP server did not return expected tools: ${MCP_DEMO_TOOL_NAMES - returnedNames}"
+        check(returnedNames == MCP_DEMO_TOOL_NAMES) {
+            "Unexpected MCP tool catalog. Missing: ${MCP_DEMO_TOOL_NAMES - returnedNames}; extra: ${returnedNames - MCP_DEMO_TOOL_NAMES}"
         }
 
         println("tools/list returned ${tools.size} tool(s):")
@@ -48,6 +49,52 @@ private suspend fun runMcpDemoClient(): Int {
                 println("    $line")
             }
         }
+        stage = "running search"
+        val search = gateway.callTool(SEARCH_TOOL, buildJsonObject {
+            put("query", "композиция MCP-инструментов")
+        })
+        check(!search.isError) { "search returned an error: ${search.content}" }
+        val searchJson = Json.parseToJsonElement(search.content).jsonObject
+        val matches = searchJson["matches"]?.jsonArray ?: error("search did not return matches")
+        check(matches.isNotEmpty()) { "search returned no matches for the deterministic demo query" }
+        println("tools/call search returned ${matches.size} match(es)")
+
+        stage = "summarizing search matches"
+        val summarized = gateway.callTool(SUMMARIZE_TOOL, buildJsonObject {
+            put("matches", matches)
+            put("maxSentences", 3)
+        })
+        check(!summarized.isError) { "summarize returned an error: ${summarized.content}" }
+        val summaryJson = Json.parseToJsonElement(summarized.content).jsonObject
+        val summaryText = summaryJson["summary"]?.jsonPrimitive?.content
+            ?: error("summarize did not return summary")
+        val sourceIds = summaryJson["sourceIds"]?.jsonArray ?: error("summarize did not return sourceIds")
+        check(sourceIds.isNotEmpty()) { "summarize lost source provenance" }
+        println("tools/call summarize returned sourceIds: ${sourceIds.joinToString()}")
+
+        stage = "saving the pipeline summary"
+        val saved = gateway.callTool(SAVE_TO_FILE_TOOL, buildJsonObject {
+            put("fileName", "pipeline-summary.md")
+            put("content", summaryText)
+            put("sourceIds", sourceIds)
+        })
+        check(!saved.isError) { "save_to_file returned an error: ${saved.content}" }
+        val savedJson = Json.parseToJsonElement(saved.content).jsonObject
+        check(savedJson["fileName"]?.jsonPrimitive?.content == "pipeline-summary.md") {
+            "save_to_file returned an unexpected file name"
+        }
+        check(savedJson.keys == setOf("fileName", "bytesWritten", "sourceIds") && savedJson["sourceIds"] == sourceIds) {
+            "save_to_file returned unexpected metadata or lost provenance"
+        }
+        check(directory.toAbsolutePath().toString() !in saved.content) {
+            "save_to_file exposed an absolute path"
+        }
+        val savedPath = outputDirectory.resolve("pipeline-summary.md")
+        check(Files.exists(savedPath) && Files.readAllBytes(savedPath).contentEquals(summaryText.toByteArray(Charsets.UTF_8))) {
+            "save_to_file did not persist the exact summary"
+        }
+        println("tools/call save_to_file created pipeline-summary.md with exact summary content")
+
         stage = "calling tracker_get_issue"
         val issue = gateway.callTool(TRACKER_GET_ISSUE_TOOL, buildJsonObject {
             put("issueId", "DEMO-101")
@@ -81,7 +128,7 @@ private suspend fun runMcpDemoClient(): Int {
         }
         println("tools/call scheduler_get_summary returned: ${summary.content}")
         gateway.callTool(SCHEDULER_CANCEL_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
-        println("MCP tool discovery, Tracker call and scheduler lifecycle verified successfully.")
+        println("MCP tool discovery, search → summarize → save_to_file pipeline, Tracker call and scheduler lifecycle verified successfully.")
         0
     } catch (error: Exception) {
         System.err.println("MCP demo failed while $stage: ${error.message ?: error::class.simpleName}")

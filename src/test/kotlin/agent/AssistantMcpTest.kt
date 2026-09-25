@@ -13,7 +13,7 @@ class AssistantMcpTest {
     fun `scheduler tool payload stays transient and memory stores only user plus final answer`() = runBlocking {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         val directory = Files.createTempDirectory("assistant-scheduler-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         var step = 0
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult =
@@ -53,7 +53,7 @@ class AssistantMcpTest {
     fun `MCP final answer still passes invariant structured postflight`() = runBlocking {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         val directory = Files.createTempDirectory("assistant-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         val invariant = AssistantInvariant("inv-stack", AssistantInvariantCategory.STACK, "Отвечай по-русски", 1)
         var step = 0
         val client = object : LlmClient {
@@ -98,7 +98,7 @@ class AssistantMcpTest {
         val memory = AssistantMemoryManager(InMemoryAssistantMemoryStore())
         memory.add(MemoryLayer.LONG_TERM, "Отвечай по-русски")
         val directory = Files.createTempDirectory("assistant-mcp-test")
-        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"))
+        val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))
         val calls = mutableListOf<List<LlmMessage>>()
         var step = 0
         val client = object : LlmClient {
