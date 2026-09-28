@@ -14,6 +14,7 @@ class CorpusTooSmallException(stats: CorpusStats, minimumPages: Double) : Illega
 
 class RepositoryCorpusCollector(
     private val minimumPages: Double = DEFAULT_MINIMUM_CORPUS_PAGES,
+    private val pdfTextExtractor: PdfTextExtractor = PdfTextExtractor(),
 ) {
     init {
         require(minimumPages >= 0.0 && minimumPages.isFinite()) { "Минимальный объём corpus должен быть конечным неотрицательным числом" }
@@ -57,6 +58,23 @@ class RepositoryCorpusCollector(
     private fun readDocument(root: Path, source: String): NormalizedDocument {
         val file = root.resolve(source).normalize()
         require(file.startsWith(root)) { "Файл корпуса вышел за пределы root" }
+        val kind = kindFor(file)
+        val text = if (kind == DocumentKind.PDF) {
+            normalizeText(pdfTextExtractor.extract(file, source))
+        } else {
+            readUtf8Text(file, source)
+        }
+        require(text.isNotBlank()) { "Пустой документ не может входить в корпус: $source" }
+        return NormalizedDocument(
+            source = source,
+            title = file.name,
+            kind = kind,
+            text = text,
+            contentHash = sha256(text),
+        )
+    }
+
+    private fun readUtf8Text(file: Path, source: String): String {
         val bytes = Files.readAllBytes(file)
         require(bytes.none { it == 0.toByte() }) { "Бинарный файл не может входить в корпус: $source" }
         val raw = try {
@@ -68,20 +86,12 @@ class RepositoryCorpusCollector(
         } catch (error: CharacterCodingException) {
             throw IllegalArgumentException("Файл корпуса не является корректным UTF-8: $source", error)
         }
-        val text = normalizeText(raw)
-        require(text.isNotBlank()) { "Пустой документ не может входить в корпус: $source" }
-        return NormalizedDocument(
-            source = source,
-            title = file.name,
-            kind = kindFor(file),
-            text = text,
-            contentHash = sha256(text),
-        )
+        return normalizeText(raw)
     }
 
     private fun isIncludedSource(source: String): Boolean = when {
         source == "README.md" -> true
-        source.startsWith("docs/") && source.endsWith(".md", ignoreCase = true) -> true
+        source.startsWith("docs/") && (source.endsWith(".md", ignoreCase = true) || source.endsWith(".pdf", ignoreCase = true)) -> true
         source.startsWith("src/main/kotlin/") && source.endsWith(".kt", ignoreCase = true) -> true
         source.startsWith("frontend/src/") && (source.endsWith(".ts", true) || source.endsWith(".tsx", true)) -> true
         else -> false
@@ -100,6 +110,7 @@ class RepositoryCorpusCollector(
 
     private fun kindFor(file: Path): DocumentKind = when (file.extension.lowercase()) {
         "md" -> DocumentKind.MARKDOWN
+        "pdf" -> DocumentKind.PDF
         "kt" -> DocumentKind.KOTLIN
         "tsx" -> DocumentKind.TSX
         "ts" -> DocumentKind.TYPESCRIPT

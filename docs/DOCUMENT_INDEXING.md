@@ -12,12 +12,12 @@ Fixture расположен только в test source set. Он исполь�
 
 Контрольный fixture-прогон текущего репозитория:
 
-- документов: `65`;
-- символов: `683757`;
-- слов: `61888`;
-- приблизительных страниц: `379.87`;
-- fixed chunks: `727`;
-- structured chunks: `1329`.
+- документов: `66`;
+- символов: `690003`;
+- слов: `62452`;
+- приблизительных страниц: `383.34`;
+- fixed chunks: `734`;
+- structured chunks: `1340`.
 
 Страница оценивается по явной стабильной формуле `characterCount / 1800`. Минимально допустимый corpus равен 20 таким страницам; меньший объём завершает запуск ошибкой до embeddings и создания output-каталога.
 
@@ -48,13 +48,26 @@ CLI вызывает `POST /v1/embeddings` через общий Ktor `HttpClien
 `RepositoryCorpusCollector` детерминированно сортирует относительные пути и включает:
 
 - `README.md`;
-- `docs/**/*.md`;
+- `docs/**/*.md` и `docs/**/*.pdf`;
 - `src/main/kotlin/**/*.kt`;
 - `frontend/src/**/*.ts` и `frontend/src/**/*.tsx`.
 
-Исключаются `.git`, build/output/test-report каталоги, `node_modules`, `legacy-desktop`, `.env`, `.llm-*`, бинарные данные и файлы вне allowlist. UTF-8 декодируется строго, BOM удаляется, CRLF/CR переводятся в LF, trailing whitespace строк удаляется, Unicode нормализуется в NFC. Content hash считается от нормализованного текста. В index и report сохраняются только относительные пути.
+Исключаются `.git`, build/output/test-report каталоги, `node_modules`, `legacy-desktop`, `.env`, `.llm-*`, symlinks, бинарные данные вне PDF и файлы вне allowlist. UTF-8 декодируется строго, BOM удаляется, CRLF/CR переводятся в LF, trailing whitespace строк удаляется, Unicode нормализуется в NFC. Content hash считается от нормализованного текста. В index и report сохраняются только относительные пути.
 
-В текущем allowlist и репозитории PDF отсутствуют, поэтому PDF-библиотека и искусственный PDF не добавлялись. PDF не индексируется автоматически: при появлении реального PDF corpus следует сначала добавить безопасный JVM extractor, лимиты размера и отдельные тесты, а затем явно расширить allowlist.
+### PDF
+
+Текстовые PDF внутри `docs/` извлекаются Apache PDFBox 3.0.8. Чтобы добавить документ, поместите его, например, в `docs/knowledge/manual.pdf`, сначала выполните `./gradlew runDocumentIndexFixture`, затем обычную production-команду. В manifest появится относительный source `docs/knowledge/manual.pdf` с kind `pdf`.
+
+Extractor использует temporary-file cache PDFBox и применяет ограничения до сохранения индекса:
+
+- размер файла — не более 50 MiB;
+- число страниц — не более 1000;
+- извлечённый текст — не более 10 000 000 символов;
+- symlink и зашифрованный/password-protected PDF отклоняются;
+- повреждённый PDF завершает pipeline понятной ошибкой;
+- PDF без извлекаемого text layer не индексируется и требует предварительного OCR.
+
+Каждая непустая текстовая страница получает стабильный заголовок `# PDF page N`. Благодаря этому structure-aware chunks сохраняют `PDF page N` в поле `section`; fixed chunking использует тот же нормализованный текст. Изображения, графика, координаты layout, вложения и JavaScript не извлекаются и не исполняются. Текущий репозиторий не содержит постоянного PDF: safe fixture не добавляет искусственный PDF, а тесты создают их только во временном каталоге и удаляют после проверки.
 
 ## Chunking
 
@@ -62,7 +75,7 @@ CLI вызывает `POST /v1/embeddings` через общий Ktor `HttpClien
 
 `FixedSizeChunkingStrategy` использует целевой размер 1200 и overlap 200. Граница сдвигается назад сначала к переводу строки, затем к whitespace; fallback остаётся Unicode-safe и не разрывает surrogate pair. Пустые chunks отбрасываются.
 
-`StructureAwareChunkingStrategy` сохраняет Markdown heading path в `section`, а Kotlin/TypeScript/TSX делит по крупным top-level declarations. Обычный текст делится по абзацам. Блок длиннее 1600 символов дополнительно режется ограниченными частями с небольшим overlap. Preamble остаётся отдельной секцией своего файла.
+`StructureAwareChunkingStrategy` сохраняет Markdown heading path и номер PDF-страницы в `section`, а Kotlin/TypeScript/TSX делит по крупным top-level declarations. Обычный текст делится по абзацам. Блок длиннее 1600 символов дополнительно режется ограниченными частями с небольшим overlap. Preamble остаётся отдельной секцией своего файла.
 
 Стабильный `chunkId` имеет префикс стратегии и SHA-256 от стратегии, относительного source, section, ordinal, offsets, content hash документа и hash текста chunk. Неизменившийся документ при одинаковых параметрах получает те же ID; смена границ chunk не переиспользует прежний ID.
 

@@ -42,7 +42,7 @@ class StructureAwareChunkingStrategy(
 
     override fun chunk(documents: List<NormalizedDocument>): List<ChunkDraft> = documents.flatMap { document ->
         val blocks = when (document.kind) {
-            DocumentKind.MARKDOWN -> markdownBlocks(document.text)
+            DocumentKind.MARKDOWN, DocumentKind.PDF -> markdownBlocks(document.text)
             DocumentKind.KOTLIN, DocumentKind.TYPESCRIPT, DocumentKind.TSX -> codeBlocks(document.text, document.kind)
             DocumentKind.TEXT -> paragraphBlocks(document.text)
         }

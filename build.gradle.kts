@@ -11,6 +11,7 @@ repositories { mavenCentral() }
 dependencies {
     val ktorVersion = "3.5.1"
     val mcpVersion = "0.15.0"
+    val pdfBoxVersion = "3.0.8"
     implementation("io.ktor:ktor-client-cio:$ktorVersion")
     implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
     implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
@@ -19,6 +20,7 @@ dependencies {
     implementation("io.ktor:ktor-server-status-pages:$ktorVersion")
     implementation("io.ktor:ktor-server-sse:$ktorVersion")
     implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+    implementation("org.apache.pdfbox:pdfbox:$pdfBoxVersion")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.18")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion")

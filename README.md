@@ -308,7 +308,7 @@ finish reason, точная стоимость, версия цены и све�
 ## Локальная индексация документов
 
 Отдельная подсистема `org.example.indexing` собирает стабильный corpus из README,
-Markdown-документации, production Kotlin и frontend TypeScript/TSX. Один
+Markdown/PDF-документации в `docs/`, production Kotlin и frontend TypeScript/TSX. Один
 нормализованный manifest проходит через fixed-size chunking (`1200`, overlap
 `200`) и structure-aware chunking по Markdown headings и крупным декларациям
 кода. Каждый chunk сохраняет текст, embedding, стабильный ID, относительный
@@ -321,9 +321,9 @@ source, title, section, ordinal, offsets и content hash документа.
 ./gradlew runDocumentIndexFixture
 ```
 
-Контрольный прогон текущего corpus содержит `65` документов, `683757` символов и
-`61888` слов — около `379.87` страницы по формуле `characterCount / 1800`. Он
-создаёт `727` fixed и `1329` structured chunks. Fake-метрики проверяют
+Контрольный прогон текущего corpus содержит `66` документов, `690003` символов и
+`62452` слов — около `383.34` страницы по формуле `characterCount / 1800`. Он
+создаёт `734` fixed и `1340` structured chunks. Fake-метрики проверяют
 воспроизводимость ranking/evaluation, но не являются оценкой качества OpenAI.
 
 Реальная команда читает уже существующий `openai_api_key` из `.env`, вызывает
@@ -334,9 +334,11 @@ OpenAI embeddings и может быть платной; автоматичес�
 ```
 
 Результат появляется в исключённом из Git каталоге `.llm-document-index/`:
-`fixed.json`, `structured.json`, `comparison.json` и `comparison.md`. Текущий
-corpus не содержит PDF, поэтому PDF-зависимость и искусственный документ не
-добавлялись. Формат v1, состав corpus, CLI, retry/redaction и evaluation подробно
+`fixed.json`, `structured.json`, `comparison.json` и `comparison.md`. Текстовый
+PDF достаточно поместить в `docs/**/*.pdf`; Apache PDFBox извлечёт страницы,
+а structure-aware index сохранит `PDF page N` в section. Зашифрованные, слишком
+большие, повреждённые и сканированные без OCR PDF отклоняются до embeddings.
+Формат v1, состав corpus, PDF-лимиты, CLI, retry/redaction и evaluation подробно
 описаны в [документации индексации](docs/DOCUMENT_INDEXING.md).
 
 ## API-ключи и `.env`

@@ -18,6 +18,10 @@ class DocumentIndexPipelineTest {
                 it.parent.createDirectories()
                 it.writeText("# Architecture\n\n## Memory layers\nSHORT_TERM WORKING LONG_TERM. ".repeat(20))
             }
+            writeTestPdf(
+                root.resolve("docs/manual.pdf"),
+                listOf("PDF indexing guide", "Second page about memory layers"),
+            )
             root.resolve("src/main/kotlin/network/HttpClientFactory.kt").also {
                 it.parent.createDirectories()
                 it.writeText("package network\n\nfun createHttpClient() = Unit\n".repeat(20))
@@ -45,6 +49,9 @@ class DocumentIndexPipelineTest {
             assertEquals(result.corpus.manifestHash, fixed.corpus.manifestHash)
             assertTrue(fixed.chunks.all { it.embedding.size == 32 && it.metadata.chunkId == it.chunkId })
             assertTrue(structured.chunks.all { it.embedding.size == 32 && it.metadata.source == it.source })
+            assertEquals(DocumentKind.PDF, fixed.corpus.documents.single { it.source == "docs/manual.pdf" }.kind)
+            assertTrue(fixed.chunks.any { it.source == "docs/manual.pdf" })
+            assertTrue(structured.chunks.any { it.source == "docs/manual.pdf" && it.section == "PDF page 2" })
             assertEquals(setOf(ChunkingKind.FIXED, ChunkingKind.STRUCTURED), comparison.strategies.map { it.strategy }.toSet())
             assertFalse(comparison.evaluationUsesProductionEmbeddings)
             assertTrue(comparison.strategies.all { it.embeddingBatchCalls == (it.chunkCount + 2) / 3 })

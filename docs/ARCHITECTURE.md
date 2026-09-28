@@ -104,10 +104,12 @@ file и применяет atomic replace с fallback. Результат сод
 
 `DocumentIndexPipeline` не входит в `WorkbenchController` и не меняет HTTP/UI.
 `RepositoryCorpusCollector` детерминированно собирает один нормализованный corpus
-из allowlist README/docs/production Kotlin/frontend TypeScript, исключает runtime,
-generated и secret files, проверяет минимум 20 условных страниц и создаёт manifest
-с относительными путями и content hashes. В текущем corpus PDF нет; PDF extractor
-и новая production-зависимость не добавлялись.
+из allowlist README, Markdown/PDF в `docs`, production Kotlin и frontend
+TypeScript, исключает runtime, generated, symlink и secret files, проверяет
+минимум 20 условных страниц и создаёт manifest с относительными путями и content
+hashes. `PdfTextExtractor` использует Apache PDFBox 3.0.8 и disk-backed cache,
+ограничивает file size/pages/extracted characters, отвергает encrypted/corrupt/
+textless PDF и помечает страницы стабильными headings для section metadata.
 
 ```mermaid
 flowchart LR
@@ -573,7 +575,8 @@ API-ключ сохраняется только в локальном `.env`; A
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 - тесты `indexing` проверяют deterministic corpus/exclusions/threshold, Unicode и
   обе стратегии chunking, batching/order/retry/redaction OpenAI embeddings,
-  versioned atomic stores, cosine metrics и общий manifest двух indexes.
+  versioned atomic stores, cosine metrics, общий manifest двух indexes и PDF
+  extraction/page sections/password/corruption/resource limits.
 
 Основная команда: `./gradlew test`.
 

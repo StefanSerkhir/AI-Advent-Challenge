@@ -13,6 +13,7 @@ class CorpusCollectorTest {
             root.resolve("README.md").writeText("\uFEFF# Readme\r\ntext   \r\n")
             root.resolve("docs/z.md").also { it.parent.createDirectories(); it.writeText("# Z") }
             root.resolve("docs/a.md").writeText("# A")
+            writeTestPdf(root.resolve("docs/manual.pdf"), listOf("PDF corpus content"))
             root.resolve("src/main/kotlin/B.kt").also { it.parent.createDirectories(); it.writeText("class B") }
             root.resolve("frontend/src/a.tsx").also { it.parent.createDirectories(); it.writeText("export const A = 1") }
             root.resolve(".env").writeText("openai_api_key=must-not-appear")
@@ -26,9 +27,11 @@ class CorpusCollectorTest {
             val sources = corpus.documents.map(NormalizedDocument::source)
 
             assertEquals(sources.sorted(), sources)
-            assertEquals(listOf("README.md", "docs/a.md", "docs/z.md", "frontend/src/a.tsx", "src/main/kotlin/B.kt"), sources)
+            assertEquals(listOf("README.md", "docs/a.md", "docs/manual.pdf", "docs/z.md", "frontend/src/a.tsx", "src/main/kotlin/B.kt"), sources)
             assertFalse(corpus.documents.any { "must-not-appear" in it.text })
             assertEquals("# Readme\ntext", corpus.documents.first().text)
+            assertEquals(DocumentKind.PDF, corpus.documents.single { it.source == "docs/manual.pdf" }.kind)
+            assertContains(corpus.documents.single { it.source == "docs/manual.pdf" }.text, "PDF corpus content")
             assertEquals(sha256(corpus.manifest.documents.joinToString("\n") { "${it.source}:${it.contentHash}" }), corpus.manifest.manifestHash)
         } finally {
             root.toFile().deleteRecursively()

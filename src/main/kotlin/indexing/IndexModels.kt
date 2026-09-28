@@ -16,6 +16,7 @@ const val APPROXIMATE_CHARACTERS_PER_PAGE = 1_800
 @Serializable
 enum class DocumentKind {
     @SerialName("markdown") MARKDOWN,
+    @SerialName("pdf") PDF,
     @SerialName("kotlin") KOTLIN,
     @SerialName("typescript") TYPESCRIPT,
     @SerialName("tsx") TSX,
