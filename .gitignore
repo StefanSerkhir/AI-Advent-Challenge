@@ -9,6 +9,7 @@ build/
 .llm-task-state.json
 .llm-scheduler-state.json
 .llm-mcp-output/
+.llm-document-index/
 .llm-context-*.json
 /video/
 !gradle/wrapper/gradle-wrapper.jar

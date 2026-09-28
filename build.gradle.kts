@@ -66,10 +66,23 @@ tasks.register<JavaExec>("runMcpDemo") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.mcp.McpDemoClientKt"
 }
+tasks.register<JavaExec>("buildDocumentIndexes") {
+    group = "application"
+    description = "Build local fixed and structure-aware document indexes with OpenAI embeddings"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.indexing.IndexingCliKt"
+}
 // Test-only entry point: deterministic clients are never packaged in the application.
 tasks.register<JavaExec>("runWebFixture") {
     group = "verification"
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.web.WebFixtureKt"
+}
+tasks.register<JavaExec>("runDocumentIndexFixture") {
+    group = "verification"
+    description = "Build and reload both document indexes with deterministic fake embeddings and no network"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "org.example.indexing.IndexingFixtureKt"
 }

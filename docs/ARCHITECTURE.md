@@ -39,6 +39,7 @@ flowchart LR
 | `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
+| `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -98,6 +99,43 @@ root. Mock Tracker и pipeline tools не читают `.env`, не исполь
 `..`/разделители/управляющие символы и существующую symlink-цель, пишет temporary
 file и применяет atomic replace с fallback. Результат содержит только относительное
 имя, UTF-8 byte count и `sourceIds`, но не абсолютный путь.
+
+### Индексация документов
+
+`DocumentIndexPipeline` не входит в `WorkbenchController` и не меняет HTTP/UI.
+`RepositoryCorpusCollector` детерминированно собирает один нормализованный corpus
+из allowlist README/docs/production Kotlin/frontend TypeScript, исключает runtime,
+generated и secret files, проверяет минимум 20 условных страниц и создаёт manifest
+с относительными путями и content hashes. В текущем corpus PDF нет; PDF extractor
+и новая production-зависимость не добавлялись.
+
+```mermaid
+flowchart LR
+    Files[Repository allowlist] --> Collector[Normalize + corpus manifest]
+    Collector --> Fixed[FixedSizeChunkingStrategy]
+    Collector --> Structured[StructureAwareChunkingStrategy]
+    Fixed --> Embed[EmbeddingClient batches]
+    Structured --> Embed
+    Embed --> FixedIndex[fixed.json v1]
+    Embed --> StructuredIndex[structured.json v1]
+    FixedIndex --> Eval[Cosine evaluation]
+    StructuredIndex --> Eval
+    Eval --> Report[comparison.json + comparison.md]
+```
+
+Production `OpenAiEmbeddingClient` использует существующий Ktor transport и
+`openai_api_key`, endpoint `/v1/embeddings`, ограниченный retry только временных
+ошибок, response-index ordering и строгую проверку vectors. `buildDocumentIndexes`
+является отдельным явно запускаемым и потенциально платным CLI. Test-only
+`runDocumentIndexFixture` подставляет deterministic fake, пишет во временный
+каталог, выполняет round-trip обоих indexes и не читает ключ/сеть.
+
+`JsonDocumentIndexStore` сначала валидирует полный объект, затем пишет UTF-8 во
+временный файл и делает atomic replace с fallback. Chunk хранит текст/vector и
+обязательные metadata; source всегда относительный. JSON/Markdown comparison
+содержит статистику размера, batches/files/local stages и Hit@3/MRR. Fake report
+явно помечен как техническая проверка, не как качество OpenAI. Полный контракт и
+команды находятся в [DOCUMENT_INDEXING.md](DOCUMENT_INDEXING.md).
 
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
@@ -421,6 +459,7 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-task-state.json` | `JsonTaskStateStore` | v2: задача FSM, transition timestamps и результат валидации; v1 мигрирует по сохранённой фазе |
 | `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
 | `.llm-mcp-output/` | MCP `save_to_file` | Только явно сохранённые UTF-8 результаты; путь никогда не возвращается в diagnostics |
+| `.llm-document-index/` | `DocumentIndexPipeline` | `fixed.json`, `structured.json` формата v1 и JSON/Markdown comparison; тексты, vectors и относительные metadata |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации
@@ -532,6 +571,9 @@ API-ключ сохраняется только в локальном `.env`; A
   traversal/absolute/symlink защиту и обратную совместимость Tracker/scheduler/ping/echo;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
+- тесты `indexing` проверяют deterministic corpus/exclusions/threshold, Unicode и
+  обе стратегии chunking, batching/order/retry/redaction OpenAI embeddings,
+  versioned atomic stores, cosine metrics и общий manifest двух indexes.
 
 Основная команда: `./gradlew test`.
 

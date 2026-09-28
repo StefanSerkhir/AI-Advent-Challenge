@@ -305,6 +305,40 @@ finish reason, точная стоимость, версия цены и све�
 `./gradlew runWebFixture`; обычный «Простой агент» запускается `./gradlew runWeb`,
 после чего выберите модель, задайте max output и политику переполнения.
 
+## Локальная индексация документов
+
+Отдельная подсистема `org.example.indexing` собирает стабильный corpus из README,
+Markdown-документации, production Kotlin и frontend TypeScript/TSX. Один
+нормализованный manifest проходит через fixed-size chunking (`1200`, overlap
+`200`) и structure-aware chunking по Markdown headings и крупным декларациям
+кода. Каждый chunk сохраняет текст, embedding, стабильный ID, относительный
+source, title, section, ordinal, offsets и content hash документа.
+
+Безопасный end-to-end fixture использует только deterministic fake embeddings,
+строит оба индекса во временном каталоге, загружает их обратно и проверяет отчёт:
+
+```bash
+./gradlew runDocumentIndexFixture
+```
+
+Контрольный прогон текущего corpus содержит `65` документов, `683757` символов и
+`61888` слов — около `379.87` страницы по формуле `characterCount / 1800`. Он
+создаёт `727` fixed и `1329` structured chunks. Fake-метрики проверяют
+воспроизводимость ranking/evaluation, но не являются оценкой качества OpenAI.
+
+Реальная команда читает уже существующий `openai_api_key` из `.env`, вызывает
+OpenAI embeddings и может быть платной; автоматические проверки её не запускают:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy both --fixed-chunk-size 1200 --overlap 200 --embedding-model text-embedding-3-small --batch-size 64"
+```
+
+Результат появляется в исключённом из Git каталоге `.llm-document-index/`:
+`fixed.json`, `structured.json`, `comparison.json` и `comparison.md`. Текущий
+corpus не содержит PDF, поэтому PDF-зависимость и искусственный документ не
+добавлялись. Формат v1, состав corpus, CLI, retry/redaction и evaluation подробно
+описаны в [документации индексации](docs/DOCUMENT_INDEXING.md).
+
 ## API-ключи и `.env`
 
 Ключ удобнее всего ввести в скрытое поле **API Key** в приложении и нажать
@@ -334,7 +368,7 @@ deepseek_api_key=ВАШ_DEEPSEEK_API_KEY
 `.env`, `.env.local`, `.env.*.local`, `.llm-history.json`,
 `.llm-assistant-memory.json`, `.llm-assistant-invariants.json`,
 `.llm-task-state.json`, `.llm-scheduler-state.json` и production output-каталог
-`.llm-mcp-output/` исключены через
+`.llm-mcp-output/` и `.llm-document-index/` исключены через
 `.gitignore`. Не заменяйте пример в `.env.example` реальным ключом и не добавляйте
 локальные файлы приложения в Git.
 
@@ -591,6 +625,8 @@ pause/reload/resume машины состояния задачи, демо,
 - `frontend/src/api/`, `state/` — типы, REST-клиент и синхронизация состояния;
 - `legacy-desktop/` — изолированный Compose UI и его Markdown-тесты;
 - `src/main/kotlin/cli/` — прежний CLI-адаптер и сохранённые тесты.
+- `src/main/kotlin/indexing/` — corpus, chunking, embeddings, versioned indexes,
+  evaluation и отдельный CLI.
 
 При необходимости Compose можно запустить отдельно:
 `./gradlew :legacy-desktop:run`. Сборка нативных пакетов осталась в этом модуле,
