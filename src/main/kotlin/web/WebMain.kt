@@ -8,9 +8,12 @@ import org.example.app.AppBootstrap
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfig
 import org.example.config.LocalConfigStore
+import org.example.indexing.*
+import org.example.llm.LlmKind
 import org.example.llm.createLlmClient
 import org.example.mcp.LocalMcpGateway
 import org.example.network.createHttpClient
+import java.nio.file.Path
 
 fun main() {
     val port = configuredPort("WEB_PORT", 8080)
@@ -27,6 +30,21 @@ fun main() {
         assistantInvariantStore = JsonAssistantInvariantStore(),
         taskStateStore = JsonTaskStateStore(),
         mcpGateway = LocalMcpGateway(),
+        documentRetrieverProvider = { keys ->
+            DocumentRetriever(JsonDocumentIndexStore(Path.of(".llm-document-index", "structured.json"))) { descriptor ->
+                if (descriptor.provider != "openai") {
+                    throw DocumentRetrievalException(
+                        "Embedding provider '${descriptor.provider}' пока не поддерживается web runtime. " +
+                            "Перестройте индекс командой: $DOCUMENT_INDEX_BUILD_COMMAND",
+                    )
+                }
+                val embeddingKey = keys[LlmKind.OPENAI]
+                    ?: throw DocumentRetrievalException(
+                        "Для query embedding нужен локально настроенный ключ OpenAI, совместимый с индексом.",
+                    )
+                OpenAiEmbeddingClient(embeddingKey, client, descriptor.model)
+            }
+        },
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort)) }

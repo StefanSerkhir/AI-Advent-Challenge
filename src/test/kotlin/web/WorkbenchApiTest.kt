@@ -17,6 +17,10 @@ import org.example.app.DEFAULT_STOP_SEQUENCE
 import org.example.app.ResponseMode
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
+import org.example.indexing.DeterministicFakeEmbeddingClient
+import org.example.indexing.DocumentRetriever
+import org.example.indexing.JsonDocumentIndexStore
+import org.example.indexing.createRagFixtureIndex
 import org.example.llm.*
 import org.example.mcp.*
 import java.io.IOException
@@ -39,12 +43,87 @@ class WorkbenchApiTest {
         assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
         taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
         mcpGateway: McpGateway? = null,
+        documentRetrieverProvider: ((Map<LlmKind, String>) -> DocumentRetriever)? = null,
         answer: suspend (String, List<LlmMessage>, CompletionOptions) -> CompletionResult = { model, _, _ -> completion(model) },
     ) = WorkbenchController(AppSettings(LlmKind.OPENAI, responseMode = mode), keys,
         clientFactory = { _, _, model -> object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = answer(model, messages, options)
         } }, assistantMemoryStore = assistantMemoryStore, assistantInvariantStore = assistantInvariantStore,
-        taskStateStore = taskStateStore, mcpGateway = mcpGateway, persistSettings = persist)
+        taskStateStore = taskStateStore, mcpGateway = mcpGateway,
+        documentRetrieverProvider = documentRetrieverProvider, persistSettings = persist)
+
+    @Test
+    fun `RAG mode exposes diagnostics without vectors or chunk text and does not persist history or memory`() = runBlocking {
+        val directory = Files.createTempDirectory("rag-api")
+        val indexFile = createRagFixtureIndex(directory)
+        val calls = mutableListOf<List<LlmMessage>>()
+        val c = controller(
+            mode = ResponseMode.RAG_COMPARISON,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                }
+            },
+        ) { model, messages, _ ->
+            calls += messages
+            CompletionResult(
+                if (messages.first().role == LlmRole.SYSTEM) "Запуск: `./gradlew runWeb` [S1]." else "Baseline answer",
+                "stop",
+                TokenUsage(30, 10, 40),
+                model,
+            )
+        }
+        try {
+            val api = WorkbenchApi(c)
+            assertEquals("rag", c.state.value.settings.responseMode.cliValue)
+            api.start(command(prompt = "Как запустить production web-приложение?"))
+            c.awaitCurrentRequest()
+            val state = c.state.value.toDto()
+            val exchange = state.exchanges.single()
+            assertEquals("completed", exchange.status)
+            assertEquals(listOf("БЕЗ RAG", "С RAG"), exchange.outputs.map { it.title })
+            assertNull(exchange.outputs.first().ragDiagnostics)
+            val diagnostics = assertNotNull(exchange.outputs.last().ragDiagnostics)
+            assertTrue(diagnostics.applied)
+            assertEquals(5, diagnostics.retrievedCount)
+            assertEquals(listOf(1, 2, 3, 4, 5), diagnostics.sources.map { it.rank })
+            assertEquals(HistoryDto(0, 0), state.history)
+            assertTrue(state.assistantMemory.layers.all { it.entries.isEmpty() })
+            assertEquals(listOf(LlmRole.USER), calls.first().map { it.role })
+            assertEquals(listOf(LlmRole.SYSTEM, LlmRole.USER), calls.last().map { it.role })
+            val json = api.snapshot(state)
+            assertFalse(json.contains("embedding" + "\":["))
+            assertFalse(json.contains("Недоверенный пример из документа"))
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `RAG retrieval failure keeps successful baseline card`() = runBlocking {
+        val directory = Files.createTempDirectory("rag-api-missing")
+        val c = controller(
+            mode = ResponseMode.RAG_COMPARISON,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(directory.resolve("missing.json"))) {
+                    error("embedding should not run")
+                }
+            },
+        ) { model, _, _ -> CompletionResult("Baseline survives", "stop", TokenUsage(2, 2, 4), model) }
+        try {
+            WorkbenchApi(c).start(command(prompt = "question"))
+            c.awaitCurrentRequest()
+            val exchange = c.state.value.toDto().exchanges.single()
+            assertEquals("completed", exchange.status)
+            assertEquals("Baseline survives", exchange.outputs.first().content)
+            assertContains(exchange.outputs.last().error.orEmpty(), "buildDocumentIndexes")
+            assertFalse(exchange.outputs.last().ragDiagnostics!!.applied)
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
 
     private fun command(version: Long = 0, prompt: String = "Тест", demo: String? = null) = StartCommand(UUID.randomUUID().toString(), version, prompt, demo)
     private fun HttpRequestBuilder.localJson(body: String = "{}") {
@@ -753,7 +832,7 @@ class WorkbenchApiTest {
         application { workbenchModule(WorkbenchApi(c)) }
         try {
             val initial = client.get("$base/settings").state()
-            assertEquals(7, initial.modes.size)
+            assertEquals(8, initial.modes.size)
             assertEquals(2, initial.providers.size)
             assertFalse(initial.providers.any { it.hasKey })
             assertEquals(HttpStatusCode.BadRequest, client.post("$base/operations") { localJson(apiJson.encodeToString(command())) }.status)

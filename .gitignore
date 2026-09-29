@@ -10,6 +10,7 @@ build/
 .llm-scheduler-state.json
 .llm-mcp-output/
 .llm-document-index/
+.llm-rag-evaluation/
 .llm-context-*.json
 /video/
 !gradle/wrapper/gradle-wrapper.jar
@@ -24,6 +25,7 @@ build/
 .idea/jarRepositories.xml
 .idea/compiler.xml
 .idea/libraries/
+.idea/inspectionProfiles/
 *.iws
 *.iml
 *.ipr

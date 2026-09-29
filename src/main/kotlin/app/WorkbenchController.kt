@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.SerializationException
 import org.example.agent.*
+import org.example.indexing.DocumentRetriever
 import org.example.llm.*
 import org.example.mcp.McpGateway
 import org.example.mcp.SchedulerSnapshot
@@ -37,6 +38,7 @@ sealed interface RequestResult {
     data class Reasoning(val report: ReasoningReport) : RequestResult
     data class Temperature(val report: TemperatureReport) : RequestResult
     data class ModelComparison(val report: ModelComparisonReport) : RequestResult
+    data class RagComparison(val report: RagComparisonReport) : RequestResult
     data class TokensContext(val report: TokenContextDemoReport) : RequestResult
 }
 
@@ -95,6 +97,7 @@ class WorkbenchController(
     assistantInvariantStore: AssistantInvariantStore = InMemoryAssistantInvariantStore(),
     taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
     private val mcpGateway: McpGateway? = null,
+    private val documentRetrieverProvider: ((Map<LlmKind, String>) -> DocumentRetriever)? = null,
     private val clientFactory: (LlmKind, String, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -575,6 +578,7 @@ class WorkbenchController(
             ResponseMode.REASONING -> TOTAL_REASONING_API_CALLS
             ResponseMode.TEMPERATURE -> TOTAL_TEMPERATURE_API_CALLS
             ResponseMode.MODEL_COMPARISON -> TOTAL_MODEL_COMPARISON_API_CALLS
+            ResponseMode.RAG_COMPARISON -> TOTAL_RAG_STAGES
             ResponseMode.TOKENS_CONTEXT -> when (tokenDemoScenario ?: TokenDemoScenario.SHORT) {
                 TokenDemoScenario.SHORT -> 4
                 TokenDemoScenario.LONG -> 14
@@ -586,6 +590,14 @@ class WorkbenchController(
             prompt = normalizedPrompt,
             mode = settings.responseMode,
             outcome = ExchangeOutcome.Pending,
+            outputs = if (settings.responseMode == ResponseMode.RAG_COMPARISON) {
+                listOf(
+                    ExperimentOutputDelta(RagBranch.BASELINE.id, RagBranch.BASELINE.title, "").asOutput(),
+                    ExperimentOutputDelta(RagBranch.RAG.id, RagBranch.RAG.title, "").asOutput(),
+                )
+            } else {
+                emptyList()
+            },
         )
         publish {
             it.copy(
@@ -684,6 +696,36 @@ class WorkbenchController(
                         ).compare(normalizedPrompt, settings.maxTokens),
                     )
 
+                    ResponseMode.RAG_COMPARISON -> RequestResult.RagComparison(
+                        RagComparisonRunner(
+                            onDelta = { publishStreamingOutput(it.asOutput()) },
+                            onRun = { run ->
+                                addOutput(ExperimentOutput(
+                                    id = run.branch.id,
+                                    title = run.branch.title,
+                                    completion = run.completion,
+                                    error = run.error,
+                                    elapsedMillis = run.elapsedMillis,
+                                    estimatedCostUsd = run.tokenMetrics?.turnCostUsd?.toDouble(),
+                                    tokenMetrics = run.tokenMetrics,
+                                    ragDiagnostics = run.diagnostics,
+                                ))
+                            },
+                            onProgress = { reportProgress(it.current, it.total, it.label) },
+                            clientProvider = { requestClient.get() ?: error("Клиент запроса не инициализирован") },
+                            retrieverProvider = {
+                                documentRetrieverProvider?.invoke(apiKeys.toMap())
+                                    ?: error("RAG retrieval не настроен. Постройте локальный индекс и перезапустите приложение.")
+                            },
+                            errorMessage = { userFacingError(it, apiKeys.values) },
+                        ).compare(
+                            question = normalizedPrompt,
+                            model = settings.model,
+                            maxTokens = settings.maxTokens,
+                            overflowPolicy = settings.contextOverflowPolicy,
+                        ),
+                    )
+
                     ResponseMode.TOKENS_CONTEXT -> {
                         val report = TokenContextDemoRunner().run(tokenDemoScenario ?: TokenDemoScenario.SHORT)
                         report.turns.forEachIndexed { index, turn ->
@@ -700,6 +742,7 @@ class WorkbenchController(
                     is RequestResult.Reasoning -> addOutput(ExperimentOutput("evaluation", "Сравнение и оценка точности", result.report.evaluation, kind = "evaluation"))
                     is RequestResult.Temperature -> addOutput(ExperimentOutput("evaluation", "Выводы по использованию", result.report.evaluation, kind = "evaluation"))
                     is RequestResult.ModelComparison -> result.report.evaluation?.let { addOutput(it.asOutput(evaluation = true)) }
+                    is RequestResult.RagComparison -> Unit
                     is RequestResult.TokensContext -> Unit
                     else -> Unit
                 }

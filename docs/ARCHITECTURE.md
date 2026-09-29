@@ -40,6 +40,7 @@ flowchart LR
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
+| `src/main/kotlin/rag` | Десять RAG evaluation cases, versioned JSON/Markdown report и production evaluation CLI |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -139,6 +140,45 @@ Production `OpenAiEmbeddingClient` использует существующий
 явно помечен как техническая проверка, не как качество OpenAI. Полный контракт и
 команды находятся в [DOCUMENT_INDEXING.md](DOCUMENT_INDEXING.md).
 
+### Retrieval и RAG comparison
+
+`DocumentRetriever` — production-граница между индексом и mode runner. Он
+загружает только `.llm-document-index/structured.json` через существующий
+`JsonDocumentIndexStore`, создаёт query embedding клиентом, который обязан точно
+совпасть с `provider/model` descriptor индекса, проверяет dimension и вызывает
+общие `search`/`cosineSimilarity`. Результат — пять отдельных chunks, отсортированных
+по score по убыванию и затем по `chunkId`; скрытого merge нет. Cancellation
+проверяется вокруг локальных этапов и сохраняется embedding transport.
+
+`RagComparisonRunner` не использует `PromptRunner`, `LlmAgent`, историю, память или
+MCP. Он выполняет baseline первым, затем retrieval и RAG, поэтому готовая baseline-
+карточка остаётся при ошибке индекса или второй генерации. Обе ветки разделяют один
+`LlmClient`, model и `CompletionOptions(maxTokens=...)`.
+
+```mermaid
+sequenceDiagram
+    participant U as User question
+    participant R as RagComparisonRunner
+    participant E as EmbeddingClient
+    participant I as structured.json
+    participant L as Selected LLM
+    U->>R: question
+    R->>L: user(question), no history/memory/MCP
+    L-->>R: БЕЗ RAG
+    R->>I: validated v1 load
+    R->>E: embed(question) with descriptor model
+    E-->>R: request-local query vector
+    R->>I: cosine top-5 + chunkId tie-break
+    R->>L: system + one user(question + untrusted [S1]..[S5])
+    L-->>R: С RAG with citations
+    R-->>U: two cards + metadata-only provenance
+```
+
+Полные chunk texts и vectors существуют только внутри backend request и не входят
+в `ExperimentOutput`, DTO, SSE или логи. `RagDiagnostics` содержит `applied`,
+strategy, embedding model, manifest hash, retrieved count и metadata источников.
+Локальная postflight-проверка отклоняет `[Sx]`, которого не было в контексте.
+
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
 Шлюз кэширует каталог отдельно для каждой сессии и сериализует её protocol operations.
@@ -204,6 +244,7 @@ Monitor запрашивает snapshot через настоящий `scheduler
 | 4 способа рассуждения | `REASONING` / `reasoning` | `ReasoningRunner` |
 | Сравнение температуры | `TEMPERATURE` / `temperature` | `TemperatureRunner` |
 | Сравнение моделей | `MODEL_COMPARISON` / `models` | `ModelComparisonRunner` |
+| RAG: с источниками / без RAG | `RAG_COMPARISON` / `rag` | `RagComparisonRunner` + `DocumentRetriever` |
 | Токены и контекст | `TOKENS_CONTEXT` / `tokens` | `TokenContextDemoRunner` |
 
 «Простой агент» намеренно остаётся `UNRESTRICTED`/`unrestricted`. Стратегия памяти не является отдельным response mode.
@@ -220,6 +261,7 @@ Monitor запрашивает snapshot через настоящий `scheduler
 - отдельным `AssistantInvariantManager` и версионированной коллекцией обязательных правил;
 - отдельным `TaskStateManager` и состоянием задачи Простого агента;
 - специализированными runners экспериментов;
+- request-local фабрикой `DocumentRetriever` для RAG;
 - монотонными номерами exchange/revision и streaming snapshots;
 - read-only monitor снимков фоновых задач из MCP scheduler.
 
@@ -462,6 +504,7 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
 | `.llm-mcp-output/` | MCP `save_to_file` | Только явно сохранённые UTF-8 результаты; путь никогда не возвращается в diagnostics |
 | `.llm-document-index/` | `DocumentIndexPipeline` | `fixed.json`, `structured.json` формата v1 и JSON/Markdown comparison; тексты, vectors и относительные metadata |
+| `.llm-rag-evaluation/` | `RagEvaluationReportStore` | v1 `comparison.json` и `comparison.md`: ответы, top-5 metadata, usage, source/citation flags и ручная rubric 0–2 |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации
@@ -508,6 +551,11 @@ streaming/final outputs, метрики и диагностику инвариа
 `BackgroundTasks` — read-only панель общего workspace. Создание остаётся
 разговорным MCP-сценарием; browser storage и отдельный REST mutation не
 используются. Панель отображает `StateDto.backgroundTasks` из REST/SSE.
+
+Для `rag` `Results` держит две карточки в общем SSE snapshot. Блок
+«Использованные источники» существует только у RAG-карточки и показывает rank,
+относительный source, section, `chunkId` и similarity score. Context/memory/branch
+controls скрыты: эксперимент имеет независимый request-local контекст.
 
 Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: порядковый
 номер, `serverId / toolName`, безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
@@ -577,6 +625,9 @@ API-ключ сохраняется только в локальном `.env`; A
   обе стратегии chunking, batching/order/retry/redaction OpenAI embeddings,
   versioned atomic stores, cosine metrics, общий manifest двух indexes и PDF
   extraction/page sections/password/corruption/resource limits.
+- `DocumentRetrieverTest`, `RagComparisonRunnerTest` и `RagEvaluationTest`
+  проверяют top-5/tie-break, compatibility/dimensions/cancellation, изоляцию
+  baseline, untrusted chunks/citations, partial result, десять cases и report v1;
 
 Основная команда: `./gradlew test`.
 
@@ -586,7 +637,7 @@ API-ключ сохраняется только в локальном `.env`; A
 - `npm --prefix frontend run build` — typecheck + production Vite bundle;
 - `npm --prefix frontend run test:e2e` — Playwright против настоящего Ktor `runWebFixture`.
 
-Browser tests проверяют режимы, memory layers, streaming, refresh, две вкладки,
+Browser tests проверяют восемь режимов, RAG sources/partial result, memory layers, streaming, refresh, две вкладки,
 offline/reconnect, идемпотентный retry, отмену, Markdown, узкий экран и точный
 порядок `knowledge/search` → `knowledge/summarize` → `workspace/save_to_file`
 в существующей MCP-диагностике.

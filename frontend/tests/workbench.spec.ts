@@ -180,6 +180,43 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
+test("RAG mode shows independent answers, top five sources and preserves baseline on RAG error", async ({page}) => {
+  await setMode(page, "rag");
+  await expect(page.getByLabel("Максимум токенов")).toBeVisible();
+  await expect(page.getByText("Контекст", {exact: true})).toHaveCount(0);
+  await expect(page.getByTestId("memory-layers")).toHaveCount(0);
+  await expect(page.getByTestId("branch-controls")).toHaveCount(0);
+
+  await send(page, "Как запустить production web-приложение?");
+  await done(page);
+  const exchange = page.getByTestId("exchange").last();
+  const cards = exchange.getByTestId("response-card");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0)).toContainText("БЕЗ RAG");
+  await expect(cards.nth(1)).toContainText("С RAG");
+  await expect(cards.nth(1)).toContainText("[S1]");
+  const sources = cards.nth(1).getByTestId("rag-sources");
+  await expect(sources).toContainText("Использованные источники");
+  await expect(sources.locator("li")).toHaveCount(5);
+  await expect(sources).toContainText("README.md");
+  await expect(sources).toContainText("similarity:");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const diagnostics = state.exchanges.at(-1)!.outputs[1].ragDiagnostics!;
+  expect(diagnostics.applied).toBe(true);
+  expect(diagnostics.retrievedCount).toBe(5);
+  expect(diagnostics.sources.map((source) => source.rank)).toEqual([1, 2, 3, 4, 5]);
+  expect(JSON.stringify(diagnostics)).not.toContain("content:");
+  expect(JSON.stringify(diagnostics)).not.toContain("\"embedding\":[");
+
+  await send(page, "Проверь partial result [[rag-error]]");
+  await done(page);
+  const partial = page.getByTestId("exchange").last();
+  await expect(partial.getByTestId("response-card")).toHaveCount(2);
+  await expect(partial.getByTestId("response-card").nth(0)).not.toContainText("Ошибка модели");
+  await expect(partial.getByTestId("response-card").nth(1)).toContainText("Fixture RAG error");
+});
+
 test("simple agent calls tracker through MCP and shows diagnostics", async ({page}) => {
   await setMode(page, "unrestricted");
   await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");
@@ -565,7 +602,7 @@ test("prompt focus uses one clean highlight around the composer", async ({
     .toBe("rgb(133, 139, 217)");
 });
 
-test("all seven modes, demos, history, settings, keys and keyboard shortcuts", async ({
+test("all eight modes, demos, history, settings, keys and keyboard shortcuts", async ({
   page,
 }) => {
   const consoleErrors: string[] = [];
@@ -623,6 +660,7 @@ test("all seven modes, demos, history, settings, keys and keyboard shortcuts", a
     ["reasoning", 6],
     ["temperature", 4],
     ["models", 4],
+    ["rag", 2],
   ] as const) {
     await setMode(page, mode);
     if (mode === "models") {
@@ -712,12 +750,12 @@ test("all seven modes, demos, history, settings, keys and keyboard shortcuts", a
   expect((await (await page.request.get("/api/state")).json()).history).toEqual(
     { unrestricted: 0, controlled: 0 },
   );
-  await expect(page.getByTestId("exchange")).toHaveCount(5);
+  await expect(page.getByTestId("exchange")).toHaveCount(6);
   for (const name of ["Демо: 4 способа рассуждения", "Демо: температура"]) {
     await page.getByRole("button", { name, exact: true }).click();
     await done(page);
   }
-  await expect(page.getByTestId("exchange")).toHaveCount(7);
+  await expect(page.getByTestId("exchange")).toHaveCount(8);
   expect(consoleErrors).toEqual([]);
 });
 

@@ -6,6 +6,7 @@ export type Mode =
   | "reasoning"
   | "temperature"
   | "models"
+  | "rag"
   | "tokens";
 export type Provider = "DEEPSEEK" | "OPENAI";
 export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | "MEMORY_LAYERS";
@@ -144,6 +145,23 @@ export interface Output {
   taskStateDiagnostics: TaskStateDiagnostics | null;
   assistantInvariantDiagnostics: AssistantInvariantDiagnostics | null;
   mcpCalls: McpCallDiagnostic[];
+  ragDiagnostics: RagDiagnostics | null;
+}
+export interface RagSourceDiagnostic {
+  rank: number;
+  score: number;
+  chunkId: string;
+  source: string;
+  title: string;
+  section: string;
+}
+export interface RagDiagnostics {
+  applied: boolean;
+  strategy: string;
+  embeddingModel: string | null;
+  manifestHash: string | null;
+  retrievedCount: number;
+  sources: RagSourceDiagnostic[];
 }
 export interface McpCallDiagnostic {
   serverId: string;

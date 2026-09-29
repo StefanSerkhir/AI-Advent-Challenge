@@ -455,6 +455,35 @@ button {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.rag-diagnostics {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 10px 11px;
+  border: 1px solid #cfe2f3;
+  border-radius: 8px;
+  background: #f5f9fd;
+  font-size: 11px;
+}
+.rag-diagnostics-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rag-diagnostics p {
+  margin: 0;
+}
+.rag-diagnostics ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+}
+.rag-diagnostics li,
+.rag-diagnostics code {
+  overflow-wrap: anywhere;
+}
 .workspace {
   min-width: 0;
   min-height: 0;

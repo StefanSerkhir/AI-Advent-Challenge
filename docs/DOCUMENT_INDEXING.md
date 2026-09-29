@@ -12,12 +12,12 @@ Fixture расположен только в test source set. Он исполь�
 
 Контрольный fixture-прогон текущего репозитория:
 
-- документов: `66`;
-- символов: `690003`;
-- слов: `62452`;
-- приблизительных страниц: `383.34`;
-- fixed chunks: `734`;
-- structured chunks: `1340`.
+- документов: `72`;
+- символов: `745497`;
+- слов: `67723`;
+- приблизительных страниц: `414.17`;
+- fixed chunks: `793`;
+- structured chunks: `1426`.
 
 Страница оценивается по явной стабильной формуле `characterCount / 1800`. Минимально допустимый corpus равен 20 таким страницам; меньший объём завершает запуск ошибкой до embeddings и создания output-каталога.
 
@@ -97,3 +97,55 @@ JSON пишется в UTF-8 temporary file, затем заменяет target 
 JSON и Markdown содержат число документов/chunks, min/avg/median/p95/max размера, суммарные символы, приблизительные tokens (`ceil(characters / 4)`), заполненность section, пустые/oversized chunks, batch calls, vector dimensions, размер index-файла и длительности только локальных этапов. Время provider API не смешивается с ними.
 
 Встроенные шесть запросов проверяют запуск приложения, HTTP-настройки, OpenAI streaming, Ktor routes, memory layers и локальную конфигурацию. Query embeddings создаёт тот же `EmbeddingClient`, что и chunks. Cosine ranking вычисляет Hit@3, MRR и долю запросов, для которых ожидаемый source или section найден в индексе. Production и fake-отчёты явно различаются флагом и пояснением.
+
+## Retrieval для RAG
+
+Web-режим `rag` не строит второй индекс и не реализует отдельную similarity-
+логику. `DocumentRetriever` загружает `.llm-document-index/structured.json`
+существующим `JsonDocumentIndexStore`, затем:
+
+1. проверяет versioned документ целиком и требует strategy `structured`;
+2. создаёт `EmbeddingClient` с точными `provider/model` из index descriptor;
+3. получает один embedding исходного вопроса и проверяет его dimension;
+4. вызывает общий `search`, использующий `cosineSimilarity`;
+5. возвращает top-5 без merge: score descending, стабильный tie-break по `chunkId`.
+
+Полный текст каждого chunk используется только при построении request-local RAG
+prompt. REST/SSE diagnostic содержит rank, score, `chunkId`, относительный source,
+title и section; vectors и chunk text не сериализуются и не логируются. Если файл
+отсутствует, повреждён, имеет неизвестную версию, пуст или несовместим с embedding
+client, RAG LLM-вызов не начинается и пользователь получает команду:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
+```
+
+Baseline уже может быть готов к этому моменту и остаётся в первой карточке.
+
+## Набор из 10 RAG-вопросов и production evaluation
+
+`org.example.rag.RAG_EVALUATION_CASES` — отдельный dataset; он не смешивается с
+шестью `EvaluationQuery`, которые сравнивают fixed/structured chunking. Каждый из
+десяти cases имеет стабильный ID, вопрос, проверяемое expectation, expected sources
+и при необходимости section hint. Ожидания сверены с текущими README,
+ARCHITECTURE, WEB_API и этим документом; исправлений относительно предложенного
+набора не потребовалось.
+
+Production evaluation запускается только явно:
+
+```bash
+./gradlew runRagEvaluation
+```
+
+Команда использует существующие `.env` и `structured.json`, выполняет минимум
+20 generation calls и 10 embedding queries и атомарно сохраняет:
+
+- `.llm-rag-evaluation/comparison.json` формата v1;
+- `.llm-rag-evaluation/comparison.md`.
+
+Для каждого case сохраняются expectation, expected sources, оба ответа, top-5,
+source-found/citation-valid flags, usage и elapsed time. Автоматически считаются
+только проверяемые retrieval/source/citation/usage metrics. Поля ручной оценки
+correctness/completeness/groundedness принимают `0..2` и остаются `pending`, пока
+эксперт не заполнит их; fake embeddings не выдаются за фактическое качество.
+Подробнее см. [RAG_EVALUATION.md](RAG_EVALUATION.md).

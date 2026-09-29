@@ -74,6 +74,12 @@ tasks.register<JavaExec>("buildDocumentIndexes") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.indexing.IndexingCliKt"
 }
+tasks.register<JavaExec>("runRagEvaluation") {
+    group = "application"
+    description = "Run the explicit production RAG comparison (20 generation calls + 10 embedding queries; may be paid)"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.rag.RagEvaluationCliKt"
+}
 // Test-only entry point: deterministic clients are never packaged in the application.
 tasks.register<JavaExec>("runWebFixture") {
     group = "verification"
@@ -87,4 +93,11 @@ tasks.register<JavaExec>("runDocumentIndexFixture") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.indexing.IndexingFixtureKt"
+}
+tasks.register<JavaExec>("runRagEvaluationFixture") {
+    group = "verification"
+    description = "Create a 10-case RAG JSON/Markdown report with deterministic fakes and no network"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "org.example.rag.RagEvaluationFixtureKt"
 }

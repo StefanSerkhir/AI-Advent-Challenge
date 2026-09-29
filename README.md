@@ -159,7 +159,7 @@ WEB_PORT=8090 ./gradlew runWeb
 Провайдер и модель переключаются в боковой панели. Активная модель, провайдер,
 API-ключи и параметры ответа сохраняются в локальном `.env`.
 
-Поддерживаются семь режимов:
+Поддерживаются восемь режимов:
 
 1. **Сравнение двух ответов** — независимые ветки без ограничений и с ними.
 2. **С ограничениями** — маркированный список, лимиты слов и токенов, настраиваемая
@@ -182,7 +182,12 @@ API-ключи и параметры ответа сохраняются в ло
    выполняют Luna, Terra и Sol, после чего Sol сравнивает анонимизированные ответы
    A/B/C. Для каждого вызова показываются время, input/completion/reasoning/total
    tokens и расчётная стоимость.
-7. **Токены и контекст** — полностью локальные детерминированные сценарии короткого
+7. **RAG: с источниками / без RAG** — одна и та же выбранная модель сначала
+   получает только исходный вопрос, затем независимо отвечает на тот же вопрос с
+   top-5 chunks из локального structure-aware индекса. Вторая карточка показывает
+   citations `[S1]`–`[S5]` и безопасную provenance-диагностику без vectors и полного
+   текста chunks.
+8. **Токены и контекст** — полностью локальные детерминированные сценарии короткого
    и длинного диалога, а также безопасная симуляция переполнения окна 6K.
 
 Режим сравнения моделей всегда использует ключ OpenAI и независимые запросы без
@@ -206,7 +211,7 @@ UTF-8 JSON-файле `.llm-history.json` в текущем рабочем ка�
 В нём находятся роли, тексты и метрики успешно завершённых ходов; ключи, настройки
 и промежуточные streaming-фрагменты туда не записываются. В режиме
 сравнения используются две независимые ветки `unrestricted` и `controlled`.
-Режимы рассуждения, температуры и сравнения моделей намеренно запускают варианты
+Режимы рассуждения, температуры, сравнения моделей и RAG намеренно запускают варианты
 в независимом контексте и в постоянную историю не входят.
 
 JSON заменяется атомарно только после успешного завершения ответа. Ошибка или
@@ -321,9 +326,9 @@ source, title, section, ordinal, offsets и content hash документа.
 ./gradlew runDocumentIndexFixture
 ```
 
-Контрольный прогон текущего corpus содержит `66` документов, `690003` символов и
-`62452` слов — около `383.34` страницы по формуле `characterCount / 1800`. Он
-создаёт `734` fixed и `1340` structured chunks. Fake-метрики проверяют
+Контрольный прогон текущего corpus содержит `72` документа, `745497` символов и
+`67723` слова — около `414.17` страницы по формуле `characterCount / 1800`. Он
+создаёт `793` fixed и `1426` structured chunks. Fake-метрики проверяют
 воспроизводимость ranking/evaluation, но не являются оценкой качества OpenAI.
 
 Реальная команда читает уже существующий `openai_api_key` из `.env`, вызывает
@@ -340,6 +345,51 @@ PDF достаточно поместить в `docs/**/*.pdf`; Apache PDFBox и
 большие, повреждённые и сканированные без OCR PDF отклоняются до embeddings.
 Формат v1, состав corpus, PDF-лимиты, CLI, retry/redaction и evaluation подробно
 описаны в [документации индексации](docs/DOCUMENT_INDEXING.md).
+
+### Первый RAG-сценарий
+
+Режим **«RAG: с источниками / без RAG»** использует только
+`.llm-document-index/structured.json`. `DocumentRetriever` загружает его через
+`JsonDocumentIndexStore`, создаёт embedding вопроса той же model/provider-парой,
+что записана в descriptor индекса, проверяет размерность и выполняет общий cosine
+ranking со стабильным tie-break по `chunkId`. В prompt попадают полные top-5 chunks,
+но в REST/SSE — только rank, score, `chunkId`, относительный source, title и section.
+
+Baseline вызывается первым и получает ровно исходный вопрос без индекса, истории,
+памяти и MCP. RAG-контекст существует только во втором request. Обе ветки используют
+одну generation model, одинаковый max output и остальные параметры. Ошибка индекса,
+embedding или одной LLM-ветки не удаляет уже готовую карточку другой ветки. Если
+индекса нет или его descriptor несовместим, UI показывает команду построения:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
+```
+
+Безопасная browser-демонстрация работает через `./gradlew runWebFixture`: fixture
+создаёт временный валидный индекс, использует deterministic fake query embeddings
+и fake generation, не читает реальные ключи и не вызывает сеть.
+
+Отдельный набор из десяти вопросов находится в `RAG_EVALUATION_CASES`. Production
+evaluation запускается только явно и выполняет минимум 20 generation calls и 10
+embedding queries, поэтому может быть платным:
+
+```bash
+./gradlew runRagEvaluation
+```
+
+Он атомарно пишет versioned `.llm-rag-evaluation/comparison.json` и
+`comparison.md`. Автоматически вычисляются только retrieval/source/citation/usage
+metrics; correctness, completeness и groundedness остаются прозрачной ручной
+оценкой 0–2. Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
+[сценарий видео](docs/RAG_DEMO.md).
+
+Структуру полного 10-case отчёта можно безопасно получить на deterministic fakes:
+
+```bash
+./gradlew runRagEvaluationFixture
+```
+
+Этот отчёт проверяет только механику и не является оценкой реального качества RAG.
 
 ## API-ключи и `.env`
 
@@ -371,7 +421,7 @@ deepseek_api_key=ВАШ_DEEPSEEK_API_KEY
 `.llm-assistant-memory.json`, `.llm-assistant-invariants.json`,
 `.llm-task-state.json`, `.llm-scheduler-state.json` и production output-каталог
 `.llm-mcp-output/` и `.llm-document-index/` исключены через
-`.gitignore`. Не заменяйте пример в `.env.example` реальным ключом и не добавляйте
+`.gitignore`; там же исключён `.llm-rag-evaluation/`. Не заменяйте пример в `.env.example` реальным ключом и не добавляйте
 локальные файлы приложения в Git.
 
 ## Разработка
@@ -606,7 +656,7 @@ npm run test:e2e
 ```
 
 Playwright самостоятельно запускает `runWebFixture` на порту 18080. Проверяются
-все семь режимов, слои памяти, CRUD/диагностика/конфликт инвариантов,
+все восемь режимов, RAG-карточки/provenance/partial failure, слои памяти, CRUD/диагностика/конфликт инвариантов,
 pause/reload/resume машины состояния задачи, демо,
 горячие клавиши, история, перезагрузка во время запроса,
 две вкладки, offline/reconnect, потерянный ответ POST, повтор после отмены,
@@ -628,7 +678,9 @@ pause/reload/resume машины состояния задачи, демо,
 - `legacy-desktop/` — изолированный Compose UI и его Markdown-тесты;
 - `src/main/kotlin/cli/` — прежний CLI-адаптер и сохранённые тесты.
 - `src/main/kotlin/indexing/` — corpus, chunking, embeddings, versioned indexes,
-  evaluation и отдельный CLI.
+  cosine retrieval, evaluation и отдельный CLI;
+- `src/main/kotlin/rag/` — десять RAG evaluation cases, versioned JSON/Markdown
+  report и явно запускаемый production evaluation CLI.
 
 При необходимости Compose можно запустить отдельно:
 `./gradlew :legacy-desktop:run`. Сборка нативных пакетов осталась в этом модуле,

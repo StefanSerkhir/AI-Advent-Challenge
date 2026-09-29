@@ -1,0 +1,47 @@
+package org.example.rag
+
+import kotlinx.coroutines.runBlocking
+import org.example.app.RagComparisonRunner
+import org.example.indexing.DeterministicFakeEmbeddingClient
+import org.example.indexing.DocumentRetriever
+import org.example.indexing.JsonDocumentIndexStore
+import org.example.indexing.createRagFixtureIndex
+import org.example.llm.*
+import java.nio.file.Files
+import java.nio.file.Path
+
+fun main() = runBlocking {
+    val temporary = Files.createTempDirectory("rag-evaluation-fixture-index")
+    try {
+        val indexFile = createRagFixtureIndex(temporary)
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                val rag = messages.first().role == LlmRole.SYSTEM
+                val question = messages.last().content.substringAfter("Вопрос:\n").substringBefore("\n\nКонтекст:").trim()
+                return CompletionResult(
+                    content = if (rag) "Fixture RAG-ответ на вопрос «$question» с локальным источником [S1]." else
+                        "Fixture baseline-ответ на вопрос «${messages.last().content}».",
+                    finishReason = "stop",
+                    usage = TokenUsage(40, 20, 60),
+                    model = "fixture-generation-v1",
+                )
+            }
+        }
+        val comparison = RagComparisonRunner(
+            clientProvider = { client },
+            retrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                }
+            },
+        )
+        val report = RagEvaluationRunner(comparison).run("fixture-generation-v1", 300)
+        val output = Path.of(".llm-rag-evaluation")
+        RagEvaluationReportStore(output.resolve("comparison.json"), output.resolve("comparison.md")).save(report)
+        println("SAFE FIXTURE: 10 cases; deterministic fake embeddings/generation; external API calls: 0")
+        println("Report: ${output.resolve("comparison.json")} and ${output.resolve("comparison.md")}")
+        println("This report verifies mechanics only, not production RAG quality.")
+    } finally {
+        temporary.toFile().deleteRecursively()
+    }
+}

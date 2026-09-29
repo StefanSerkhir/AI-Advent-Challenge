@@ -15,6 +15,7 @@ enum class ResponseMode(val cliValue: String) {
     REASONING("reasoning"),
     TEMPERATURE("temperature"),
     MODEL_COMPARISON("models"),
+    RAG_COMPARISON("rag"),
     TOKENS_CONTEXT("tokens");
 
     companion object {

@@ -11,6 +11,7 @@ import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
+import org.example.indexing.*
 import org.example.llm.*
 import org.example.mcp.LocalMcpGateway
 import org.example.mcp.SAVE_TO_FILE_TOOL
@@ -24,6 +25,7 @@ import java.time.Instant
 fun main() {
     val port = System.getenv("WEB_PORT")?.toInt() ?: 18080
     val directory = Files.createTempDirectory("workbench-browser-test")
+    val ragIndex = runBlocking { createRagFixtureIndex(directory) }
     val store = LocalConfigStore(directory.resolve(".env"), emptyMap())
     val controller = WorkbenchController(AppSettings(LlmKind.OPENAI),
         mapOf(LlmKind.OPENAI to "fixture-openai-key", LlmKind.DEEPSEEK to "fixture-deepseek-key"),
@@ -36,6 +38,20 @@ fun main() {
             directory.resolve(".llm-scheduler-state.json"),
             directory.resolve(".llm-mcp-output"),
         ),
+        documentRetrieverProvider = {
+            DocumentRetriever(JsonDocumentIndexStore(ragIndex)) { descriptor ->
+                check(descriptor.provider == "fake" && descriptor.model == "deterministic-hash-v1")
+                object : EmbeddingClient {
+                    private val delegate = DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                    override val provider = delegate.provider
+                    override val model = delegate.model
+                    override suspend fun embed(texts: List<String>): List<EmbeddingVector> {
+                        if (texts.any { "[[rag-retrieval-error]]" in it }) throw IOException("fixture retrieval failure")
+                        return delegate.embed(texts)
+                    }
+                }
+            }
+        },
         clientFactory = { _, _, model -> FixtureLlmClient(model) }, persistSettings = store::save)
     val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port)) }
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -76,6 +92,12 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             },
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
+        if ("[[baseline-error]]" in prompt && "предоставленный контекст" !in assistantProfile) {
+            throw LlmApiException("Fixture baseline error")
+        }
+        if ("[[rag-error]]" in prompt && "предоставленный контекст" in assistantProfile) {
+            throw LlmApiException("Fixture RAG error")
+        }
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         val pipelineResults = messages.filter { it.role == LlmRole.TOOL && it.name in PIPELINE_TOOL_NAMES }
             .associateBy { requireNotNull(it.name) }
@@ -173,6 +195,8 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
+            "предоставленный контекст" in assistantProfile && "Контекст:" in prompt ->
+                "Production web-приложение запускается командой `./gradlew runWeb` и открывается по адресу http://127.0.0.1:8080 [S1]. Требуются JDK 21+ и Node.js 22.12+ [S1]."
             prompt == PIPELINE_FIXTURE_PROMPT && SAVE_TO_FILE_TOOL in pipelineResults -> {
                 val saved = parseFixtureToolResult(requireNotNull(pipelineResults[SAVE_TO_FILE_TOOL]))
                 val fileName = saved["fileName"]?.jsonPrimitive?.content.orEmpty()

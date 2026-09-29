@@ -22,6 +22,7 @@ data class ExperimentOutput(
     val taskStateDiagnostics: TaskStateDiagnostics? = null,
     val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
     val mcpCalls: List<McpCallDiagnostic> = emptyList(),
+    val ragDiagnostics: RagDiagnostics? = null,
 )
 
 data class ExperimentOutputDelta(

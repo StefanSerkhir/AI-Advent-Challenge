@@ -63,6 +63,7 @@ const thinkingOutput: Output = {
   taskStateDiagnostics: null,
   assistantInvariantDiagnostics: null,
   mcpCalls: [],
+  ragDiagnostics: null,
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -167,7 +168,7 @@ function ResponseCard({ output }: { output: Output }) {
         <Alert
           color="red"
           icon={<IconAlertCircle size={18} />}
-          title="Ошибка модели"
+          title={output.id === "rag" && !output.ragDiagnostics?.applied ? "Ошибка RAG" : "Ошибка модели"}
         >
           {output.error}
         </Alert>
@@ -189,6 +190,24 @@ function ResponseCard({ output }: { output: Output }) {
           )}
         </div>
       )}
+      {output.ragDiagnostics?.applied && <div className="rag-diagnostics" data-testid="rag-sources">
+        <div className="rag-diagnostics-heading">
+          <strong>Использованные источники</strong>
+          <Badge size="xs" variant="light" color="teal">
+            top-{output.ragDiagnostics.retrievedCount} · {output.ragDiagnostics.strategy}
+          </Badge>
+        </div>
+        <p className="micro">
+          Embedding: <code>{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
+        </p>
+        <ol>
+          {output.ragDiagnostics.sources.map((source) => <li key={source.chunkId}>
+            <div><strong>[S{source.rank}]</strong> <code>{source.source}</code></div>
+            <div className="micro">section: {source.section || "—"}</div>
+            <div className="micro">chunkId: <code>{source.chunkId}</code> · similarity: {source.score.toFixed(6)}</div>
+          </li>)}
+        </ol>
+      </div>}
       {long && (
         <Button
           size="xs"
@@ -530,7 +549,7 @@ export function ExchangeView({
           outputs={
             e.mode === "models" ? [...responses, ...evaluation] : responses
           }
-          models={e.mode === "models"}
+          models={e.mode === "models" || e.mode === "rag"}
           agent={e.mode === "unrestricted"}
         />
       )}

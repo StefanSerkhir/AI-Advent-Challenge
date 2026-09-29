@@ -217,6 +217,7 @@ class PromptRunner(
         ResponseMode.REASONING -> error("Reasoning mode must be handled by ReasoningRunner")
         ResponseMode.TEMPERATURE -> error("Temperature mode must be handled by TemperatureRunner")
         ResponseMode.MODEL_COMPARISON -> error("Model comparison mode must be handled by ModelComparisonRunner")
+        ResponseMode.RAG_COMPARISON -> error("RAG comparison mode must be handled by RagComparisonRunner")
         ResponseMode.TOKENS_CONTEXT -> error("Token context demo must be handled by TokenContextDemoRunner")
     }
 }

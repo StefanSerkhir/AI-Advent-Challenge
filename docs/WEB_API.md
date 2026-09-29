@@ -11,6 +11,13 @@
 arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
 без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
+Для output RAG-ветки `ragDiagnostics` имеет явную форму
+`{ applied, strategy, embeddingModel, manifestHash, retrievedCount, sources[] }`,
+где source содержит только `{ rank, score, chunkId, source, title, section }`.
+Query/chunk vectors и полный chunk text по wire не передаются. У baseline-
+карточки поле равно `null`; при ошибке retrieval RAG-карточка сохраняет
+`applied=false` и безопасную ошибку с командой построения индекса.
+
 `StateDto.backgroundTasks` — отдельный read-only snapshot планировщика:
 `{ available, error, schedules[] }`. Каждый элемент `schedules[]` содержит `id`,
 `title`, `taskType`, `status`, `scheduleType`, `aggregationPeriod`, `totalRuns`,
@@ -83,6 +90,16 @@ Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cros
 Одновременно работает один эксперимент. Другой запуск, изменение настроек/ключа,
 checkpoint/branch-команды, мутации FSM/инвариантов и очистки возвращают `409 busy`. Отмена привязана к номеру операции, поэтому
 запоздалая отмена из вкладки не остановит следующий запрос.
+
+Режим `rag` (`ResponseMode.RAG_COMPARISON`) использует обычный идемпотентный
+`POST /api/operations`; отдельного retrieval endpoint нет. Внутри операции
+baseline и RAG публикуются как два `outputs[]` с ID `baseline` и `rag`. Baseline
+получает только исходный вопрос. RAG загружает локальный `structured.json`,
+создаёт query embedding и формирует отдельные system/user messages с `[S1]`–`[S5]`.
+Обе ветки используют одну model, max token limit и generation options. Они не
+пишутся в историю или memory layers и не получают MCP tools. Ошибка одной ветки
+остаётся в `outputs[].error`, не удаляя успешную карточку; exchange завершается
+после попытки обеих веток. Cancellation останавливает текущий этап кооперативно.
 
 `requestId` — новый UUID для каждого намеренного запуска. Повтор **той же** команды
 с тем же ID возвращает исходный `operationId`, даже после завершения или отмены.

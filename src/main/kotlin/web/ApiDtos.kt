@@ -184,6 +184,25 @@ data class OutputDto(
     val taskStateDiagnostics: TaskStateDiagnosticsDto? = null,
     val assistantInvariantDiagnostics: AssistantInvariantDiagnosticsDto? = null,
     val mcpCalls: List<McpCallDiagnosticDto> = emptyList(),
+    val ragDiagnostics: RagDiagnosticsDto? = null,
+)
+@Serializable
+data class RagSourceDiagnosticDto(
+    val rank: Int,
+    val score: Double,
+    val chunkId: String,
+    val source: String,
+    val title: String,
+    val section: String,
+)
+@Serializable
+data class RagDiagnosticsDto(
+    val applied: Boolean,
+    val strategy: String,
+    val embeddingModel: String?,
+    val manifestHash: String?,
+    val retrievedCount: Int,
+    val sources: List<RagSourceDiagnosticDto>,
 )
 @Serializable
 data class McpCallDiagnosticDto(
@@ -391,6 +410,7 @@ val modes = listOf(
     ModeDto("reasoning", "4 способа рассуждения", "Прямой ответ, пошаговое решение, созданный промпт и группа экспертов. Затем — оценка точности. 6 вызовов, независимые контексты.", independentContext = true),
     ModeDto("temperature", "Сравнение температуры", "Temperature 0, 0.7 и 1.2, затем оценка точности, креативности и разнообразия. Для Luna используется gpt-4.1-mini. 4 независимых вызова.", independentContext = true),
     ModeDto("models", "Сравнение моделей GPT-5.6", "Luna, Terra и Sol последовательно отвечают на один запрос с reasoning_effort=medium. Sol оценивает анонимные ответы A/B/C. Нужен ключ OpenAI.", independentContext = true, connectionLocked = true, usesTokenLimit = true),
+    ModeDto("rag", "RAG: с источниками / без RAG", "Одна модель независимо отвечает на исходный вопрос и на тот же вопрос с top-5 chunks локального structure-aware индекса.", independentContext = true, usesTokenLimit = true),
     ModeDto("tokens", "Токены и контекст", "Локальные детерминированные сценарии: короткий, длинный диалог и безопасная симуляция переполнения 6K. API-ключ не нужен.", independentContext = true),
 )
 
@@ -495,6 +515,23 @@ private fun McpCallDiagnostic.toDto() = McpCallDiagnosticDto(
     status.name.lowercase(),
     result,
 )
+private fun RagDiagnostics.toDto() = RagDiagnosticsDto(
+    applied = applied,
+    strategy = strategy,
+    embeddingModel = embeddingModel,
+    manifestHash = manifestHash,
+    retrievedCount = retrievedCount,
+    sources = sources.map { source ->
+        RagSourceDiagnosticDto(
+            source.rank,
+            source.score,
+            source.chunkId,
+            source.source,
+            source.title,
+            source.section,
+        )
+    },
+)
 
 private fun SchedulerSummary.toDto() = BackgroundTaskDto(
     id = id,
@@ -550,6 +587,7 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                     output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName,
                     output.assistantMemoryDiagnostics?.toDto(), output.taskStateDiagnostics?.toDto(),
                     output.assistantInvariantDiagnostics?.toDto(), output.mcpCalls.map(McpCallDiagnostic::toDto))
+                    .copy(ragDiagnostics = output.ragDiagnostics?.toDto())
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null,
             (exchange.outcome as? ExchangeOutcome.Failed)?.code,
