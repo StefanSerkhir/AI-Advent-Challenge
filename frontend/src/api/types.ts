@@ -36,6 +36,9 @@ export interface Settings {
   contextOverflowPolicy: "REJECT" | "DROP_OLDEST";
   contextStrategy: ContextStrategy;
   recentMessagesLimit: number;
+  ragCandidateLimit: number;
+  ragResultLimit: number;
+  ragMinSimilarity: number;
 }
 export interface ProviderInfo {
   id: Provider;
@@ -157,10 +160,26 @@ export interface RagSourceDiagnostic {
 }
 export interface RagDiagnostics {
   applied: boolean;
+  pipeline: "raw" | "enhanced";
+  queryRewritten: boolean;
+  retrievalQuery: string | null;
+  candidateLimit: number;
+  candidateCount: number;
+  resultLimit: number;
+  minSimilarity: number | null;
+  discardedCount: number;
+  filteredCount: number;
   strategy: string;
   embeddingModel: string | null;
   manifestHash: string | null;
   retrievedCount: number;
+  rewrite: {
+    elapsedMillis: number;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    totalTokens: number | null;
+    costUsd: number | null;
+  } | null;
   sources: RagSourceDiagnostic[];
 }
 export interface McpCallDiagnostic {

@@ -21,6 +21,9 @@ data class SettingsDto(
     val contextOverflowPolicy: String = "REJECT",
     val contextStrategy: String = "SLIDING_WINDOW",
     val recentMessagesLimit: Int = 10,
+    val ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
+    val ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
+    val ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
 )
 
 @Serializable
@@ -198,11 +201,29 @@ data class RagSourceDiagnosticDto(
 @Serializable
 data class RagDiagnosticsDto(
     val applied: Boolean,
+    val pipeline: String,
+    val queryRewritten: Boolean,
+    val retrievalQuery: String?,
+    val candidateLimit: Int,
+    val candidateCount: Int,
+    val resultLimit: Int,
+    val minSimilarity: Double?,
+    val discardedCount: Int,
+    val filteredCount: Int,
     val strategy: String,
     val embeddingModel: String?,
     val manifestHash: String?,
     val retrievedCount: Int,
+    val rewrite: RagRewriteDiagnosticDto?,
     val sources: List<RagSourceDiagnosticDto>,
+)
+@Serializable
+data class RagRewriteDiagnosticDto(
+    val elapsedMillis: Long,
+    val promptTokens: Int?,
+    val completionTokens: Int?,
+    val totalTokens: Int?,
+    val costUsd: Double?,
 )
 @Serializable
 data class McpCallDiagnosticDto(
@@ -373,7 +394,7 @@ data class StateDto(
 fun AppSettings.toDto() = SettingsDto(
     llmKind.name, model, responseMode.cliValue, maxTokens, maxWords, bulletCount,
     stopSequence, historyEnabled, contextOverflowPolicy.name, contextStrategy.name,
-    recentMessagesLimit,
+    recentMessagesLimit, ragCandidateLimit, ragResultLimit, ragMinSimilarity,
 )
 
 fun SettingsDto.toSettings(): AppSettings {
@@ -383,6 +404,13 @@ fun SettingsDto.toSettings(): AppSettings {
         ?: throw ApiProblem(400, "validation", "Неизвестный режим.")
     if (maxTokens <= 0 || maxWords <= 0 || bulletCount <= 0 || recentMessagesLimit <= 0) {
         throw ApiProblem(400, "validation", "Лимиты и параметры управления контекстом должны быть целыми числами больше нуля.")
+    }
+    if (ragCandidateLimit !in 1..MAX_RAG_CANDIDATE_LIMIT ||
+        ragResultLimit !in 1..MAX_RAG_RESULT_LIMIT || ragResultLimit > ragCandidateLimit) {
+        throw ApiProblem(400, "validation", "RAG-лимиты должны быть в допустимом диапазоне, а число источников — не больше числа кандидатов.")
+    }
+    if (!ragMinSimilarity.isFinite() || ragMinSimilarity !in -1.0..1.0) {
+        throw ApiProblem(400, "validation", "Минимальная RAG similarity должна быть конечным числом от -1.0 до 1.0.")
     }
     val overflowPolicy = runCatching { ContextOverflowPolicy.valueOf(contextOverflowPolicy) }
         .getOrElse { throw ApiProblem(400, "validation", "Неизвестная политика переполнения контекста.") }
@@ -400,6 +428,9 @@ fun SettingsDto.toSettings(): AppSettings {
         contextOverflowPolicy = overflowPolicy,
         contextStrategy = strategy,
         recentMessagesLimit = recentMessagesLimit,
+        ragCandidateLimit = ragCandidateLimit,
+        ragResultLimit = ragResultLimit,
+        ragMinSimilarity = ragMinSimilarity,
     ).also(::validateSettings)
 }
 
@@ -410,7 +441,7 @@ val modes = listOf(
     ModeDto("reasoning", "4 способа рассуждения", "Прямой ответ, пошаговое решение, созданный промпт и группа экспертов. Затем — оценка точности. 6 вызовов, независимые контексты.", independentContext = true),
     ModeDto("temperature", "Сравнение температуры", "Temperature 0, 0.7 и 1.2, затем оценка точности, креативности и разнообразия. Для Luna используется gpt-4.1-mini. 4 независимых вызова.", independentContext = true),
     ModeDto("models", "Сравнение моделей GPT-5.6", "Luna, Terra и Sol последовательно отвечают на один запрос с reasoning_effort=medium. Sol оценивает анонимные ответы A/B/C. Нужен ключ OpenAI.", independentContext = true, connectionLocked = true, usesTokenLimit = true),
-    ModeDto("rag", "RAG: с источниками / без RAG", "Одна модель независимо отвечает на исходный вопрос и на тот же вопрос с top-5 chunks локального structure-aware индекса.", independentContext = true, usesTokenLimit = true),
+    ModeDto("rag", "RAG: с источниками / без RAG", "Три независимых ответа одной модели: без RAG, обычный RAG и RAG с rewrite и similarity-фильтром.", independentContext = true, usesTokenLimit = true),
     ModeDto("tokens", "Токены и контекст", "Локальные детерминированные сценарии: короткий, длинный диалог и безопасная симуляция переполнения 6K. API-ключ не нужен.", independentContext = true),
 )
 
@@ -517,10 +548,24 @@ private fun McpCallDiagnostic.toDto() = McpCallDiagnosticDto(
 )
 private fun RagDiagnostics.toDto() = RagDiagnosticsDto(
     applied = applied,
+    pipeline = pipeline,
+    queryRewritten = queryRewritten,
+    retrievalQuery = retrievalQuery,
+    candidateLimit = candidateLimit,
+    candidateCount = candidateCount,
+    resultLimit = resultLimit,
+    minSimilarity = minSimilarity,
+    discardedCount = discardedCount,
+    filteredCount = filteredCount,
     strategy = strategy,
     embeddingModel = embeddingModel,
     manifestHash = manifestHash,
     retrievedCount = retrievedCount,
+    rewrite = rewrite?.let {
+        RagRewriteDiagnosticDto(
+            it.elapsedMillis, it.promptTokens, it.completionTokens, it.totalTokens, it.costUsd,
+        )
+    },
     sources = sources.map { source ->
         RagSourceDiagnosticDto(
             source.rank,

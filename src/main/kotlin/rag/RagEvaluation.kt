@@ -2,14 +2,18 @@ package org.example.rag
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.example.app.*
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.*
 
-const val RAG_EVALUATION_FORMAT_VERSION = 1
+const val RAG_EVALUATION_FORMAT_VERSION = 2
 
 @Serializable
 data class RagEvaluationCase(
@@ -98,6 +102,7 @@ data class RagEvaluationAnswer(
     val completionTokens: Int? = null,
     val totalTokens: Int? = null,
     val elapsedMillis: Long,
+    val estimatedCostUsd: Double? = null,
 )
 
 @Serializable
@@ -125,6 +130,31 @@ data class ManualRagAssessment(
 }
 
 @Serializable
+data class RagEvaluationPipelineResult(
+    val answer: RagEvaluationAnswer,
+    val retrievedSources: List<RagEvaluationSource> = emptyList(),
+    val expectedSourceFound: Boolean = false,
+    val citationsValid: Boolean = false,
+    val candidateCount: Int = 0,
+    val filteredCount: Int = 0,
+    val retrievalQuery: String? = null,
+    val candidateLimit: Int = 0,
+    val resultLimit: Int = 0,
+    val minSimilarity: Double? = null,
+    val rewrite: RagEvaluationRewriteMetrics? = null,
+    val manualAssessment: ManualRagAssessment = ManualRagAssessment(),
+)
+
+@Serializable
+data class RagEvaluationRewriteMetrics(
+    val elapsedMillis: Long,
+    val promptTokens: Int? = null,
+    val completionTokens: Int? = null,
+    val totalTokens: Int? = null,
+    val estimatedCostUsd: Double? = null,
+)
+
+@Serializable
 data class RagEvaluationCaseResult(
     val id: String,
     val question: String,
@@ -132,28 +162,37 @@ data class RagEvaluationCaseResult(
     val expectedSources: List<String>,
     val expectedSectionContains: String? = null,
     val baseline: RagEvaluationAnswer,
-    val rag: RagEvaluationAnswer,
-    val retrievedSources: List<RagEvaluationSource>,
-    val expectedSourceFound: Boolean,
-    val citationsValid: Boolean,
-    val manualAssessment: ManualRagAssessment = ManualRagAssessment(),
+    val raw: RagEvaluationPipelineResult,
+    val enhanced: RagEvaluationPipelineResult,
 )
 
 @Serializable
 data class RagEvaluationReport(
     val formatVersion: Int = RAG_EVALUATION_FORMAT_VERSION,
     val model: String,
-    val note: String = "Retrieval/source/citation/usage metrics are automatic. Correctness, completeness and groundedness require manual 0–2 review; fake embeddings must not be treated as production quality.",
+    val note: String = "Retrieval/source/citation/usage metrics are automatic. Correctness, completeness and groundedness require separate manual 0–2 review for raw and enhanced; fake embeddings must not be treated as production quality.",
     val cases: List<RagEvaluationCaseResult>,
 )
 
-class RagEvaluationRunner(private val comparisonRunner: RagComparisonRunner) {
+class RagEvaluationRunner(
+    private val comparisonRunner: RagComparisonRunner,
+    private val ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
+    private val ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
+    private val ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
+) {
     suspend fun run(model: String, maxTokens: Int): RagEvaluationReport {
         val results = RAG_EVALUATION_CASES.map { evaluationCase ->
-            val comparison = comparisonRunner.compare(evaluationCase.question, model, maxTokens)
+            val comparison = comparisonRunner.compare(
+                evaluationCase.question,
+                model,
+                maxTokens,
+                ragCandidateLimit = ragCandidateLimit,
+                ragResultLimit = ragResultLimit,
+                ragMinSimilarity = ragMinSimilarity,
+            )
             val baseline = comparison.branches.single { it.branch == RagBranch.BASELINE }
-            val rag = comparison.branches.single { it.branch == RagBranch.RAG }
-            val sources = rag.diagnostics?.sources.orEmpty()
+            val raw = comparison.branches.single { it.branch == RagBranch.RAW }
+            val enhanced = comparison.branches.single { it.branch == RagBranch.ENHANCED }
             RagEvaluationCaseResult(
                 id = evaluationCase.id,
                 question = evaluationCase.question,
@@ -161,12 +200,8 @@ class RagEvaluationRunner(private val comparisonRunner: RagComparisonRunner) {
                 expectedSources = evaluationCase.expectedSources,
                 expectedSectionContains = evaluationCase.expectedSectionContains,
                 baseline = baseline.toEvaluationAnswer(),
-                rag = rag.toEvaluationAnswer(),
-                retrievedSources = sources.map(RagSourceDiagnostic::toEvaluationSource),
-                expectedSourceFound = sources.any { source -> source.source in evaluationCase.expectedSources },
-                citationsValid = rag.completion?.let { completion ->
-                    runCatching { validateRagCitations(completion.content, sources.size) }.isSuccess
-                } ?: false,
+                raw = raw.toPipelineResult(evaluationCase.expectedSources),
+                enhanced = enhanced.toPipelineResult(evaluationCase.expectedSources),
             )
         }
         return RagEvaluationReport(model = model, cases = results)
@@ -177,7 +212,7 @@ class RagEvaluationReportStore(
     private val jsonFile: Path,
     private val markdownFile: Path,
 ) {
-    private val json = Json { encodeDefaults = true; prettyPrint = true }
+    private val json = Json { encodeDefaults = true; prettyPrint = true; ignoreUnknownKeys = true }
 
     fun save(report: RagEvaluationReport) {
         require(report.formatVersion == RAG_EVALUATION_FORMAT_VERSION)
@@ -186,9 +221,14 @@ class RagEvaluationReportStore(
     }
 
     fun load(): RagEvaluationReport {
-        val report = json.decodeFromString<RagEvaluationReport>(Files.readString(jsonFile, StandardCharsets.UTF_8))
-        require(report.formatVersion == RAG_EVALUATION_FORMAT_VERSION) { "Unsupported RAG evaluation format" }
-        return report
+        val element = json.parseToJsonElement(Files.readString(jsonFile, StandardCharsets.UTF_8))
+        val version = element.jsonObject["formatVersion"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: error("RAG evaluation formatVersion отсутствует")
+        return when (version) {
+            RAG_EVALUATION_FORMAT_VERSION -> json.decodeFromJsonElement(element)
+            1 -> json.decodeFromJsonElement<RagEvaluationReportV1>(element).migrate()
+            else -> error("Unsupported RAG evaluation format: $version")
+        }
     }
 
     private fun writeAtomically(target: Path, content: String) {
@@ -209,7 +249,7 @@ class RagEvaluationReportStore(
 }
 
 private fun RagBranchResult.toEvaluationAnswer(): RagEvaluationAnswer {
-    val usage = completion?.usage
+    val usage = completion?.usage ?: tokenMetrics?.actualUsage
     return RagEvaluationAnswer(
         content = completion?.content,
         error = error,
@@ -218,6 +258,33 @@ private fun RagBranchResult.toEvaluationAnswer(): RagEvaluationAnswer {
         completionTokens = usage?.completionTokens,
         totalTokens = usage?.totalTokens,
         elapsedMillis = elapsedMillis,
+        estimatedCostUsd = tokenMetrics?.turnCostUsd?.toDouble(),
+    )
+}
+
+private fun RagBranchResult.toPipelineResult(expectedSources: List<String>): RagEvaluationPipelineResult {
+    val diagnostic = diagnostics
+    val sources = diagnostic?.sources.orEmpty()
+    return RagEvaluationPipelineResult(
+        answer = toEvaluationAnswer(),
+        retrievedSources = sources.map(RagSourceDiagnostic::toEvaluationSource),
+        expectedSourceFound = sources.any { it.source in expectedSources },
+        citationsValid = completion?.let { runCatching { validateRagCitations(it.content, sources.size) }.isSuccess } ?: false,
+        candidateCount = diagnostic?.candidateCount ?: 0,
+        filteredCount = diagnostic?.filteredCount ?: 0,
+        retrievalQuery = diagnostic?.retrievalQuery,
+        candidateLimit = diagnostic?.candidateLimit ?: 0,
+        resultLimit = diagnostic?.resultLimit ?: 0,
+        minSimilarity = diagnostic?.minSimilarity,
+        rewrite = diagnostic?.rewrite?.let {
+            RagEvaluationRewriteMetrics(
+                elapsedMillis = it.elapsedMillis,
+                promptTokens = it.promptTokens,
+                completionTokens = it.completionTokens,
+                totalTokens = it.totalTokens,
+                estimatedCostUsd = it.costUsd,
+            )
+        },
     )
 }
 
@@ -239,31 +306,107 @@ private fun RagEvaluationReport.toMarkdown(): String = buildString {
         appendLine()
         appendLine("**Expected sources:** ${result.expectedSources.joinToString { "`$it`" }}")
         appendLine()
-        appendLine("- Expected source found: ${result.expectedSourceFound}")
-        appendLine("- Citations valid: ${result.citationsValid}")
-        appendLine("- Baseline usage: input=${result.baseline.promptTokens ?: "n/a"}, output=${result.baseline.completionTokens ?: "n/a"}, elapsed=${result.baseline.elapsedMillis} ms")
-        appendLine("- RAG usage: input=${result.rag.promptTokens ?: "n/a"}, output=${result.rag.completionTokens ?: "n/a"}, elapsed=${result.rag.elapsedMillis} ms")
+        appendLine("| Pipeline | Query | Candidates → kept | Threshold | Expected source | Citations | Usage | Rewrite usage/time/cost | Elapsed |")
+        appendLine("|---|---|---:|---:|---|---|---:|---|---:|")
+        appendPipelineRow("Raw RAG", result.raw)
+        appendPipelineRow("Enhanced RAG", result.enhanced)
         appendLine()
-        appendLine("### Top-5 sources")
-        appendLine()
-        result.retrievedSources.forEach { source ->
-            appendLine("${source.rank}. `${source.source}` · `${source.section}` · `${source.chunkId}` · score=${"%.6f".format(java.util.Locale.ROOT, source.score)}")
-        }
-        appendLine()
+        appendSources("Raw RAG sources", result.raw.retrievedSources)
+        appendSources("Enhanced RAG sources", result.enhanced.retrievedSources)
         appendLine("### БЕЗ RAG")
         appendLine()
         appendLine(result.baseline.content ?: "Ошибка: ${result.baseline.error}")
         appendLine()
-        appendLine("### С RAG")
+        appendLine("### RAG БЕЗ ФИЛЬТРА/REWRITE")
         appendLine()
-        appendLine(result.rag.content ?: "Ошибка: ${result.rag.error}")
+        appendLine(result.raw.answer.content ?: "Ошибка: ${result.raw.answer.error}")
         appendLine()
-        appendLine("### Ручная оценка 0–2")
+        appendAssessment(result.raw.manualAssessment)
+        appendLine("### УЛУЧШЕННЫЙ RAG")
         appendLine()
-        appendLine("- correctness: ${result.manualAssessment.correctness ?: "pending"}")
-        appendLine("- completeness: ${result.manualAssessment.completeness ?: "pending"}")
-        appendLine("- groundedness: ${result.manualAssessment.groundedness ?: "pending"}")
-        appendLine("- comment: ${result.manualAssessment.comment}")
+        appendLine(result.enhanced.answer.content ?: "Ошибка: ${result.enhanced.answer.error}")
         appendLine()
+        appendAssessment(result.enhanced.manualAssessment)
     }
 }
+
+private fun StringBuilder.appendPipelineRow(label: String, pipeline: RagEvaluationPipelineResult) {
+    val rewrite = pipeline.rewrite?.let {
+        "${it.totalTokens ?: "n/a"} tok / ${it.elapsedMillis} ms / ${it.estimatedCostUsd ?: "n/a"} USD"
+    } ?: "n/a"
+    appendLine(
+        "| $label | `${pipeline.retrievalQuery.orEmpty().replace("|", "\\|")}` | " +
+            "${pipeline.candidateCount} → ${pipeline.filteredCount} | ${pipeline.minSimilarity?.toString() ?: "n/a"} | " +
+            "${pipeline.expectedSourceFound} | ${pipeline.citationsValid} | ${pipeline.answer.totalTokens ?: "n/a"} | $rewrite | ${pipeline.answer.elapsedMillis} ms |",
+    )
+}
+
+private fun StringBuilder.appendSources(title: String, sources: List<RagEvaluationSource>) {
+    appendLine("### $title")
+    appendLine()
+    if (sources.isEmpty()) appendLine("Нет источников.")
+    sources.forEach { source ->
+        appendLine("${source.rank}. `${source.source}` · `${source.section}` · `${source.chunkId}` · score=${"%.6f".format(Locale.ROOT, source.score)}")
+    }
+    appendLine()
+}
+
+private fun StringBuilder.appendAssessment(assessment: ManualRagAssessment) {
+    appendLine("Ручная оценка 0–2: correctness=${assessment.correctness ?: "pending"}, completeness=${assessment.completeness ?: "pending"}, groundedness=${assessment.groundedness ?: "pending"}.")
+    appendLine()
+    appendLine("Комментарий: ${assessment.comment}")
+    appendLine()
+}
+
+@Serializable
+private data class RagEvaluationReportV1(
+    val formatVersion: Int,
+    val model: String,
+    val note: String,
+    val cases: List<RagEvaluationCaseResultV1>,
+)
+
+@Serializable
+private data class RagEvaluationCaseResultV1(
+    val id: String,
+    val question: String,
+    val expectation: String,
+    val expectedSources: List<String>,
+    val expectedSectionContains: String? = null,
+    val baseline: RagEvaluationAnswer,
+    val rag: RagEvaluationAnswer,
+    val retrievedSources: List<RagEvaluationSource>,
+    val expectedSourceFound: Boolean,
+    val citationsValid: Boolean,
+    val manualAssessment: ManualRagAssessment = ManualRagAssessment(),
+)
+
+private fun RagEvaluationReportV1.migrate() = RagEvaluationReport(
+    model = model,
+    note = "$note Migrated from format v1; enhanced results were not present in the original report.",
+    cases = cases.map { old ->
+        RagEvaluationCaseResult(
+            id = old.id,
+            question = old.question,
+            expectation = old.expectation,
+            expectedSources = old.expectedSources,
+            expectedSectionContains = old.expectedSectionContains,
+            baseline = old.baseline,
+            raw = RagEvaluationPipelineResult(
+                answer = old.rag,
+                retrievedSources = old.retrievedSources,
+                expectedSourceFound = old.expectedSourceFound,
+                citationsValid = old.citationsValid,
+                candidateCount = old.retrievedSources.size,
+                filteredCount = old.retrievedSources.size,
+                retrievalQuery = old.question,
+                candidateLimit = old.retrievedSources.size,
+                resultLimit = old.retrievedSources.size,
+                manualAssessment = old.manualAssessment,
+            ),
+            enhanced = RagEvaluationPipelineResult(
+                answer = RagEvaluationAnswer(error = "Enhanced pipeline отсутствует в отчёте формата v1.", elapsedMillis = 0),
+            ),
+        )
+    },
+)

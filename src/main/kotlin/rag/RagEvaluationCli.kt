@@ -27,7 +27,8 @@ fun main(args: Array<String>) = runBlocking {
     val model = arguments.model ?: bootstrap.settings.model
     val maxTokens = arguments.maxTokens ?: bootstrap.settings.maxTokens
 
-    println("ВНИМАНИЕ: production RAG evaluation выполнит 20 generation calls и 10 embedding queries и может быть платной.")
+    println("ВНИМАНИЕ: production RAG evaluation выполнит до 40 generation calls и до 20 embedding queries и может быть платной.")
+    println("Enhanced generation пропускается при нуле источников; ошибки также могут уменьшить фактическое число вызовов.")
     println("Запуск был инициирован явно; автоматические тесты эту команду не вызывают.")
 
     val httpClient = createHttpClient(maxRetries = 0)
@@ -45,7 +46,12 @@ fun main(args: Array<String>) = runBlocking {
             retrieverProvider = { retriever },
             errorMessage = { userFacingError(it, bootstrap.apiKeys.values) },
         )
-        val report = RagEvaluationRunner(runner).run(model, maxTokens)
+        val report = RagEvaluationRunner(
+            runner,
+            ragCandidateLimit = bootstrap.settings.ragCandidateLimit,
+            ragResultLimit = bootstrap.settings.ragResultLimit,
+            ragMinSimilarity = bootstrap.settings.ragMinSimilarity,
+        ).run(model, maxTokens)
         val jsonFile = output.resolve("comparison.json")
         val markdownFile = output.resolve("comparison.md")
         RagEvaluationReportStore(jsonFile, markdownFile).save(report)

@@ -63,6 +63,15 @@ fun validateSettings(settings: AppSettings) {
     require(settings.contextStrategy != ContextStrategy.MEMORY_LAYERS || settings.recentMessagesLimit >= 2) {
         "Для слоёв памяти лимит краткосрочного диалога должен быть не меньше двух сообщений."
     }
+    require(settings.ragCandidateLimit in 1..MAX_RAG_CANDIDATE_LIMIT) {
+        "Число RAG-кандидатов должно быть от 1 до $MAX_RAG_CANDIDATE_LIMIT."
+    }
+    require(settings.ragResultLimit in 1..MAX_RAG_RESULT_LIMIT && settings.ragResultLimit <= settings.ragCandidateLimit) {
+        "Число RAG-источников должно быть от 1 до $MAX_RAG_RESULT_LIMIT и не превышать число кандидатов."
+    }
+    require(settings.ragMinSimilarity.isFinite() && settings.ragMinSimilarity in -1.0..1.0) {
+        "Минимальная RAG similarity должна быть конечным числом от -1.0 до 1.0."
+    }
     require(settings.stopSequence == null || settings.stopSequence!!.let {
         it.isNotBlank() && it.length <= 4096 && it.none(Char::isISOControl) && !it.equals("off", ignoreCase = true)
     }) { "Stop sequence должна быть непустой строкой до 4096 символов; off зарезервировано для отключения." }

@@ -30,6 +30,31 @@ suspend fun createRagFixtureIndex(root: Path): Path {
             "Безопасный сквозной сценарий",
             "Детерминированный web fixture запускается командой ./gradlew runWebFixture и не обращается к платному API.",
         ),
+        Triple(
+            "docs/fixture/MEMORY_LAYERS.md",
+            "Слои памяти",
+            "MEMORY_LAYERS формирует context в порядке LONG_TERM, WORKING, SHORT_TERM, затем текущий prompt; инварианты и task state находятся в system message.",
+        ),
+        Triple(
+            "docs/fixture/BRANCHING.md",
+            "Ветвление",
+            "Checkpoint и branch controls доступны только для ContextStrategy.BRANCHING и не используются при MEMORY_LAYERS.",
+        ),
+        Triple(
+            "docs/fixture/MCP.md",
+            "Локальный пример MCP",
+            "MCP tools доступны OpenAI unrestricted агенту из tools/list; максимум три tools/call, а временные assistant и tool messages не сохраняются.",
+        ),
+        Triple(
+            "docs/fixture/CORPUS.md",
+            "Corpus",
+            "Corpus включает README.md, docs Markdown и PDF, production Kotlin и frontend TypeScript; исключает .env, .llm файлы, build, node_modules и symlinks.",
+        ),
+        Triple(
+            "docs/fixture/SAVE_TO_FILE.md",
+            "Безопасная запись",
+            "save_to_file принимает безопасное относительное имя, запрещает traversal, absolute path и symlink-цели и выполняет атомарную замену файла.",
+        ),
     )
     val fake = DeterministicFakeEmbeddingClient()
     val vectors = fake.embed(definitions.map { it.third })

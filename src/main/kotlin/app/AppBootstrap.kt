@@ -35,6 +35,22 @@ class AppBootstrap private constructor(
                 }
             }
 
+            fun boundedInt(name: String, raw: String?, default: Int, range: IntRange): Int {
+                if (raw == null) return default
+                return raw.toIntOrNull()?.takeIf { it in range } ?: run {
+                    warnings += "$name в .env имеет неверное значение; используется $default"
+                    default
+                }
+            }
+
+            fun finiteDouble(name: String, raw: String?, default: Double, range: ClosedFloatingPointRange<Double>): Double {
+                if (raw == null) return default
+                return raw.toDoubleOrNull()?.takeIf { it.isFinite() && it in range } ?: run {
+                    warnings += "$name в .env имеет неверное значение; используется $default"
+                    default
+                }
+            }
+
             val historyEnabled = when (config.historyEnabled?.lowercase()) {
                 null -> true
                 "true", "on", "1" -> true
@@ -47,6 +63,16 @@ class AppBootstrap private constructor(
             val contextStrategy = config.contextStrategy?.let(ContextStrategy::from) ?: run {
                 if (config.contextStrategy != null) warnings += "context_strategy в .env не распознана; используется SLIDING_WINDOW"
                 ContextStrategy.SLIDING_WINDOW
+            }
+            val ragCandidateLimit = boundedInt(
+                "rag_candidate_limit", config.ragCandidateLimit, DEFAULT_RAG_CANDIDATE_LIMIT, 1..MAX_RAG_CANDIDATE_LIMIT,
+            )
+            val configuredRagResultLimit = boundedInt(
+                "rag_result_limit", config.ragResultLimit, DEFAULT_RAG_RESULT_LIMIT, 1..MAX_RAG_RESULT_LIMIT,
+            )
+            val ragResultLimit = configuredRagResultLimit.takeIf { it <= ragCandidateLimit } ?: run {
+                warnings += "rag_result_limit в .env превышает rag_candidate_limit; используется ${minOf(DEFAULT_RAG_RESULT_LIMIT, ragCandidateLimit)}"
+                minOf(DEFAULT_RAG_RESULT_LIMIT, ragCandidateLimit)
             }
             val settings = AppSettings(
                 llmKind = llmKind,
@@ -73,6 +99,11 @@ class AppBootstrap private constructor(
                 } ?: ContextOverflowPolicy.REJECT,
                 contextStrategy = contextStrategy,
                 recentMessagesLimit = positiveInt("recent_messages_limit", config.recentMessagesLimit, 10),
+                ragCandidateLimit = ragCandidateLimit,
+                ragResultLimit = ragResultLimit,
+                ragMinSimilarity = finiteDouble(
+                    "rag_min_similarity", config.ragMinSimilarity, DEFAULT_RAG_MIN_SIMILARITY, -1.0..1.0,
+                ),
             )
             val apiKeys = buildMap {
                 config.apiKey?.let { put(configuredLlmKind, it) }

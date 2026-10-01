@@ -182,11 +182,11 @@ API-ключи и параметры ответа сохраняются в ло
    выполняют Luna, Terra и Sol, после чего Sol сравнивает анонимизированные ответы
    A/B/C. Для каждого вызова показываются время, input/completion/reasoning/total
    tokens и расчётная стоимость.
-7. **RAG: с источниками / без RAG** — одна и та же выбранная модель сначала
-   получает только исходный вопрос, затем независимо отвечает на тот же вопрос с
-   top-5 chunks из локального structure-aware индекса. Вторая карточка показывает
-   citations `[S1]`–`[S5]` и безопасную provenance-диагностику без vectors и полного
-   текста chunks.
+7. **RAG: с источниками / без RAG** — одна выбранная модель формирует три
+   независимые карточки: baseline без индекса, обычный RAG по исходному вопросу и
+   улучшенный RAG с отдельным query rewrite, расширенным набором кандидатов и
+   similarity-фильтром. Диагностика показывает фактический запрос, `кандидаты →
+   сохранено`, citations и metadata источников, но не vectors и не полный текст chunks.
 8. **Токены и контекст** — полностью локальные детерминированные сценарии короткого
    и длинного диалога, а также безопасная симуляция переполнения окна 6K.
 
@@ -350,15 +350,28 @@ PDF достаточно поместить в `docs/**/*.pdf`; Apache PDFBox и
 
 Режим **«RAG: с источниками / без RAG»** использует только
 `.llm-document-index/structured.json`. `DocumentRetriever` загружает его через
-`JsonDocumentIndexStore`, создаёт embedding вопроса той же model/provider-парой,
+`JsonDocumentIndexStore`, создаёт query embedding той же model/provider-парой,
 что записана в descriptor индекса, проверяет размерность и выполняет общий cosine
-ranking со стабильным tie-break по `chunkId`. В prompt попадают полные top-5 chunks,
-но в REST/SSE — только rank, score, `chunkId`, относительный source, title и section.
+ranking со стабильным tie-break по `chunkId`. `DocumentRetriever` может вернуть
+меньше запрошенного лимита, если индекс меньше; это не считается повреждением.
 
 Baseline вызывается первым и получает ровно исходный вопрос без индекса, истории,
-памяти и MCP. RAG-контекст существует только во втором request. Обе ветки используют
-одну generation model, одинаковый max output и остальные параметры. Ошибка индекса,
-embedding или одной LLM-ветки не удаляет уже готовую карточку другой ветки. Если
+памяти и MCP. Обычный RAG ищет по исходному вопросу и берёт первые
+`rag_result_limit` результатов без rewrite и threshold. Улучшенная ветка отдельным
+служебным LLM-вызовом переписывает только исходный вопрос, получает до
+`rag_candidate_limit` кандидатов, оставляет score `>= rag_min_similarity`, снова
+сортирует по score/`chunkId`, обрезает до `rag_result_limit` и перенумеровывает
+`[S1]…[Sn]`. Все три финальные ветки используют одну generation model и одинаковые
+generation options; rewrite ограничен 128 output tokens и не получает chunks,
+историю, память или MCP. Его usage, время и стоимость входят в enhanced-диагностику
+и общие метрики ветки.
+
+Порог similarity не имеет универсально правильного значения: он зависит от
+embedding model и corpus. При нуле результатов enhanced generation не вызывается,
+а карточка сообщает «При заданном пороге релевантный контекст не найден».
+Полные chunks остаются request-local; REST/SSE возвращает только pipeline/query,
+лимиты, threshold, counts, manifest/model и rank/score/source metadata. Ошибка индекса,
+rewrite, embedding или одной LLM-ветки не удаляет уже готовые карточки. Если
 индекса нет или его descriptor несовместим, UI показывает команду построения:
 
 ```bash
@@ -370,17 +383,19 @@ embedding или одной LLM-ветки не удаляет уже готов
 и fake generation, не читает реальные ключи и не вызывает сеть.
 
 Отдельный набор из десяти вопросов находится в `RAG_EVALUATION_CASES`. Production
-evaluation запускается только явно и выполняет минимум 20 generation calls и 10
-embedding queries, поэтому может быть платным:
+evaluation запускается только явно и выполняет до 40 generation calls и до 20
+query embedding calls для десяти cases, поэтому может быть платным. Нулевой
+enhanced-result или ошибка уменьшают фактическое число вызовов:
 
 ```bash
 ./gradlew runRagEvaluation
 ```
 
 Он атомарно пишет versioned `.llm-rag-evaluation/comparison.json` и
-`comparison.md`. Автоматически вычисляются только retrieval/source/citation/usage
-metrics; correctness, completeness и groundedness остаются прозрачной ручной
-оценкой 0–2. Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
+`comparison.md` формата v2; v1 читается с явной миграцией. Отчёт сопоставляет raw
+и enhanced retrieval/answers side-by-side. Автоматически вычисляются только
+retrieval/source/citation/usage metrics; correctness, completeness и groundedness
+для каждой RAG-ветки остаются прозрачной ручной оценкой 0–2. Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
 [сценарий видео](docs/RAG_DEMO.md).
 
 Структуру полного 10-case отчёта можно безопасно получить на deterministic fakes:
@@ -416,6 +431,11 @@ deepseek_api_key=ВАШ_DEEPSEEK_API_KEY
 `llm_kind`. Специализированные `deepseek_api_key` и `openai_api_key` имеют
 приоритет. Дополнительные параметры перечислены в `.env.example`; интерфейс
 обновляет их автоматически.
+
+RAG-настройки: `rag_candidate_limit` (`1..50`, default `10`),
+`rag_result_limit` (`1..20`, default `5`, не больше candidate limit) и
+`rag_min_similarity` (`-1.0..1.0`, default `0.20`). В UI они видны только в режиме
+`rag` и сохраняются с тем же optimistic concurrency, что остальные настройки.
 
 `.env`, `.env.local`, `.env.*.local`, `.llm-history.json`,
 `.llm-assistant-memory.json`, `.llm-assistant-invariants.json`,

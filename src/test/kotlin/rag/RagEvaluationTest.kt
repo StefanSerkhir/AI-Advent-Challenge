@@ -21,7 +21,16 @@ class RagEvaluationTest {
             val indexFile = createRagFixtureIndex(directory)
             val client = object : LlmClient {
                 override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
-                    val rag = messages.first().role == LlmRole.SYSTEM
+                    val system = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
+                    if ("Перепиши исходный вопрос" in system) {
+                        return CompletionResult(
+                            content = messages.last().content + " документация",
+                            finishReason = "stop",
+                            usage = TokenUsage(8, 3, 11),
+                            model = "fixture-model",
+                        )
+                    }
+                    val rag = "предоставленный контекст" in system
                     return CompletionResult(
                         content = if (rag) "Grounded fixture answer [S1]." else "Baseline fixture answer.",
                         finishReason = "stop",
@@ -38,11 +47,13 @@ class RagEvaluationTest {
                     }
                 },
             )
-            val report = RagEvaluationRunner(comparison).run("fixture-model", 100)
+            val report = RagEvaluationRunner(comparison, ragMinSimilarity = -1.0).run("fixture-model", 100)
             assertEquals(10, report.cases.size)
-            assertTrue(report.cases.all { it.baseline.content != null && it.rag.content != null })
-            assertTrue(report.cases.all { it.retrievedSources.size == 5 && it.citationsValid })
-            assertTrue(report.cases.all { it.manualAssessment.correctness == null })
+            assertTrue(report.cases.all { it.baseline.content != null && it.raw.answer.content != null && it.enhanced.answer.content != null })
+            assertTrue(report.cases.all { it.raw.retrievedSources.size == 5 && it.raw.citationsValid })
+            assertTrue(report.cases.all { it.enhanced.retrievedSources.size == 5 && it.enhanced.citationsValid })
+            assertTrue(report.cases.all { it.enhanced.rewrite?.totalTokens == 11 })
+            assertTrue(report.cases.all { it.raw.manualAssessment.correctness == null && it.enhanced.manualAssessment.correctness == null })
 
             val json = directory.resolve("comparison.json")
             val markdown = directory.resolve("comparison.md")
@@ -50,7 +61,45 @@ class RagEvaluationTest {
             store.save(report)
             assertEquals(report, store.load())
             assertContains(Files.readString(markdown), "Ручная оценка 0–2")
-            assertContains(Files.readString(markdown), "Top-5 sources")
+            assertContains(Files.readString(markdown), "Raw RAG")
+            assertContains(Files.readString(markdown), "Enhanced RAG")
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `report store migrates format v1 and round trips v2`() {
+        val directory = Files.createTempDirectory("rag-evaluation-v1")
+        try {
+            val json = directory.resolve("comparison.json")
+            val markdown = directory.resolve("comparison.md")
+            Files.writeString(json, """
+                {
+                  "formatVersion": 1,
+                  "model": "old-model",
+                  "note": "old report",
+                  "cases": [{
+                    "id": "old",
+                    "question": "question",
+                    "expectation": "expectation",
+                    "expectedSources": ["README.md"],
+                    "baseline": {"content":"baseline","model":"old-model","elapsedMillis":1},
+                    "rag": {"content":"rag [S1]","model":"old-model","elapsedMillis":2},
+                    "retrievedSources": [{"rank":1,"score":0.9,"chunkId":"c1","source":"README.md","title":"README","section":"Intro"}],
+                    "expectedSourceFound": true,
+                    "citationsValid": true
+                  }]
+                }
+            """.trimIndent())
+            val store = RagEvaluationReportStore(json, markdown)
+            val migrated = store.load()
+            assertEquals(2, migrated.formatVersion)
+            assertEquals("rag [S1]", migrated.cases.single().raw.answer.content)
+            assertContains(migrated.cases.single().enhanced.answer.error.orEmpty(), "v1")
+
+            store.save(migrated)
+            assertEquals(migrated, store.load())
         } finally {
             directory.toFile().deleteRecursively()
         }

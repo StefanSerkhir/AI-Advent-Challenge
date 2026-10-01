@@ -16,8 +16,18 @@ fun main() = runBlocking {
         val indexFile = createRagFixtureIndex(temporary)
         val client = object : LlmClient {
             override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                if (messages.first().content.contains("Перепиши исходный вопрос")) {
+                    return CompletionResult(
+                        content = messages.last().content + " локальная техническая документация",
+                        finishReason = "stop",
+                        usage = TokenUsage(18, 7, 25),
+                        model = "fixture-generation-v1",
+                    )
+                }
                 val rag = messages.first().role == LlmRole.SYSTEM
-                val question = messages.last().content.substringAfter("Вопрос:\n").substringBefore("\n\nКонтекст:").trim()
+                val question = Regex("Вопрос:\\s*([\\s\\S]*?)\\s*Контекст:")
+                    .find(messages.last().content)?.groupValues?.get(1)?.trim()
+                    ?: messages.last().content
                 return CompletionResult(
                     content = if (rag) "Fixture RAG-ответ на вопрос «$question» с локальным источником [S1]." else
                         "Fixture baseline-ответ на вопрос «${messages.last().content}».",

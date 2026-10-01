@@ -593,7 +593,8 @@ class WorkbenchController(
             outputs = if (settings.responseMode == ResponseMode.RAG_COMPARISON) {
                 listOf(
                     ExperimentOutputDelta(RagBranch.BASELINE.id, RagBranch.BASELINE.title, "").asOutput(),
-                    ExperimentOutputDelta(RagBranch.RAG.id, RagBranch.RAG.title, "").asOutput(),
+                    ExperimentOutputDelta(RagBranch.RAW.id, RagBranch.RAW.title, "").asOutput(),
+                    ExperimentOutputDelta(RagBranch.ENHANCED.id, RagBranch.ENHANCED.title, "").asOutput(),
                 )
             } else {
                 emptyList()
@@ -723,6 +724,9 @@ class WorkbenchController(
                             model = settings.model,
                             maxTokens = settings.maxTokens,
                             overflowPolicy = settings.contextOverflowPolicy,
+                            ragCandidateLimit = settings.ragCandidateLimit,
+                            ragResultLimit = settings.ragResultLimit,
+                            ragMinSimilarity = settings.ragMinSimilarity,
                         ),
                     )
 

@@ -92,6 +92,9 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             },
         )
         if ("[[network]]" in prompt) throw IOException("fixture network failure")
+        if ("[[rewrite-error]]" in prompt && "Перепиши исходный вопрос" in assistantProfile) {
+            throw LlmApiException("Fixture rewrite error")
+        }
         if ("[[baseline-error]]" in prompt && "предоставленный контекст" !in assistantProfile) {
             throw LlmApiException("Fixture baseline error")
         }
@@ -195,6 +198,8 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         val invariantCategory = Regex("\\\"category\\\":\\\"([^\\\"]+)\\\"")
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
+            "Перепиши исходный вопрос" in assistantProfile ->
+                prompt.replace(Regex("\\[\\[[^]]+]]"), "").trim() + " локальная техническая документация"
             "предоставленный контекст" in assistantProfile && "Контекст:" in prompt ->
                 "Production web-приложение запускается командой `./gradlew runWeb` и открывается по адресу http://127.0.0.1:8080 [S1]. Требуются JDK 21+ и Node.js 22.12+ [S1]."
             prompt == PIPELINE_FIXTURE_PROMPT && SAVE_TO_FILE_TOOL in pipelineResults -> {

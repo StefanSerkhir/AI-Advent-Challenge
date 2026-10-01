@@ -168,7 +168,7 @@ function ResponseCard({ output }: { output: Output }) {
         <Alert
           color="red"
           icon={<IconAlertCircle size={18} />}
-          title={output.id === "rag" && !output.ragDiagnostics?.applied ? "Ошибка RAG" : "Ошибка модели"}
+          title={output.ragDiagnostics ? "Ошибка RAG" : "Ошибка модели"}
         >
           {output.error}
         </Alert>
@@ -190,23 +190,37 @@ function ResponseCard({ output }: { output: Output }) {
           )}
         </div>
       )}
-      {output.ragDiagnostics?.applied && <div className="rag-diagnostics" data-testid="rag-sources">
+      {output.ragDiagnostics && <div className="rag-diagnostics" data-testid="rag-sources">
         <div className="rag-diagnostics-heading">
-          <strong>Использованные источники</strong>
-          <Badge size="xs" variant="light" color="teal">
-            top-{output.ragDiagnostics.retrievedCount} · {output.ragDiagnostics.strategy}
+          <strong>{output.ragDiagnostics.pipeline === "enhanced" ? "Улучшенный pipeline" : "Обычный pipeline"}</strong>
+          <Badge size="xs" variant="light" color={output.ragDiagnostics.applied ? "teal" : "gray"}>
+            {output.ragDiagnostics.candidateCount} → {output.ragDiagnostics.filteredCount}
           </Badge>
         </div>
         <p className="micro">
-          Embedding: <code>{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
+          Retrieval query: <code>{output.ragDiagnostics.retrievalQuery ?? "не выполнен"}</code>
         </p>
-        <ol>
-          {output.ragDiagnostics.sources.map((source) => <li key={source.chunkId}>
-            <div><strong>[S{source.rank}]</strong> <code>{source.source}</code></div>
-            <div className="micro">section: {source.section || "—"}</div>
-            <div className="micro">chunkId: <code>{source.chunkId}</code> · similarity: {source.score.toFixed(6)}</div>
-          </li>)}
-        </ol>
+        <p className="micro">
+          Кандидаты: {output.ragDiagnostics.candidateCount}/{output.ragDiagnostics.candidateLimit} → сохранено {output.ragDiagnostics.filteredCount}/{output.ragDiagnostics.resultLimit} ·{" "}
+          {output.ragDiagnostics.minSimilarity === null
+            ? "rewrite и threshold не применялись"
+            : `threshold ≥ ${output.ragDiagnostics.minSimilarity.toFixed(2)} · отброшено ${output.ragDiagnostics.discardedCount}`}
+        </p>
+        {output.ragDiagnostics.rewrite && <p className="micro">
+          Rewrite: {output.ragDiagnostics.rewrite.elapsedMillis} мс · usage {output.ragDiagnostics.rewrite.totalTokens ?? "н/д"} токенов · стоимость {cost(output.ragDiagnostics.rewrite.costUsd)}
+        </p>}
+        {output.ragDiagnostics.embeddingModel && <p className="micro">
+          Embedding: <code>{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
+        </p>}
+        <strong>Использованные источники</strong>
+        {output.ragDiagnostics.sources.length === 0 ? <p className="micro">Релевантных источников нет.</p> :
+          <ol>
+            {output.ragDiagnostics.sources.map((source) => <li key={source.chunkId}>
+              <div><strong>[S{source.rank}]</strong> <code>{source.source}</code></div>
+              <div className="micro">section: {source.section || "—"}</div>
+              <div className="micro">chunkId: <code>{source.chunkId}</code> · similarity: {source.score.toFixed(6)}</div>
+            </li>)}
+          </ol>}
       </div>}
       {long && (
         <Button

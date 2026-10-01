@@ -66,8 +66,13 @@ class WorkbenchApiTest {
             },
         ) { model, messages, _ ->
             calls += messages
+            val system = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
             CompletionResult(
-                if (messages.first().role == LlmRole.SYSTEM) "Запуск: `./gradlew runWeb` [S1]." else "Baseline answer",
+                when {
+                    "Перепиши исходный вопрос" in system -> "production web запуск runWeb"
+                    "предоставленный контекст" in system -> "Запуск: `./gradlew runWeb` [S1]."
+                    else -> "Baseline answer"
+                },
                 "stop",
                 TokenUsage(30, 10, 40),
                 model,
@@ -81,15 +86,19 @@ class WorkbenchApiTest {
             val state = c.state.value.toDto()
             val exchange = state.exchanges.single()
             assertEquals("completed", exchange.status)
-            assertEquals(listOf("БЕЗ RAG", "С RAG"), exchange.outputs.map { it.title })
+            assertEquals(listOf("БЕЗ RAG", "RAG БЕЗ ФИЛЬТРА/REWRITE", "УЛУЧШЕННЫЙ RAG"), exchange.outputs.map { it.title })
             assertNull(exchange.outputs.first().ragDiagnostics)
             val diagnostics = assertNotNull(exchange.outputs.last().ragDiagnostics)
             assertTrue(diagnostics.applied)
-            assertEquals(5, diagnostics.retrievedCount)
-            assertEquals(listOf(1, 2, 3, 4, 5), diagnostics.sources.map { it.rank })
+            assertTrue(diagnostics.queryRewritten)
+            assertEquals(10, diagnostics.candidateCount)
+            assertTrue(diagnostics.filteredCount in 1..5)
+            assertEquals((1..diagnostics.filteredCount).toList(), diagnostics.sources.map { it.rank })
             assertEquals(HistoryDto(0, 0), state.history)
             assertTrue(state.assistantMemory.layers.all { it.entries.isEmpty() })
             assertEquals(listOf(LlmRole.USER), calls.first().map { it.role })
+            assertEquals(listOf(LlmRole.SYSTEM, LlmRole.USER), calls[2].map { it.role })
+            assertEquals("Как запустить production web-приложение?", calls[2].last().content)
             assertEquals(listOf(LlmRole.SYSTEM, LlmRole.USER), calls.last().map { it.role })
             val json = api.snapshot(state)
             assertFalse(json.contains("embedding" + "\":["))
@@ -117,8 +126,10 @@ class WorkbenchApiTest {
             val exchange = c.state.value.toDto().exchanges.single()
             assertEquals("completed", exchange.status)
             assertEquals("Baseline survives", exchange.outputs.first().content)
-            assertContains(exchange.outputs.last().error.orEmpty(), "buildDocumentIndexes")
-            assertFalse(exchange.outputs.last().ragDiagnostics!!.applied)
+            assertEquals(3, exchange.outputs.size)
+            assertContains(exchange.outputs[1].error.orEmpty(), "buildDocumentIndexes")
+            assertContains(exchange.outputs[2].error.orEmpty(), "buildDocumentIndexes")
+            assertFalse(exchange.outputs[2].ragDiagnostics!!.applied)
         } finally {
             c.shutdown()
             directory.toFile().deleteRecursively()
@@ -846,16 +857,25 @@ class WorkbenchApiTest {
                 mode = "controlled", maxTokens = 123, maxWords = 12, bulletCount = 2,
                 stopSequence = "DONE", historyEnabled = false, contextStrategy = "STICKY_FACTS",
                 recentMessagesLimit = 4,
+                ragCandidateLimit = 12,
+                ragResultLimit = 6,
+                ragMinSimilarity = 0.35,
             )
             val state = client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(1, changed))) }.state()
             assertEquals(changed, state.settings)
             assertEquals("123", store.load().maxTokens)
             assertEquals("STICKY_FACTS", store.load().contextStrategy)
             assertEquals("4", store.load().recentMessagesLimit)
+            assertEquals("12", store.load().ragCandidateLimit)
+            assertEquals("6", store.load().ragResultLimit)
+            assertEquals("0.35", store.load().ragMinSimilarity)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(maxTokens = 0)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(recentMessagesLimit = 0)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(contextStrategy = "UNKNOWN")))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(stopSequence = "\n")))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(ragCandidateLimit = 51)))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(ragResultLimit = 13)))) }.status)
+            assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(ragMinSimilarity = 1.1)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/key") { localJson("{broken $key}") }.status)
             assertFalse(client.get("$base/state").bodyAsText().contains(key))
             assertEquals(HttpStatusCode.Conflict, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(1, changed))) }.status)

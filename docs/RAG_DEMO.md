@@ -1,7 +1,8 @@
-# Сценарий видео: первый RAG-сценарий
+# Сценарий видео: query rewrite и фильтрация RAG
 
-Готовый план записи на 3–5 минут. Видео в этом окружении не записывалось; ниже —
-сценарий и безопасные команды для самостоятельной записи без платного API.
+Воспроизводимый сценарий записи на 5–7 минут. В этом окружении MP4 не записан:
+доступного средства безопасной записи экрана нет. Все действия ниже используют
+fixture без реальных ключей, сети и платного API.
 
 ## Подготовка
 
@@ -10,67 +11,101 @@
 ./gradlew runWebFixture
 ```
 
-Открыть `http://127.0.0.1:18080`. Fixture создаёт временный валидный
-`structured.json`, использует deterministic fake embeddings/generation и удаляет
-каталог после остановки. Production API, сеть и реальные ключи не используются.
+Вторая команда остаётся запущенной. Откройте `http://127.0.0.1:18080`. Fixture
+создаёт временный `structured.json` из десяти chunks, использует deterministic
+fake rewrite/embeddings/generation и удаляет runtime-каталог после остановки.
+Первой командой уже создан безопасный `.llm-rag-evaluation/comparison.md`.
 
-## Тайминг и действия
+## Тайминг записи
 
-### 0:00–0:35 — новый режим
+### 0:00–0:45 — цель и границы
 
-1. Показать селектор «Режим ответа».
-2. Выбрать **«RAG: с источниками / без RAG»**.
-3. Обратить внимание: виден лимит токенов, но отсутствуют history, checkpoint,
-   branches и memory-layer controls — контекст эксперимента независимый.
+Показать режим **«RAG: с источниками / без RAG»** и проговорить три независимые
+ветки: baseline, raw RAG и enhanced RAG. Подчеркнуть, что fixture проверяет
+механику, а не production-качество.
 
-### 0:35–1:25 — один контрольный вопрос
+### 0:45–1:35 — настройки top-K и threshold
+
+В sidebar показать:
+
+- «Кандидатов до фильтрации» — `10`;
+- «Источников после фильтрации» — `5`;
+- «Минимальная similarity» — `0.20`.
+
+Кратко объяснить диапазоны `1..50`, `1..20`, условие result ≤ candidate и
+threshold `-1.0..1.0`. Порог не является универсальным: его калибруют для
+конкретных embedding model и corpus. Переключить другой режим и показать, что эти
+контролы скрыты, затем вернуться в `rag`.
+
+### 1:35–2:45 — три карточки на одном вопросе
 
 Отправить:
 
 > Как запустить production web-приложение?
 
-Во время выполнения показать две loading-карточки. После завершения сравнить
-**«БЕЗ RAG»** и **«С RAG»**: generation model одна, но baseline не получал chunks,
-а вторая ветка использовала локальный индекс.
+Во время streaming показать три заранее созданные карточки. После завершения:
 
-### 1:25–2:20 — provenance и citation
+1. **БЕЗ RAG** получил только исходный вопрос;
+2. **RAG БЕЗ ФИЛЬТРА/REWRITE** использовал исходный retrieval query и top-5;
+3. **УЛУЧШЕННЫЙ RAG** выполнил отдельный rewrite и фильтрацию.
 
-1. В RAG-ответе выделить ссылку `[S1]`.
-2. Ниже раскрыть/показать блок **«Использованные источники»**.
-3. Пройти по полям rank, относительный путь, section, `chunkId`, similarity score.
-4. Коротко отметить, что UI/API не получает vectors и полный chunk context.
+Отметить, что generation model/options одинаковы, а история, memory layers и MCP
+не участвуют.
 
-### 2:20–3:10 — dataset и report
+### 2:45–3:45 — query, counts и citations
 
-Открыть `src/main/kotlin/rag/RagEvaluation.kt`, показать ровно десять
-`RAG_EVALUATION_CASES`, затем открыть созданный fake-report
-`.llm-rag-evaluation/comparison.md` и `docs/RAG_EVALUATION.md`.
-Показать production-команду, не запуская её без осознанного решения о стоимости:
+В diagnostics raw-карточки показать исходный query и надпись «rewrite и threshold
+не применялись». В enhanced-карточке показать rewritten query, `10 → N`, threshold,
+число отброшенных результатов и rewrite elapsed/usage/cost.
+
+Раскрыть реально сохранённые sources: `[S1]…[Sn]`, rank, path, section, chunkId и
+similarity. Сопоставить citations ответа с новой нумерацией. Уточнить, что REST/SSE
+не содержит vectors или полный chunk text.
+
+### 3:45–4:30 — изоляция ошибки
+
+Отправить:
+
+> Проверь partial result [[rewrite-error]]
+
+Показать, что baseline и raw RAG остаются готовыми, а ошибка находится только в
+enhanced-карточке. Для демонстрации нулевого результата можно временно поставить
+threshold `1.00`: enhanced generation будет пропущен и появится сообщение
+«При заданном пороге релевантный контекст не найден».
+
+### 4:30–5:35 — evaluation-report
+
+Открыть `.llm-rag-evaluation/comparison.md`. Показать side-by-side таблицу raw и
+enhanced: queries, candidates → kept, threshold, expected-source/citation flags,
+usage и elapsed. Ниже показать отдельные ответы и две ручные rubric 0–2.
+
+Указать верхнюю границу production-сценария по числу вызовов: для десяти cases —
+до 40 generation calls и до 20 query embedding calls; нулевой результат фильтра
+пропускает enhanced generation. Production-команду только
+показать, но не запускать без осознанного разрешения:
 
 ```bash
 ./gradlew runRagEvaluation
 ```
 
-Объяснить, что команда делает минимум 20 generation calls и 10 embedding queries,
-а versioned report появляется в `.llm-rag-evaluation/comparison.json` и `.md`.
-Автоматические source/citation/usage flags не заменяют ручную rubric 0–2.
-
-### 3:10–4:20 — ключевые классы и тесты
+### 5:35–6:30 — код и тесты
 
 Показать по одному экрану:
 
-- `indexing/DocumentRetriever.kt` — validated load, compatible model/dimension,
-  общий cosine top-5 и стабильный tie-break;
-- `app/RagComparisonRunner.kt` — baseline first, untrusted context, citation check;
-- `app/WorkbenchController.kt` и `web/ApiDtos.kt` — SSE source of truth и
-  metadata-only diagnostics;
-- `DocumentRetrieverTest`, `RagComparisonRunnerTest`, `WorkbenchApiTest` и
-  `frontend/tests/workbench.spec.ts` — ranking, isolation, injection, errors,
-  cancellation, wire и две карточки.
+- `indexing/DocumentRetriever.kt` и `RagRelevanceFilter.kt` — top-K, threshold,
+  стабильный tie-break и rerank;
+- `app/RagComparisonRunner.kt` — три ветки, `RagQueryRewriter`, untrusted context
+  и postflight citations;
+- `rag/RagEvaluation.kt` — report v2 и миграция v1;
+- `web/ApiDtos.kt`, `frontend/src/components/Sidebar.tsx` и `Results.tsx` — явный
+  metadata-only wire contract и UI;
+- `DocumentRetrieverTest`, `RagRelevanceFilterTest`, `RagComparisonRunnerTest`,
+  `RagEvaluationTest`, `WorkbenchApiTest` и Playwright — fakes, isolation,
+  cancellation, zero result и отсутствие утечки chunks/vectors.
 
-### 4:20–4:45 — завершение
+### 6:30–6:50 — честный вывод
 
-Сформулировать границу проверки: демонстрация подтверждает весь технический flow
-`question → fake embedding → retrieval → context → fake LLM` без сети. Она не
-подтверждает качество реальной embedding/generation model. Для такого вывода нужен
-явный production evaluation и ручная оценка отчёта.
+Завершить формулировкой: fixture подтверждает полный технический flow и
+детерминированное отбрасывание кандидатов, но не подтверждает улучшение качества.
+Для вывода о качестве нужны production embeddings/generation и ручное сравнение
+correctness/completeness/groundedness.

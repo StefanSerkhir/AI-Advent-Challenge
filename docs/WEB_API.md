@@ -12,11 +12,15 @@ arguments/result уже ограничены и очищены для диагн
 без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
 Для output RAG-ветки `ragDiagnostics` имеет явную форму
-`{ applied, strategy, embeddingModel, manifestHash, retrievedCount, sources[] }`,
+`{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
+candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
+strategy, embeddingModel, manifestHash, retrievedCount, rewrite, sources[] }`,
 где source содержит только `{ rank, score, chunkId, source, title, section }`.
+`rewrite` содержит только elapsed, usage и стоимость служебного вызова.
 Query/chunk vectors и полный chunk text по wire не передаются. У baseline-
-карточки поле равно `null`; при ошибке retrieval RAG-карточка сохраняет
-`applied=false` и безопасную ошибку с командой построения индекса.
+карточки поле равно `null`; при ошибке rewrite/retrieval RAG-карточка сохраняет
+`applied=false` и безопасную ошибку; ошибки индекса дополнительно содержат команду
+его построения.
 
 `StateDto.backgroundTasks` — отдельный read-only snapshot планировщика:
 `{ available, error, schedules[] }`. Каждый элемент `schedules[]` содержит `id`,
@@ -64,6 +68,11 @@ Query/chunk vectors и полный chunk text по wire не передаютс
 | DELETE | `/api/notice` | `{}` → снимок без уведомления |
 | GET | `/api/events` | SSE `event: state`, `id: revision`, `data: StateDto`; heartbeat каждые 15 секунд |
 
+`SettingsDto` всегда содержит `ragCandidateLimit` (`1..50`), `ragResultLimit`
+(`1..20`, не больше candidate limit) и конечный `ragMinSimilarity` (`-1.0..1.0`).
+Они изменяются тем же `PUT /api/settings` с `expectedSettingsVersion`; API-ключи
+в DTO по-прежнему отсутствуют.
+
 Изменяющие запросы требуют `Content-Type: application/json` и
 `X-Workbench-Request: 1`. Host проверяется по точному списку loopback-адресов с
 настроенным портом. Origin, если есть, должен принадлежать приложению. В режиме
@@ -93,13 +102,17 @@ checkpoint/branch-команды, мутации FSM/инвариантов и �
 
 Режим `rag` (`ResponseMode.RAG_COMPARISON`) использует обычный идемпотентный
 `POST /api/operations`; отдельного retrieval endpoint нет. Внутри операции
-baseline и RAG публикуются как два `outputs[]` с ID `baseline` и `rag`. Baseline
-получает только исходный вопрос. RAG загружает локальный `structured.json`,
-создаёт query embedding и формирует отдельные system/user messages с `[S1]`–`[S5]`.
-Обе ветки используют одну model, max token limit и generation options. Они не
+baseline, raw RAG и enhanced RAG публикуются как три `outputs[]` с ID `baseline`,
+`rag` и `rag_enhanced`. Baseline получает только исходный вопрос. Raw RAG ищет по
+исходному вопросу без threshold; enhanced сначала выполняет request-local rewrite,
+затем расширенный поиск, фильтр `score >= ragMinSimilarity`, top-K и новую
+нумерацию citations. Финальные ветки используют одну model, max token limit и
+generation options. Rewrite получает только исходный вопрос и максимум 128 output
+tokens. Все ветки не
 пишутся в историю или memory layers и не получают MCP tools. Ошибка одной ветки
 остаётся в `outputs[].error`, не удаляя успешную карточку; exchange завершается
-после попытки обеих веток. Cancellation останавливает текущий этап кооперативно.
+после попытки всех трёх веток. При пустом результате фильтра enhanced generation
+не запускается. Cancellation останавливает текущий этап кооперативно.
 
 `requestId` — новый UUID для каждого намеренного запуска. Повтор **той же** команды
 с тем же ID возвращает исходный `operationId`, даже после завершения или отмены.

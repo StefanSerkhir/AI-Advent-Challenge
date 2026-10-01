@@ -1,5 +1,15 @@
 import {useEffect, useState} from "react";
-import {Badge, Button, Divider, NativeSelect, PasswordInput, Switch, TextInput, Tooltip,} from "@mantine/core";
+import {
+    Badge,
+    Button,
+    Divider,
+    NativeSelect,
+    NumberInput,
+    PasswordInput,
+    Switch,
+    TextInput,
+    Tooltip,
+} from "@mantine/core";
 import {
     IconAdjustments,
     IconArrowRight,
@@ -45,6 +55,75 @@ function NumberSetting({
       }}
     />
   );
+}
+
+function BoundedNumberSetting({
+  label,
+  value,
+  min,
+  max,
+  disabled,
+  onSave,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  onSave: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<number | string>(value);
+  useEffect(() => setDraft(value), [value]);
+  const parsed = typeof draft === "number" ? draft : Number(draft);
+  const valid = Number.isInteger(parsed) && parsed >= min && parsed <= max;
+  return <NumberInput
+    label={label}
+    value={draft}
+    min={min}
+    max={max}
+    step={1}
+    allowDecimal={false}
+    allowNegative={false}
+    clampBehavior="strict"
+    disabled={disabled}
+    error={!valid ? `Целое число от ${min} до ${max}` : undefined}
+    onChange={setDraft}
+    onBlur={() => {
+      if (valid && parsed !== value) onSave(parsed);
+      else setDraft(value);
+    }}
+  />;
+}
+
+function SimilaritySetting({
+  value,
+  disabled,
+  onSave,
+}: {
+  value: number;
+  disabled: boolean;
+  onSave: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<number | string>(value);
+  useEffect(() => setDraft(value), [value]);
+  const parsed = typeof draft === "number" ? draft : Number(draft);
+  const valid = Number.isFinite(parsed) && parsed >= -1 && parsed <= 1;
+  return <NumberInput
+    label="Минимальная similarity"
+    value={draft}
+    min={-1}
+    max={1}
+    step={0.05}
+    decimalScale={2}
+    clampBehavior="strict"
+    disabled={disabled}
+    error={!valid ? "Число от -1.0 до 1.0" : undefined}
+    onChange={setDraft}
+    onBlur={() => {
+      if (valid && parsed !== value) onSave(parsed);
+      else setDraft(value);
+    }}
+  />;
 }
 export function Sidebar({ workbench: w }: { workbench: Workbench }) {
   const s = w.state!;
@@ -136,6 +215,31 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
             onSave={(value) => void w.settings({ maxTokens: value })}
           />
         )}
+        {mode.id === "rag" && <>
+          <div className="settings-pair" data-testid="rag-settings">
+            <BoundedNumberSetting
+              label="Кандидатов до фильтрации"
+              value={s.settings.ragCandidateLimit}
+              min={s.settings.ragResultLimit}
+              max={50}
+              disabled={locked}
+              onSave={(value) => void w.settings({ ragCandidateLimit: value })}
+            />
+            <BoundedNumberSetting
+              label="Источников после фильтрации"
+              value={s.settings.ragResultLimit}
+              min={1}
+              max={Math.min(20, s.settings.ragCandidateLimit)}
+              disabled={locked}
+              onSave={(value) => void w.settings({ ragResultLimit: value })}
+            />
+          </div>
+          <SimilaritySetting
+            value={s.settings.ragMinSimilarity}
+            disabled={locked}
+            onSave={(value) => void w.settings({ ragMinSimilarity: value })}
+          />
+        </>}
         {mode.usesTextConstraints && (
           <>
             <div className="settings-pair">

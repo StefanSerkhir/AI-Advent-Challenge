@@ -7,6 +7,11 @@ import org.example.llm.LlmModels
 import org.example.tokens.ContextOverflowPolicy
 
 const val DEFAULT_STOP_SEQUENCE = "<END_OF_RESPONSE>"
+const val DEFAULT_RAG_CANDIDATE_LIMIT = 10
+const val DEFAULT_RAG_RESULT_LIMIT = 5
+const val DEFAULT_RAG_MIN_SIMILARITY = 0.20
+const val MAX_RAG_CANDIDATE_LIMIT = 50
+const val MAX_RAG_RESULT_LIMIT = 20
 
 enum class ResponseMode(val cliValue: String) {
     COMPARE("compare"),
@@ -45,12 +50,18 @@ data class AppSettings(
     var contextOverflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
     var contextStrategy: ContextStrategy = ContextStrategy.SLIDING_WINDOW,
     var recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
+    var ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
+    var ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
+    var ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
 ) {
     init {
         require(maxTokens > 0)
         require(maxWords > 0)
         require(bulletCount > 0)
         require(recentMessagesLimit > 0)
+        require(ragCandidateLimit in 1..MAX_RAG_CANDIDATE_LIMIT)
+        require(ragResultLimit in 1..MAX_RAG_RESULT_LIMIT && ragResultLimit <= ragCandidateLimit)
+        require(ragMinSimilarity.isFinite() && ragMinSimilarity in -1.0..1.0)
         require(model.isNotBlank())
     }
 }

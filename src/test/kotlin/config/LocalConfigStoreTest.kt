@@ -45,6 +45,9 @@ class LocalConfigStoreTest {
                     historyEnabled = false,
                     contextStrategy = ContextStrategy.STICKY_FACTS,
                     recentMessagesLimit = 7,
+                    ragCandidateLimit = 12,
+                    ragResultLimit = 6,
+                    ragMinSimilarity = 0.35,
                 ),
                 mapOf(LlmKind.DEEPSEEK to "dummy-key", LlmKind.OPENAI to "other-dummy-key"),
             )
@@ -61,6 +64,9 @@ class LocalConfigStoreTest {
             assertEquals("off", reloaded.stopSequence)
             assertEquals("STICKY_FACTS", reloaded.contextStrategy)
             assertEquals("7", reloaded.recentMessagesLimit)
+            assertEquals("12", reloaded.ragCandidateLimit)
+            assertEquals("6", reloaded.ragResultLimit)
+            assertEquals("0.35", reloaded.ragMinSimilarity)
             assertEquals("other-dummy-key", reloaded.openAiApiKey)
         } finally {
             directory.toFile().deleteRecursively()
@@ -78,6 +84,9 @@ class LocalConfigStoreTest {
             history_enabled=perhaps
             context_strategy=unknown
             recent_messages_limit=0
+            rag_candidate_limit=100
+            rag_result_limit=0
+            rag_min_similarity=NaN
             """.trimIndent(),
         )
 
@@ -93,10 +102,16 @@ class LocalConfigStoreTest {
             assertEquals(true, bootstrap.settings.historyEnabled)
             assertEquals(ContextStrategy.SLIDING_WINDOW, bootstrap.settings.contextStrategy)
             assertEquals(10, bootstrap.settings.recentMessagesLimit)
+            assertEquals(10, bootstrap.settings.ragCandidateLimit)
+            assertEquals(5, bootstrap.settings.ragResultLimit)
+            assertEquals(0.20, bootstrap.settings.ragMinSimilarity)
             assertContains(bootstrap.warning.orEmpty(), "max_tokens")
             assertContains(bootstrap.warning.orEmpty(), "history_enabled")
             assertContains(bootstrap.warning.orEmpty(), "context_strategy")
             assertContains(bootstrap.warning.orEmpty(), "recent_messages_limit")
+            assertContains(bootstrap.warning.orEmpty(), "rag_candidate_limit")
+            assertContains(bootstrap.warning.orEmpty(), "rag_result_limit")
+            assertContains(bootstrap.warning.orEmpty(), "rag_min_similarity")
             assertNull(config.apiKey)
 
             val invalidProvider = AppBootstrap.from(
@@ -106,6 +121,13 @@ class LocalConfigStoreTest {
             assertEquals(ResponseMode.COMPARE, invalidProvider.settings.responseMode)
             assertContains(invalidProvider.warning.orEmpty(), "провайдер")
             assertContains(invalidProvider.warning.orEmpty(), "режим")
+
+            val inconsistentRagLimits = AppBootstrap.from(
+                LocalConfig(ragCandidateLimit = "3", ragResultLimit = "10"),
+            )
+            assertEquals(3, inconsistentRagLimits.settings.ragCandidateLimit)
+            assertEquals(3, inconsistentRagLimits.settings.ragResultLimit)
+            assertContains(inconsistentRagLimits.warning.orEmpty(), "превышает rag_candidate_limit")
         } finally {
             directory.toFile().deleteRecursively()
         }

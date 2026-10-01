@@ -51,12 +51,6 @@ class DocumentRetriever(
                 "RAG требует structure-aware индекс. Постройте его командой: $DOCUMENT_INDEX_BUILD_COMMAND",
             )
         }
-        if (index.chunks.size < limit) {
-            throw DocumentRetrievalException(
-                "RAG-индекс содержит ${index.chunks.size} chunks и не может вернуть top-$limit. " +
-                    "Перестройте индекс командой: $DOCUMENT_INDEX_BUILD_COMMAND",
-            )
-        }
         currentCoroutineContext().ensureActive()
 
         val embeddingClient = try {

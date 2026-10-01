@@ -1,81 +1,93 @@
-# RAG evaluation
+# RAG evaluation: raw против enhanced
 
-Первый RAG-сценарий сравнивает два независимых вызова одной выбранной generation
-model: исходный вопрос без дополнительного контекста и тот же вопрос с top-5 из
-`.llm-document-index/structured.json`. Одинаковы model, max output и generation
-options; отличается только RAG system/user context. История, memory layers и MCP
-не участвуют и не изменяются.
+Evaluation сравнивает три независимые карточки одной выбранной generation model:
+
+1. `baseline` — исходный вопрос без индекса;
+2. `rag` — retrieval по исходному вопросу, первые `rag_result_limit` результатов,
+   без rewrite и threshold;
+3. `rag_enhanced` — отдельный query rewrite, до `rag_candidate_limit` кандидатов,
+   фильтр `score >= rag_min_similarity`, итоговый top `rag_result_limit` и новая
+   нумерация `[S1]…[Sn]`.
+
+Финальные ответы используют одинаковые generation options. Rewrite получает
+только исходный вопрос, ограничен 128 output tokens и не получает историю,
+память, MCP или retrieved chunks. Его usage, elapsed time и стоимость учитываются
+в enhanced-диагностике и общих метриках ветки.
 
 ## Контрольный набор
 
-Канонический dataset находится в `src/main/kotlin/rag/RagEvaluation.kt` как
-`RAG_EVALUATION_CASES`. Он содержит ровно десять стабильных cases:
+Канонический `RAG_EVALUATION_CASES` находится в
+`src/main/kotlin/rag/RagEvaluation.kt` и содержит десять стабильных вопросов:
 
-1. production web start — `README.md`;
-2. deterministic web fixture — `README.md`;
-3. production entry point `org.example.web.WebMainKt` — `README.md`, `docs/ARCHITECTURE.md`;
-4. порядок `MEMORY_LAYERS` и приоритеты — `docs/ARCHITECTURE.md`;
-5. доступность checkpoint/branches только для `BRANCHING` — `docs/ARCHITECTURE.md`, `docs/WEB_API.md`;
-6. ограничения MCP: OpenAI + unrestricted, `tools/list`, максимум три call, transient messages — `README.md`, `docs/ARCHITECTURE.md`;
-7. corpus allowlist и исключения — `docs/DOCUMENT_INDEXING.md`;
-8. fixture индексации против production — `docs/DOCUMENT_INDEXING.md`;
-9. `requestId`/`operationId`/`duplicate_id` — `docs/WEB_API.md`;
-10. безопасность `save_to_file` — `README.md`, `docs/ARCHITECTURE.md`.
+1. production web start;
+2. deterministic web fixture;
+3. production entry point;
+4. порядок `MEMORY_LAYERS`;
+5. доступность checkpoint/branches;
+6. ограничения MCP;
+7. allowlist corpus;
+8. fixture индексации против production;
+9. идемпотентность `requestId`;
+10. безопасность `save_to_file`.
 
-Формулировки expectations сверены с текущим кодом и документацией. Предложенные
-пути и факты остаются актуальными; корректировать dataset из-за противоречий не
-потребовалось.
-
-## Production-запуск
+## Production-запуск и стоимость
 
 Сначала явно постройте production structure-aware индекс. Обе команды могут быть
 платными и не запускаются автоматическими тестами или Codex без отдельного прямого
-подтверждения пользователя:
+разрешения:
 
 ```bash
 ./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
 ./gradlew runRagEvaluation
 ```
 
-Второй вызов использует generation provider/model из `.env`, OpenAI key для query
-embeddings и выполняет минимум 20 generation calls плюс 10 embedding queries.
-Необязательные параметры:
+Для 10 cases evaluation выполняет до 40 generation calls: 10 baseline, 10 raw,
+10 rewrite и до 10 enhanced. Enhanced generation пропускается при нуле sources.
+Retrieval добавляет до 20 query embedding calls: по исходному и переписанному
+запросу для каждого успешно дошедшего до retrieval case. Значения `rag_candidate_limit`,
+`rag_result_limit` и `rag_min_similarity` читаются из локальных настроек; модель и
+max tokens можно переопределить CLI-параметрами:
 
 ```bash
 ./gradlew runRagEvaluation --args="--root . --output .llm-rag-evaluation --model gpt-4.1-mini --max-tokens 600"
 ```
 
-Результат записывается атомарно и исключён из Git:
+## Report v2
 
-- `.llm-rag-evaluation/comparison.json` — versioned machine-readable report v1;
-- `.llm-rag-evaluation/comparison.md` — читаемое сравнение.
+Результат атомарно записывается в исключённый из Git каталог:
 
-## Что фиксирует report
+- `.llm-rag-evaluation/comparison.json` — machine-readable format v2;
+- `.llm-rag-evaluation/comparison.md` — читаемое side-by-side сравнение.
 
-Для каждого вопроса сохраняются expectation и expected sources, baseline/RAG
-answers, top-5 metadata, признак найденного expected source, проверка допустимости
-citations, фактический provider usage и elapsed time обеих веток. Vectors и полный
-retrieved context в report не попадают.
+Для raw и enhanced отдельно сохраняются ответ/ошибка, usage, стоимость и elapsed,
+retrieval query, candidate/result limits, threshold, counts, metadata реально
+использованных источников, expected-source flag и проверка citations. Vectors,
+полные chunk texts и rewrite prompt в report не записываются. Старый v1 читается
+с явной миграцией: прежняя RAG-ветка становится raw, а enhanced помечается как
+отсутствующая в исходном отчёте; следующее сохранение создаёт v2.
 
-Автоматика честно проверяет только наблюдаемые retrieval/source/citation/usage
-свойства. Она не использует keyword matching или fake embeddings как оценку
-содержательного качества. `manualAssessment` содержит три nullable поля с
-допустимым диапазоном `0..2`:
+Markdown содержит общую raw/enhanced таблицу и отдельные ответы/источники. При
+нуле результатов enhanced generation пропускается, но report сохраняет rewrite
+usage, candidate count, threshold и `filteredCount=0`.
 
-- `correctness`: фактическая правильность;
-- `completeness`: покрытие обязательного expectation;
-- `groundedness`: опора утверждений на показанные sources/citations.
+Автоматика оценивает только наблюдаемые retrieval/source/citation/usage свойства.
+Она не делает keyword-based вывод о содержательном качестве. Для raw и enhanced
+есть отдельные nullable поля ручной оценки `0..2`:
 
-Сразу после запуска они имеют значение `null`/`pending`; эксперт заполняет их и
-итоговый comment вручную. Если вместо production embeddings использовался fixture,
-такой отчёт доказывает только механику pipeline, а не реальное качество retrieval.
+- `correctness` — фактическая правильность;
+- `completeness` — покрытие expectation;
+- `groundedness` — опора на показанные sources/citations.
+
+Similarity threshold не универсален: одинаковое значение по-разному ведёт себя
+на разных embedding models и corpus. Улучшение качества можно подтвердить только
+production evaluation с ручной оценкой, а не фактом применения rewrite/фильтра.
 
 ## Безопасные проверки
 
-`RagEvaluationTest` прогоняет все десять cases с deterministic fake generation и
-query embeddings во временном каталоге, проверяет JSON/Markdown round-trip и не
-использует сеть или `.env`. Browser fixture отдельно демонстрирует произвольный
-вопрос, streaming, две карточки, `[S1]`, top-5 и partial result.
+`RagEvaluationTest` использует deterministic fake generation/query embeddings,
+проверяет десять cases, round-trip v2 и чтение v1. Browser fixture показывает три
+карточки, rewrite query, `10 → N`, threshold, citations и изолированный сбой
+enhanced-ветки.
 
 Для ручного просмотра структуры отчёта без сети и стоимости:
 
@@ -83,5 +95,5 @@ query embeddings во временном каталоге, проверяет JS
 ./gradlew runRagEvaluationFixture
 ```
 
-Команда test source set создаёт те же два файла в исключённом из Git
-`.llm-rag-evaluation/` и явно помечает их как проверку механики на fake clients.
+Fake-report доказывает механику pipeline и формата. Он не доказывает качество
+production embeddings, rewrite или финальных ответов.

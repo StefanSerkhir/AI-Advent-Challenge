@@ -100,15 +100,23 @@ JSON и Markdown содержат число документов/chunks, min/av
 
 ## Retrieval для RAG
 
-Web-режим `rag` не строит второй индекс и не реализует отдельную similarity-
-логику. `DocumentRetriever` загружает `.llm-document-index/structured.json`
+Web-режим `rag` не строит второй индекс. `DocumentRetriever` загружает
+`.llm-document-index/structured.json`
 существующим `JsonDocumentIndexStore`, затем:
 
 1. проверяет versioned документ целиком и требует strategy `structured`;
 2. создаёт `EmbeddingClient` с точными `provider/model` из index descriptor;
-3. получает один embedding исходного вопроса и проверяет его dimension;
+3. получает один embedding переданного retrieval query и проверяет его dimension;
 4. вызывает общий `search`, использующий `cosineSimilarity`;
-5. возвращает top-5 без merge: score descending, стабильный tie-break по `chunkId`.
+5. возвращает до переданного limit без merge: score descending, стабильный
+   tie-break по `chunkId`; меньший индекс корректно даёт меньше результатов.
+
+Raw RAG передаёт исходный вопрос и limit `rag_result_limit`. Enhanced RAG сначала
+получает request-local rewrite исходного вопроса, запрашивает
+`rag_candidate_limit`, затем чистая функция, не имеющая доступа к index store,
+оставляет `score >= rag_min_similarity`, снова сортирует score/`chunkId`, берёт
+`rag_result_limit` и перенумеровывает rank/citations. Универсально правильного
+threshold нет: его нужно калибровать для конкретных corpus и embedding model.
 
 Полный текст каждого chunk используется только при построении request-local RAG
 prompt. REST/SSE diagnostic содержит rank, score, `chunkId`, относительный source,
@@ -120,7 +128,9 @@ client, RAG LLM-вызов не начинается и пользователь
 ./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
 ```
 
-Baseline уже может быть готов к этому моменту и остаётся в первой карточке.
+Baseline и ранее завершённая RAG-ветка уже могут быть готовы к этому моменту и
+остаются в своих карточках. Если enhanced-фильтр вернул ноль chunks, generation
+не вызывается и диагностика фиксирует candidate count, threshold и `filtered=0`.
 
 ## Набор из 10 RAG-вопросов и production evaluation
 
@@ -137,15 +147,17 @@ Production evaluation запускается только явно:
 ./gradlew runRagEvaluation
 ```
 
-Команда использует существующие `.env` и `structured.json`, выполняет минимум
-20 generation calls и 10 embedding queries и атомарно сохраняет:
+Команда использует существующие `.env` и `structured.json`, выполняет до 40
+generation calls (baseline, raw, rewrite и, если фильтр не пуст, enhanced для
+каждого case) и до 20 query embedding calls и атомарно сохраняет:
 
-- `.llm-rag-evaluation/comparison.json` формата v1;
+- `.llm-rag-evaluation/comparison.json` формата v2 (v1 читается с миграцией);
 - `.llm-rag-evaluation/comparison.md`.
 
-Для каждого case сохраняются expectation, expected sources, оба ответа, top-5,
-source-found/citation-valid flags, usage и elapsed time. Автоматически считаются
+Для каждого case сохраняются expectation, expected sources, три ответа, raw и
+enhanced queries/counts/filter params/source metadata, source-found/citation-valid
+flags, usage и elapsed time. Автоматически считаются
 только проверяемые retrieval/source/citation/usage metrics. Поля ручной оценки
-correctness/completeness/groundedness принимают `0..2` и остаются `pending`, пока
+correctness/completeness/groundedness отдельно для raw и enhanced принимают `0..2` и остаются `pending`, пока
 эксперт не заполнит их; fake embeddings не выдаются за фактическое качество.
 Подробнее см. [RAG_EVALUATION.md](RAG_EVALUATION.md).

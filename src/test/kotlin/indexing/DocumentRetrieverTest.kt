@@ -37,6 +37,21 @@ class DocumentRetrieverTest {
     }
 
     @Test
+    fun `retriever returns all available chunks when requested limit is larger than index`() = runBlocking {
+        val directory = Files.createTempDirectory("document-retriever-small-index")
+        try {
+            val file = directory.resolve("structured.json")
+            JsonDocumentIndexStore(file).save(testIndex((1..3).map { "chunk-$it" to listOf(1f, it / 10f) }))
+            val result = DocumentRetriever(JsonDocumentIndexStore(file)) { embeddingClient() }
+                .retrieve("question", limit = 10)
+            assertEquals(3, result.chunks.size)
+            assertEquals(listOf(1, 2, 3), result.chunks.map { it.rank })
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `retriever rejects missing corrupt incompatible and wrong dimension indexes safely`() = runBlocking {
         val directory = Files.createTempDirectory("document-retriever-errors")
         try {

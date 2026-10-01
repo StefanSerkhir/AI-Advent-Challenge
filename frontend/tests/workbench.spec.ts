@@ -180,41 +180,64 @@ test("settings are shown only when the selected mode uses them", async ({
   await expect(page.getByText("Контекст", { exact: true })).toHaveCount(0);
 });
 
-test("RAG mode shows independent answers, top five sources and preserves baseline on RAG error", async ({page}) => {
+test("RAG mode shows raw and enhanced pipelines and preserves completed branches on enhanced error", async ({page}) => {
   await setMode(page, "rag");
   await expect(page.getByLabel("Максимум токенов")).toBeVisible();
+  await expect(page.getByLabel("Кандидатов до фильтрации")).toHaveValue("10");
+  await expect(page.getByLabel("Источников после фильтрации")).toHaveValue("5");
+  await expect(page.getByLabel("Минимальная similarity")).toHaveValue("0.2");
   await expect(page.getByText("Контекст", {exact: true})).toHaveCount(0);
   await expect(page.getByTestId("memory-layers")).toHaveCount(0);
   await expect(page.getByTestId("branch-controls")).toHaveCount(0);
 
   await send(page, "Как запустить production web-приложение?");
+  await expect(page.getByLabel("Кандидатов до фильтрации")).toBeDisabled();
+  await expect(page.getByLabel("Источников после фильтрации")).toBeDisabled();
+  await expect(page.getByLabel("Минимальная similarity")).toBeDisabled();
   await done(page);
   const exchange = page.getByTestId("exchange").last();
   const cards = exchange.getByTestId("response-card");
-  await expect(cards).toHaveCount(2);
+  await expect(cards).toHaveCount(3);
   await expect(cards.nth(0)).toContainText("БЕЗ RAG");
-  await expect(cards.nth(1)).toContainText("С RAG");
+  await expect(cards.nth(1)).toContainText("RAG БЕЗ ФИЛЬТРА/REWRITE");
+  await expect(cards.nth(2)).toContainText("УЛУЧШЕННЫЙ RAG");
   await expect(cards.nth(1)).toContainText("[S1]");
-  const sources = cards.nth(1).getByTestId("rag-sources");
-  await expect(sources).toContainText("Использованные источники");
-  await expect(sources.locator("li")).toHaveCount(5);
-  await expect(sources).toContainText("README.md");
-  await expect(sources).toContainText("similarity:");
+  await expect(cards.nth(2)).toContainText("[S1]");
+  const rawSources = cards.nth(1).getByTestId("rag-sources");
+  await expect(rawSources).toContainText("Обычный pipeline");
+  await expect(rawSources).toContainText("rewrite и threshold не применялись");
+  await expect(rawSources.locator("li")).toHaveCount(5);
+  const enhancedSources = cards.nth(2).getByTestId("rag-sources");
+  await expect(enhancedSources).toContainText("Улучшенный pipeline");
+  await expect(enhancedSources).toContainText("10 →");
+  await expect(enhancedSources).toContainText("threshold ≥ 0.20");
+  await expect(enhancedSources).toContainText("Rewrite:");
+  await expect(enhancedSources).toContainText("similarity:");
 
   const state = await (await page.request.get("/api/state")).json() as State;
-  const diagnostics = state.exchanges.at(-1)!.outputs[1].ragDiagnostics!;
+  const diagnostics = state.exchanges.at(-1)!.outputs[2].ragDiagnostics!;
   expect(diagnostics.applied).toBe(true);
-  expect(diagnostics.retrievedCount).toBe(5);
-  expect(diagnostics.sources.map((source) => source.rank)).toEqual([1, 2, 3, 4, 5]);
+  expect(diagnostics.queryRewritten).toBe(true);
+  expect(diagnostics.candidateCount).toBe(10);
+  expect(diagnostics.filteredCount).toBeGreaterThan(0);
+  expect(diagnostics.filteredCount).toBeLessThan(diagnostics.candidateCount);
+  expect(diagnostics.sources.map((source) => source.rank)).toEqual(
+    Array.from({length: diagnostics.filteredCount}, (_, index) => index + 1),
+  );
   expect(JSON.stringify(diagnostics)).not.toContain("content:");
   expect(JSON.stringify(diagnostics)).not.toContain("\"embedding\":[");
 
-  await send(page, "Проверь partial result [[rag-error]]");
+  await send(page, "Проверь partial result [[rewrite-error]]");
   await done(page);
   const partial = page.getByTestId("exchange").last();
-  await expect(partial.getByTestId("response-card")).toHaveCount(2);
+  await expect(partial.getByTestId("response-card")).toHaveCount(3);
   await expect(partial.getByTestId("response-card").nth(0)).not.toContainText("Ошибка модели");
-  await expect(partial.getByTestId("response-card").nth(1)).toContainText("Fixture RAG error");
+  await expect(partial.getByTestId("response-card").nth(1)).toContainText("[S1]");
+  await expect(partial.getByTestId("response-card").nth(2)).toContainText("Fixture rewrite error");
+
+  await setMode(page, "compare");
+  await expect(page.getByLabel("Кандидатов до фильтрации")).toHaveCount(0);
+  await expect(page.getByLabel("Минимальная similarity")).toHaveCount(0);
 });
 
 test("simple agent calls tracker through MCP and shows diagnostics", async ({page}) => {
@@ -660,7 +683,7 @@ test("all eight modes, demos, history, settings, keys and keyboard shortcuts", a
     ["reasoning", 6],
     ["temperature", 4],
     ["models", 4],
-    ["rag", 2],
+    ["rag", 3],
   ] as const) {
     await setMode(page, mode);
     if (mode === "models") {
