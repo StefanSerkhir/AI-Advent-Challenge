@@ -158,6 +158,13 @@ export interface RagSourceDiagnostic {
   title: string;
   section: string;
 }
+export interface RagEvidenceSource {
+  rank: number;
+  source: string;
+  section: string;
+  chunkId: string;
+  quotes: string[];
+}
 export interface RagDiagnostics {
   applied: boolean;
   pipeline: "raw" | "enhanced";
@@ -181,6 +188,14 @@ export interface RagDiagnostics {
     costUsd: number | null;
   } | null;
   sources: RagSourceDiagnostic[];
+  abstained: boolean;
+  abstentionReason: "below_threshold" | "no_retrieval_results" | null;
+  evidence: {
+    status: "not_checked" | "verified" | "not_applicable";
+    citationCount: number;
+    quoteCount: number;
+    sources: RagEvidenceSource[];
+  };
 }
 export interface McpCallDiagnostic {
   serverId: string;

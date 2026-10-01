@@ -28,7 +28,7 @@ class RagComparisonRunnerTest {
                             "fixture-model",
                         )
                         "предоставленный контекст" in system -> CompletionResult(
-                            "Ответ опирается на контекст [S1].",
+                            groundedRagFixtureAnswer(messages.last().content),
                             "stop",
                             TokenUsage(20, 8, 28),
                             "fixture-model",
@@ -97,7 +97,10 @@ class RagComparisonRunnerTest {
                 override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
                     generationCalls++
                     val rag = messages.first().role == LlmRole.SYSTEM
-                    return CompletionResult(if (rag) "raw [S1]" else "baseline", "stop", TokenUsage(2, 1, 3), "model")
+                    return CompletionResult(
+                        if (rag) groundedRagFixtureAnswer(messages.last().content) else "baseline",
+                        "stop", TokenUsage(2, 1, 3), "model",
+                    )
                 }
             }
             val report = RagComparisonRunner(
@@ -119,7 +122,11 @@ class RagComparisonRunnerTest {
 
             assertEquals(2, generationCalls)
             val enhanced = report.branches.single { it.branch == RagBranch.ENHANCED }
-            assertEquals(NO_RELEVANT_RAG_CONTEXT_MESSAGE, enhanced.error)
+            assertNull(enhanced.error)
+            assertEquals(NO_RELEVANT_RAG_CONTEXT_MESSAGE, enhanced.completion?.content)
+            assertTrue(enhanced.diagnostics?.abstained == true)
+            assertEquals("below_threshold", enhanced.diagnostics?.abstentionReason)
+            assertEquals(RagEvidenceStatus.NOT_APPLICABLE, enhanced.diagnostics?.evidence?.status)
             assertEquals(0, enhanced.diagnostics?.filteredCount)
             assertTrue(enhanced.diagnostics?.sources.orEmpty().isEmpty())
         } finally {
@@ -135,7 +142,7 @@ class RagComparisonRunnerTest {
             val normalClient = object : LlmClient {
                 override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) =
                     CompletionResult(
-                        if (messages.first().role == LlmRole.SYSTEM) "grounded [S1]" else "baseline",
+                        if (messages.first().role == LlmRole.SYSTEM) groundedRagFixtureAnswer(messages.last().content) else "baseline",
                         "stop", TokenUsage(3, 2, 5), "model",
                     )
             }
@@ -160,7 +167,11 @@ class RagComparisonRunnerTest {
                     }
                     if ("предоставленный контекст" in system) ragGeneration++
                     return CompletionResult(
-                        when (ragGeneration) { 0 -> "baseline"; 1 -> "raw [S1]"; else -> "enhanced [S99]" },
+                        when (ragGeneration) {
+                            0 -> "baseline"
+                            1 -> groundedRagFixtureAnswer(messages.last().content)
+                            else -> "Ответ\nenhanced [S99]\n\nЦитаты\n- [S99] «fabricated»"
+                        },
                         "stop", TokenUsage(3, 2, 5), "model",
                     )
                 }
@@ -189,6 +200,45 @@ class RagComparisonRunnerTest {
         yield()
         job.cancel()
         assertFailsWith<CancellationException> { job.await() }
+    }
+
+    @Test
+    fun `postflight accepts only cited sources with exact request-local quotes`() {
+        val chunks = listOf(
+            RetrievedDocumentChunk(1, 0.9, "chunk-1", "docs/one.md", "One", "Run", "Запуск выполняется командой ./gradlew runWeb. Затем откройте браузер."),
+            RetrievedDocumentChunk(2, 0.8, "chunk-2", "docs/two.md", "Two", "Requirements", "Для запуска требуется JDK 21 и Node.js 22.12."),
+        )
+        val validated = validateRagCitations(
+            """
+                Ответ
+                Запустите приложение через Gradle [S1]. Нужен JDK 21 [S2].
+
+                Цитаты
+                - [S1] «Запуск выполняется командой ./gradlew runWeb.»
+                - [S2] «Для запуска требуется JDK 21 и Node.js 22.12.»
+            """.trimIndent(),
+            chunks,
+        )
+        assertEquals("Запустите приложение через Gradle [S1]. Нужен JDK 21 [S2].", validated.answer)
+        assertEquals(RagEvidenceStatus.VERIFIED, validated.evidence.status)
+        assertEquals(listOf("docs/one.md", "docs/two.md"), validated.evidence.sources.map { it.source })
+        assertEquals(listOf("chunk-1", "chunk-2"), validated.evidence.sources.map { it.chunkId })
+
+        assertFailsWith<IllegalArgumentException> {
+            validateRagCitations("Ответ\nОтвет без ссылки.\n\nЦитаты\n- [S1] «Запуск выполняется командой ./gradlew runWeb.»", chunks)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateRagCitations("Ответ\nОтвет [S99].\n\nЦитаты\n- [S99] «Выдумка»", chunks)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateRagCitations("Ответ\nОтвет [S1].\n\nЦитаты\n- [S1] «Запуск выполняется другой командой.»", chunks)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateRagCitations(
+                "Ответ\nОтвет [S1] и [S2].\n\nЦитаты\n- [S1] «Запуск выполняется командой ./gradlew runWeb.»",
+                chunks,
+            )
+        }
     }
 
     @Test

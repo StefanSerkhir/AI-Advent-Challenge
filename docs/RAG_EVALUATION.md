@@ -52,31 +52,34 @@ max tokens можно переопределить CLI-параметрами:
 ./gradlew runRagEvaluation --args="--root . --output .llm-rag-evaluation --model gpt-4.1-mini --max-tokens 600"
 ```
 
-## Report v2
+## Report v3
 
 Результат атомарно записывается в исключённый из Git каталог:
 
-- `.llm-rag-evaluation/comparison.json` — machine-readable format v2;
+- `.llm-rag-evaluation/comparison.json` — machine-readable format v3;
 - `.llm-rag-evaluation/comparison.md` — читаемое side-by-side сравнение.
 
 Для raw и enhanced отдельно сохраняются ответ/ошибка, usage, стоимость и elapsed,
-retrieval query, candidate/result limits, threshold, counts, metadata реально
-использованных источников, expected-source flag и проверка citations. Vectors,
-полные chunk texts и rewrite prompt в report не записываются. Старый v1 читается
-с явной миграцией: прежняя RAG-ветка становится raw, а enhanced помечается как
-отсутствующая в исходном отчёте; следующее сохранение создаёт v2.
+retrieval query, candidate/result limits, threshold, counts, retrieved metadata,
+проверенные короткие цитаты и отдельные `sourcesPresent`, `quotesPresent`,
+`citationsValid`, `quotesExact`, `expectedSourceFound`, abstention fields. Vectors,
+полные chunk texts и rewrite prompt в report не записываются. Старые v1/v2
+читаются с явной миграцией: v1 превращает прежнюю RAG-ветку в raw; v1/v2 не
+получают выдуманных historical quotes, поэтому quote flags остаются false.
+Следующее сохранение создаёт v3.
 
 Markdown содержит общую raw/enhanced таблицу и отдельные ответы/источники. При
 нуле результатов enhanced generation пропускается, но report сохраняет rewrite
 usage, candidate count, threshold и `filteredCount=0`.
 
-Автоматика оценивает только наблюдаемые retrieval/source/citation/usage свойства.
+Автоматика оценивает только наблюдаемые source/quote/citation/exact-substring/usage свойства.
 Она не делает keyword-based вывод о содержательном качестве. Для raw и enhanced
 есть отдельные nullable поля ручной оценки `0..2`:
 
 - `correctness` — фактическая правильность;
 - `completeness` — покрытие expectation;
 - `groundedness` — опора на показанные sources/citations.
+- `support` — подтверждается ли смысл ответа приведёнными цитатами.
 
 Similarity threshold не универсален: одинаковое значение по-разному ведёт себя
 на разных embedding models и corpus. Улучшение качества можно подтвердить только
@@ -85,9 +88,9 @@ production evaluation с ручной оценкой, а не фактом пр�
 ## Безопасные проверки
 
 `RagEvaluationTest` использует deterministic fake generation/query embeddings,
-проверяет десять cases, round-trip v2 и чтение v1. Browser fixture показывает три
-карточки, rewrite query, `10 → N`, threshold, citations и изолированный сбой
-enhanced-ветки.
+проверяет десять cases, round-trip v3 и миграцию v1/v2. Browser fixture показывает
+три карточки, rewrite query, `10 → N`, threshold, verified evidence, изолированный
+сбой enhanced-ветки и нормальный abstention без источников/цитат.
 
 Для ручного просмотра структуры отчёта без сети и стоимости:
 

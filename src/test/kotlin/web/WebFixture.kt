@@ -47,7 +47,15 @@ fun main() {
                     override val model = delegate.model
                     override suspend fun embed(texts: List<String>): List<EmbeddingVector> {
                         if (texts.any { "[[rag-retrieval-error]]" in it }) throw IOException("fixture retrieval failure")
-                        return delegate.embed(texts)
+                        return texts.map { text ->
+                            if ("[[rag-abstain]]" in text || "fixture-no-relevant-context" in text) {
+                                EmbeddingVector(List(descriptor.dimensions) { 0f })
+                            } else if ("Как запустить production web-приложение?" in text) {
+                                delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
+                            } else {
+                                delegate.embed(listOf(text)).single()
+                            }
+                        }
                     }
                 }
             }
@@ -199,9 +207,13 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
             .find(assistantProfile.substringAfter("ASSISTANT INVARIANTS", ""))?.groupValues?.get(1).orEmpty()
         val answer = when {
             "Перепиши исходный вопрос" in assistantProfile ->
-                prompt.replace(Regex("\\[\\[[^]]+]]"), "").trim() + " локальная техническая документация"
+                if ("[[rag-abstain]]" in prompt) "fixture-no-relevant-context" else
+                    prompt.replace(Regex("\\[\\[[^]]+]]"), "").trim() + " локальная техническая документация"
             "предоставленный контекст" in assistantProfile && "Контекст:" in prompt ->
-                "Production web-приложение запускается командой `./gradlew runWeb` и открывается по адресу http://127.0.0.1:8080 [S1]. Требуются JDK 21+ и Node.js 22.12+ [S1]."
+                groundedRagFixtureAnswer(
+                    prompt,
+                    "Production web-приложение запускается командой `./gradlew runWeb` [S1].",
+                )
             prompt == PIPELINE_FIXTURE_PROMPT && SAVE_TO_FILE_TOOL in pipelineResults -> {
                 val saved = parseFixtureToolResult(requireNotNull(pipelineResults[SAVE_TO_FILE_TOOL]))
                 val fileName = saved["fileName"]?.jsonPrimitive?.content.orEmpty()

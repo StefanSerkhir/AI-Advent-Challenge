@@ -176,24 +176,35 @@ sequenceDiagram
     E-->>R: request-local query vector
     R->>I: cosine top resultLimit + chunkId tie-break
     R->>L: raw system + user(question + untrusted sources)
-    L-->>R: RAG БЕЗ ФИЛЬТРА/REWRITE
+    L-->>R: answer + citation refs + verbatim quotes
+    R->>R: fail-closed evidence postflight
     R->>L: rewrite system + original question only
     L-->>R: short rewritten query
     R->>E: embed(rewritten query)
     R->>I: cosine candidateLimit
     R->>R: threshold + top resultLimit + rerank
-    R->>L: enhanced system + user(original question + kept sources)
-    L-->>R: УЛУЧШЕННЫЙ RAG
-    R-->>U: three cards + metadata-only provenance
+    alt kept sources empty
+        R-->>U: completed abstention, no generation
+    else sources remain
+        R->>L: enhanced system + user(original question + kept sources)
+        L-->>R: answer + citation refs + verbatim quotes
+        R->>R: fail-closed evidence postflight
+    end
+    R-->>U: three cards + verified evidence
 ```
 
 Полные chunk texts и vectors существуют только внутри backend request и не входят
-в `ExperimentOutput`, DTO, SSE, evaluation-report или логи. `RagDiagnostics`
+в `ExperimentOutput`, DTO, SSE, evaluation-report или логи; наружу выходят только
+короткие дословные цитаты, прошедшие проверку. `RagDiagnostics`
 содержит pipeline, исходный/rewritten retrieval query, limits, threshold,
 candidate/discarded/filtered counts, embedding model, manifest hash, metadata
-источников и rewrite elapsed/usage/cost. Локальная postflight-проверка отклоняет
-`[Sx]`, которого не было в уже отфильтрованном и перенумерованном контексте. При
-нуле sources финальный enhanced LLM-вызов пропускается.
+retrieved chunks, rewrite elapsed/usage/cost, abstention reason и типизированный
+evidence. Локальная postflight-проверка требует хотя бы один источник/citation/
+quote, проверяет диапазон `[Sx]`, наличие цитаты у каждого использованного
+источника и точное вхождение после нормализации пробелов. Source, section и
+chunk_id копируются только из request-local retrieval result. При нуле sources
+финальный enhanced LLM-вызов пропускается, а branch завершается abstention с
+`below_threshold`, не технической ошибкой.
 
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
@@ -520,7 +531,7 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
 | `.llm-mcp-output/` | MCP `save_to_file` | Только явно сохранённые UTF-8 результаты; путь никогда не возвращается в diagnostics |
 | `.llm-document-index/` | `DocumentIndexPipeline` | `fixed.json`, `structured.json` формата v1 и JSON/Markdown comparison; тексты, vectors и относительные metadata |
-| `.llm-rag-evaluation/` | `RagEvaluationReportStore` | v2 `comparison.json` и `comparison.md`: baseline/raw/enhanced, queries, counts/filter params, metadata, usage, source/citation flags и отдельная ручная rubric 0–2; v1 читается через миграцию |
+| `.llm-rag-evaluation/` | `RagEvaluationReportStore` | v3 `comparison.json` и `comparison.md`: baseline/raw/enhanced, queries, counts/filter params, metadata, проверенные quotes, usage, отдельные source/quote/citation/exact flags и ручная rubric 0–2; v1/v2 читаются через миграцию |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации
@@ -646,7 +657,7 @@ API-ключ сохраняется только в локальном `.env`; A
   `RagEvaluationTest` проверяют top-K/tie-break, малый индекс,
   compatibility/dimensions/cancellation, threshold boundary, rerank/zero result,
   изоляцию baseline/raw/enhanced, untrusted chunks/citations, partial result,
-  rewrite usage, десять cases, report v2 и чтение v1;
+  rewrite usage, десять cases, report v3 и миграцию v1/v2;
 
 Основная команда: `./gradlew test`.
 

@@ -172,24 +172,63 @@ function ResponseCard({ output }: { output: Output }) {
         >
           {output.error}
         </Alert>
+      ) : output.ragDiagnostics?.abstained ? (
+        <Alert color="yellow" title="Не знаю" data-testid="rag-abstention">
+          {output.content}
+        </Alert>
       ) : (
-        <div
-          className={`response-body ${long && !expanded ? "collapsed" : ""} ${output.streaming ? "streaming" : ""}`}
-        >
-          {output.streaming && !output.content ? (
-            <span className="thinking-text">Думаю</span>
-          ) : (
-            <Markdown>{output.content ?? ""}</Markdown>
-          )}
-          {output.streaming && (
-            <span
-              className="streaming-cursor"
-              aria-label="Ответ генерируется"
-              role="status"
-            />
-          )}
-        </div>
+        <>
+          {output.ragDiagnostics && !output.streaming && <strong className="rag-section-title">Ответ</strong>}
+          <div
+            className={`response-body ${long && !expanded ? "collapsed" : ""} ${output.streaming ? "streaming" : ""}`}
+          >
+            {output.streaming && !output.content ? (
+              <span className="thinking-text">Думаю</span>
+            ) : (
+              <Markdown>{output.content ?? ""}</Markdown>
+            )}
+            {output.streaming && (
+              <span
+                className="streaming-cursor"
+                aria-label="Ответ генерируется"
+                role="status"
+              />
+            )}
+          </div>
+        </>
       )}
+      {output.ragDiagnostics && <div className="rag-evidence" data-testid="rag-evidence">
+        <div className="rag-diagnostics-heading">
+          <strong>Проверка evidence</strong>
+          <Badge
+            size="xs"
+            variant="light"
+            color={output.ragDiagnostics.evidence.status === "verified" ? "teal" : "gray"}
+          >
+            {output.ragDiagnostics.evidence.status === "verified"
+              ? "проверено"
+              : output.ragDiagnostics.evidence.status === "not_applicable" ? "не применяется" : "не пройдено"}
+          </Badge>
+        </div>
+        <strong>Источники</strong>
+        {output.ragDiagnostics.evidence.sources.length === 0 ? <p className="micro">Источников нет.</p> :
+          <ol>
+            {output.ragDiagnostics.evidence.sources.map((source) => <li key={source.chunkId}>
+              <div><strong>[S{source.rank}]</strong> <code>{source.source}</code></div>
+              <div className="micro">section: {source.section || "—"}</div>
+              <div className="micro">chunk_id: <code>{source.chunkId}</code></div>
+            </li>)}
+          </ol>}
+        <strong>Цитаты</strong>
+        {output.ragDiagnostics.evidence.quoteCount === 0 ? <p className="micro">Цитат нет.</p> :
+          <ul className="rag-quotes">
+            {output.ragDiagnostics.evidence.sources.flatMap((source) =>
+              source.quotes.map((quote, index) => <li key={`${source.chunkId}-${index}`}>
+                <strong>[S{source.rank}]</strong> <q>{quote}</q>
+              </li>),
+            )}
+          </ul>}
+      </div>}
       {output.ragDiagnostics && <div className="rag-diagnostics" data-testid="rag-sources">
         <div className="rag-diagnostics-heading">
           <strong>{output.ragDiagnostics.pipeline === "enhanced" ? "Улучшенный pipeline" : "Обычный pipeline"}</strong>
@@ -212,7 +251,7 @@ function ResponseCard({ output }: { output: Output }) {
         {output.ragDiagnostics.embeddingModel && <p className="micro">
           Embedding: <code>{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
         </p>}
-        <strong>Использованные источники</strong>
+        <strong>Найденные чанки (retrieval)</strong>
         {output.ragDiagnostics.sources.length === 0 ? <p className="micro">Релевантных источников нет.</p> :
           <ol>
             {output.ragDiagnostics.sources.map((source) => <li key={source.chunkId}>

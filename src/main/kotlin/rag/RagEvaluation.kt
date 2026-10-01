@@ -13,7 +13,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.*
 
-const val RAG_EVALUATION_FORMAT_VERSION = 2
+const val RAG_EVALUATION_FORMAT_VERSION = 3
 
 @Serializable
 data class RagEvaluationCase(
@@ -113,6 +113,7 @@ data class RagEvaluationSource(
     val source: String,
     val title: String,
     val section: String,
+    val quotes: List<String> = emptyList(),
 )
 
 @Serializable
@@ -120,10 +121,11 @@ data class ManualRagAssessment(
     val correctness: Int? = null,
     val completeness: Int? = null,
     val groundedness: Int? = null,
-    val comment: String = "Требуется прозрачная ручная оценка по шкале 0–2.",
+    val support: Int? = null,
+    val comment: String = "Требуется прозрачная ручная оценка по шкале 0–2, включая смысловую поддержку ответа цитатами.",
 ) {
     init {
-        listOfNotNull(correctness, completeness, groundedness).forEach {
+        listOfNotNull(correctness, completeness, groundedness, support).forEach {
             require(it in 0..2) { "Ручная оценка должна быть от 0 до 2" }
         }
     }
@@ -133,8 +135,13 @@ data class ManualRagAssessment(
 data class RagEvaluationPipelineResult(
     val answer: RagEvaluationAnswer,
     val retrievedSources: List<RagEvaluationSource> = emptyList(),
+    val sourcesPresent: Boolean = false,
+    val quotesPresent: Boolean = false,
     val expectedSourceFound: Boolean = false,
     val citationsValid: Boolean = false,
+    val quotesExact: Boolean = false,
+    val abstained: Boolean = false,
+    val abstentionReason: String? = null,
     val candidateCount: Int = 0,
     val filteredCount: Int = 0,
     val retrievalQuery: String? = null,
@@ -170,7 +177,7 @@ data class RagEvaluationCaseResult(
 data class RagEvaluationReport(
     val formatVersion: Int = RAG_EVALUATION_FORMAT_VERSION,
     val model: String,
-    val note: String = "Retrieval/source/citation/usage metrics are automatic. Correctness, completeness and groundedness require separate manual 0–2 review for raw and enhanced; fake embeddings must not be treated as production quality.",
+    val note: String = "Source/quote/citation/exact-substring/usage metrics are automatic. Semantic support, correctness, completeness and groundedness require separate manual 0–2 review for raw and enhanced; fake embeddings must not be treated as production quality.",
     val cases: List<RagEvaluationCaseResult>,
 )
 
@@ -226,6 +233,7 @@ class RagEvaluationReportStore(
             ?: error("RAG evaluation formatVersion отсутствует")
         return when (version) {
             RAG_EVALUATION_FORMAT_VERSION -> json.decodeFromJsonElement(element)
+            2 -> json.decodeFromJsonElement<RagEvaluationReport>(element).migrateFromV2()
             1 -> json.decodeFromJsonElement<RagEvaluationReportV1>(element).migrate()
             else -> error("Unsupported RAG evaluation format: $version")
         }
@@ -265,11 +273,19 @@ private fun RagBranchResult.toEvaluationAnswer(): RagEvaluationAnswer {
 private fun RagBranchResult.toPipelineResult(expectedSources: List<String>): RagEvaluationPipelineResult {
     val diagnostic = diagnostics
     val sources = diagnostic?.sources.orEmpty()
+    val evidence = diagnostic?.evidence
+    val evidenceByRank = evidence?.sources.orEmpty().associateBy { it.rank }
+    val evidenceVerified = evidence?.status == RagEvidenceStatus.VERIFIED
     return RagEvaluationPipelineResult(
         answer = toEvaluationAnswer(),
-        retrievedSources = sources.map(RagSourceDiagnostic::toEvaluationSource),
+        retrievedSources = sources.map { it.toEvaluationSource(evidenceByRank[it.rank]?.quotes.orEmpty()) },
+        sourcesPresent = evidence?.sources?.isNotEmpty() == true,
+        quotesPresent = evidence?.quoteCount?.let { it > 0 } == true,
         expectedSourceFound = sources.any { it.source in expectedSources },
-        citationsValid = completion?.let { runCatching { validateRagCitations(it.content, sources.size) }.isSuccess } ?: false,
+        citationsValid = evidenceVerified,
+        quotesExact = evidenceVerified && evidence.sources.all { it.quotes.isNotEmpty() },
+        abstained = diagnostic?.abstained == true,
+        abstentionReason = diagnostic?.abstentionReason,
         candidateCount = diagnostic?.candidateCount ?: 0,
         filteredCount = diagnostic?.filteredCount ?: 0,
         retrievalQuery = diagnostic?.retrievalQuery,
@@ -288,8 +304,8 @@ private fun RagBranchResult.toPipelineResult(expectedSources: List<String>): Rag
     )
 }
 
-private fun RagSourceDiagnostic.toEvaluationSource() = RagEvaluationSource(
-    rank, score, chunkId, source, title, section,
+private fun RagSourceDiagnostic.toEvaluationSource(quotes: List<String>) = RagEvaluationSource(
+    rank, score, chunkId, source, title, section, quotes,
 )
 
 private fun RagEvaluationReport.toMarkdown(): String = buildString {
@@ -306,8 +322,8 @@ private fun RagEvaluationReport.toMarkdown(): String = buildString {
         appendLine()
         appendLine("**Expected sources:** ${result.expectedSources.joinToString { "`$it`" }}")
         appendLine()
-        appendLine("| Pipeline | Query | Candidates → kept | Threshold | Expected source | Citations | Usage | Rewrite usage/time/cost | Elapsed |")
-        appendLine("|---|---|---:|---:|---|---|---:|---|---:|")
+        appendLine("| Pipeline | Query | Candidates → kept | Threshold | Sources | Quotes | Citations | Exact quotes | Expected source | Abstention | Usage | Rewrite usage/time/cost | Elapsed |")
+        appendLine("|---|---|---:|---:|---|---|---|---|---|---|---:|---|---:|")
         appendPipelineRow("Raw RAG", result.raw)
         appendPipelineRow("Enhanced RAG", result.enhanced)
         appendLine()
@@ -337,7 +353,8 @@ private fun StringBuilder.appendPipelineRow(label: String, pipeline: RagEvaluati
     appendLine(
         "| $label | `${pipeline.retrievalQuery.orEmpty().replace("|", "\\|")}` | " +
             "${pipeline.candidateCount} → ${pipeline.filteredCount} | ${pipeline.minSimilarity?.toString() ?: "n/a"} | " +
-            "${pipeline.expectedSourceFound} | ${pipeline.citationsValid} | ${pipeline.answer.totalTokens ?: "n/a"} | $rewrite | ${pipeline.answer.elapsedMillis} ms |",
+            "${pipeline.sourcesPresent} | ${pipeline.quotesPresent} | ${pipeline.citationsValid} | ${pipeline.quotesExact} | " +
+            "${pipeline.expectedSourceFound} | ${pipeline.abstentionReason ?: "no"} | ${pipeline.answer.totalTokens ?: "n/a"} | $rewrite | ${pipeline.answer.elapsedMillis} ms |",
     )
 }
 
@@ -347,12 +364,13 @@ private fun StringBuilder.appendSources(title: String, sources: List<RagEvaluati
     if (sources.isEmpty()) appendLine("Нет источников.")
     sources.forEach { source ->
         appendLine("${source.rank}. `${source.source}` · `${source.section}` · `${source.chunkId}` · score=${"%.6f".format(Locale.ROOT, source.score)}")
+        source.quotes.forEach { quote -> appendLine("   - [S${source.rank}] «$quote»") }
     }
     appendLine()
 }
 
 private fun StringBuilder.appendAssessment(assessment: ManualRagAssessment) {
-    appendLine("Ручная оценка 0–2: correctness=${assessment.correctness ?: "pending"}, completeness=${assessment.completeness ?: "pending"}, groundedness=${assessment.groundedness ?: "pending"}.")
+    appendLine("Ручная оценка 0–2: correctness=${assessment.correctness ?: "pending"}, completeness=${assessment.completeness ?: "pending"}, groundedness=${assessment.groundedness ?: "pending"}, support=${assessment.support ?: "pending"}.")
     appendLine()
     appendLine("Комментарий: ${assessment.comment}")
     appendLine()
@@ -395,8 +413,11 @@ private fun RagEvaluationReportV1.migrate() = RagEvaluationReport(
             raw = RagEvaluationPipelineResult(
                 answer = old.rag,
                 retrievedSources = old.retrievedSources,
+                sourcesPresent = old.retrievedSources.isNotEmpty(),
                 expectedSourceFound = old.expectedSourceFound,
                 citationsValid = old.citationsValid,
+                quotesPresent = false,
+                quotesExact = false,
                 candidateCount = old.retrievedSources.size,
                 filteredCount = old.retrievedSources.size,
                 retrievalQuery = old.question,
@@ -406,6 +427,25 @@ private fun RagEvaluationReportV1.migrate() = RagEvaluationReport(
             ),
             enhanced = RagEvaluationPipelineResult(
                 answer = RagEvaluationAnswer(error = "Enhanced pipeline отсутствует в отчёте формата v1.", elapsedMillis = 0),
+            ),
+        )
+    },
+)
+
+private fun RagEvaluationReport.migrateFromV2() = copy(
+    formatVersion = RAG_EVALUATION_FORMAT_VERSION,
+    note = "$note Migrated from format v2; historical reports did not store verified quotes, so quotesPresent/quotesExact remain false.",
+    cases = cases.map { old ->
+        old.copy(
+            raw = old.raw.copy(
+                sourcesPresent = old.raw.retrievedSources.isNotEmpty(),
+                quotesPresent = false,
+                quotesExact = false,
+            ),
+            enhanced = old.enhanced.copy(
+                sourcesPresent = old.enhanced.retrievedSources.isNotEmpty(),
+                quotesPresent = false,
+                quotesExact = false,
             ),
         )
     },

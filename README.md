@@ -186,7 +186,8 @@ API-ключи и параметры ответа сохраняются в ло
    независимые карточки: baseline без индекса, обычный RAG по исходному вопросу и
    улучшенный RAG с отдельным query rewrite, расширенным набором кандидатов и
    similarity-фильтром. Диагностика показывает фактический запрос, `кандидаты →
-   сохранено`, citations и metadata источников, но не vectors и не полный текст chunks.
+   сохранено`, backend-проверенные citations, source/section/chunk_id и дословные
+   цитаты из request-local chunks, но не vectors и не полный текст chunks.
 8. **Токены и контекст** — полностью локальные детерминированные сценарии короткого
    и длинного диалога, а также безопасная симуляция переполнения окна 6K.
 
@@ -368,9 +369,14 @@ generation options; rewrite ограничен 128 output tokens и не пол�
 
 Порог similarity не имеет универсально правильного значения: он зависит от
 embedding model и corpus. При нуле результатов enhanced generation не вызывается,
-а карточка сообщает «При заданном пороге релевантный контекст не найден».
-Полные chunks остаются request-local; REST/SSE возвращает только pipeline/query,
-лимиты, threshold, counts, manifest/model и rank/score/source metadata. Ошибка индекса,
+а карточка завершается нормальным abstention-ответом «Не знаю: найденный контекст
+недостаточно релевантен…» с reason `below_threshold`, без источников и цитат.
+Успешный raw/enhanced ответ принимается только при наличии citations и дословных
+цитат: backend нормализует пробелы, сверяет каждый фрагмент с соответствующим
+request-local chunk и сам подставляет source, section и chunk_id. Модель не может
+подменить эти metadata. Полные chunks остаются request-local; REST/SSE возвращает
+только pipeline/query, лимиты, threshold, counts, manifest/model, retrieval metadata
+и проверенные короткие цитаты. Ошибка индекса,
 rewrite, embedding или одной LLM-ветки не удаляет уже готовые карточки. Если
 индекса нет или его descriptor несовместим, UI показывает команду построения:
 
@@ -392,10 +398,12 @@ enhanced-result или ошибка уменьшают фактическое ч
 ```
 
 Он атомарно пишет versioned `.llm-rag-evaluation/comparison.json` и
-`comparison.md` формата v2; v1 читается с явной миграцией. Отчёт сопоставляет raw
-и enhanced retrieval/answers side-by-side. Автоматически вычисляются только
-retrieval/source/citation/usage metrics; correctness, completeness и groundedness
-для каждой RAG-ветки остаются прозрачной ручной оценкой 0–2. Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
+`comparison.md` формата v3; v1/v2 читаются с явной миграцией. Отчёт сопоставляет raw
+и enhanced retrieval/answers side-by-side. Автоматически вычисляются отдельные
+`sourcesPresent`, `quotesPresent`, `citationsValid`, `quotesExact`,
+`expectedSourceFound` и usage metrics; correctness, completeness, groundedness и
+смысловая поддержка ответа цитатами остаются прозрачной ручной оценкой 0–2.
+Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
 [сценарий видео](docs/RAG_DEMO.md).
 
 Структуру полного 10-case отчёта можно безопасно получить на deterministic fakes:

@@ -2,10 +2,7 @@ package org.example.rag
 
 import kotlinx.coroutines.runBlocking
 import org.example.app.RagComparisonRunner
-import org.example.indexing.DeterministicFakeEmbeddingClient
-import org.example.indexing.DocumentRetriever
-import org.example.indexing.JsonDocumentIndexStore
-import org.example.indexing.createRagFixtureIndex
+import org.example.indexing.*
 import org.example.llm.*
 import java.nio.file.Files
 import java.nio.file.Path
@@ -29,7 +26,10 @@ fun main() = runBlocking {
                     .find(messages.last().content)?.groupValues?.get(1)?.trim()
                     ?: messages.last().content
                 return CompletionResult(
-                    content = if (rag) "Fixture RAG-ответ на вопрос «$question» с локальным источником [S1]." else
+                    content = if (rag) groundedRagFixtureAnswer(
+                        messages.last().content,
+                        "Fixture RAG-ответ на вопрос «$question» использует локальный контекст [S1].",
+                    ) else
                         "Fixture baseline-ответ на вопрос «${messages.last().content}».",
                     finishReason = "stop",
                     usage = TokenUsage(40, 20, 60),

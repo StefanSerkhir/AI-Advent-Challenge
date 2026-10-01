@@ -119,8 +119,12 @@ Raw RAG передаёт исходный вопрос и limit `rag_result_limi
 threshold нет: его нужно калибровать для конкретных corpus и embedding model.
 
 Полный текст каждого chunk используется только при построении request-local RAG
-prompt. REST/SSE diagnostic содержит rank, score, `chunkId`, относительный source,
-title и section; vectors и chunk text не сериализуются и не логируются. Если файл
+prompt и локальной postflight-проверке. Модель возвращает ответ с `[Sx]` и
+дословные цитаты; backend требует цитату для каждого использованного source,
+нормализует только whitespace, проверяет точное вхождение и присоединяет source,
+section и chunk_id из retrieval result. REST/SSE diagnostic содержит rank, score,
+metadata и только проверенные короткие quotes; vectors и полный chunk text не
+сериализуются и не логируются. Если файл
 отсутствует, повреждён, имеет неизвестную версию, пуст или несовместим с embedding
 client, RAG LLM-вызов не начинается и пользователь получает команду:
 
@@ -130,7 +134,9 @@ client, RAG LLM-вызов не начинается и пользователь
 
 Baseline и ранее завершённая RAG-ветка уже могут быть готовы к этому моменту и
 остаются в своих карточках. Если enhanced-фильтр вернул ноль chunks, generation
-не вызывается и диагностика фиксирует candidate count, threshold и `filtered=0`.
+не вызывается и завершённая карточка возвращает «Не знаю» с machine-readable
+`abstained=true`, reason `below_threshold`, candidate count, threshold,
+`filtered=0` и пустыми sources/quotes.
 
 ## Набор из 10 RAG-вопросов и production evaluation
 
@@ -151,13 +157,14 @@ Production evaluation запускается только явно:
 generation calls (baseline, raw, rewrite и, если фильтр не пуст, enhanced для
 каждого case) и до 20 query embedding calls и атомарно сохраняет:
 
-- `.llm-rag-evaluation/comparison.json` формата v2 (v1 читается с миграцией);
+- `.llm-rag-evaluation/comparison.json` формата v3 (v1/v2 читаются с миграцией);
 - `.llm-rag-evaluation/comparison.md`.
 
 Для каждого case сохраняются expectation, expected sources, три ответа, raw и
-enhanced queries/counts/filter params/source metadata, source-found/citation-valid
-flags, usage и elapsed time. Автоматически считаются
-только проверяемые retrieval/source/citation/usage metrics. Поля ручной оценки
-correctness/completeness/groundedness отдельно для raw и enhanced принимают `0..2` и остаются `pending`, пока
+enhanced queries/counts/filter params/source metadata, verified quotes,
+`sourcesPresent`, `quotesPresent`, `citationsValid`, `quotesExact`,
+`expectedSourceFound`, usage и elapsed time. Автоматически считаются только
+структурно проверяемые metrics. Поля ручной оценки correctness/completeness/
+groundedness/support отдельно для raw и enhanced принимают `0..2` и остаются `pending`, пока
 эксперт не заполнит их; fake embeddings не выдаются за фактическое качество.
 Подробнее см. [RAG_EVALUATION.md](RAG_EVALUATION.md).

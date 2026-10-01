@@ -57,7 +57,7 @@ fun main(args: Array<String>) = runBlocking {
         RagEvaluationReportStore(jsonFile, markdownFile).save(report)
         println("RAG evaluation сохранён: $jsonFile")
         println("Markdown-отчёт: $markdownFile")
-        println("Автоматически рассчитаны retrieval/source/citation/usage metrics; оценки 0–2 оставлены для ручного заполнения.")
+        println("Автоматически рассчитаны source/quote/citation/exact-substring/usage metrics; semantic support 0–2 оставлен для ручной оценки.")
     } finally {
         httpClient.close()
     }

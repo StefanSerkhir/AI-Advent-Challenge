@@ -199,6 +199,21 @@ data class RagSourceDiagnosticDto(
     val section: String,
 )
 @Serializable
+data class RagEvidenceSourceDto(
+    val rank: Int,
+    val source: String,
+    val section: String,
+    val chunkId: String,
+    val quotes: List<String>,
+)
+@Serializable
+data class RagEvidenceDto(
+    val status: String,
+    val citationCount: Int,
+    val quoteCount: Int,
+    val sources: List<RagEvidenceSourceDto>,
+)
+@Serializable
 data class RagDiagnosticsDto(
     val applied: Boolean,
     val pipeline: String,
@@ -216,6 +231,9 @@ data class RagDiagnosticsDto(
     val retrievedCount: Int,
     val rewrite: RagRewriteDiagnosticDto?,
     val sources: List<RagSourceDiagnosticDto>,
+    val abstained: Boolean,
+    val abstentionReason: String?,
+    val evidence: RagEvidenceDto,
 )
 @Serializable
 data class RagRewriteDiagnosticDto(
@@ -576,6 +594,22 @@ private fun RagDiagnostics.toDto() = RagDiagnosticsDto(
             source.section,
         )
     },
+    abstained = abstained,
+    abstentionReason = abstentionReason,
+    evidence = RagEvidenceDto(
+        status = evidence.status.wireName,
+        citationCount = evidence.citationCount,
+        quoteCount = evidence.quoteCount,
+        sources = evidence.sources.map { source ->
+            RagEvidenceSourceDto(
+                rank = source.rank,
+                source = source.source,
+                section = source.section,
+                chunkId = source.chunkId,
+                quotes = source.quotes,
+            )
+        },
+    ),
 )
 
 private fun SchedulerSummary.toDto() = BackgroundTaskDto(

@@ -14,8 +14,14 @@ arguments/result уже ограничены и очищены для диагн
 Для output RAG-ветки `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
-strategy, embeddingModel, manifestHash, retrievedCount, rewrite, sources[] }`,
+strategy, embeddingModel, manifestHash, retrievedCount, rewrite, sources[],
+abstained, abstentionReason, evidence }`,
 где source содержит только `{ rank, score, chunkId, source, title, section }`.
+`evidence` имеет форму `{ status, citationCount, quoteCount, sources[] }`; каждый
+проверенный evidence source содержит `{ rank, source, section, chunkId, quotes[] }`.
+Статус равен `not_checked`, `verified` или `not_applicable`. Короткие quotes —
+единственные фрагменты chunk text по wire: backend проверил их точное вхождение
+после нормализации пробелов и сам присоединил metadata из retrieval result.
 `rewrite` содержит только elapsed, usage и стоимость служебного вызова.
 Query/chunk vectors и полный chunk text по wire не передаются. У baseline-
 карточки поле равно `null`; при ошибке rewrite/retrieval RAG-карточка сохраняет
@@ -112,7 +118,11 @@ tokens. Все ветки не
 пишутся в историю или memory layers и не получают MCP tools. Ошибка одной ветки
 остаётся в `outputs[].error`, не удаляя успешную карточку; exchange завершается
 после попытки всех трёх веток. При пустом результате фильтра enhanced generation
-не запускается. Cancellation останавливает текущий этап кооперативно.
+не запускается: output завершается без ошибки с `abstained=true`, reason
+`below_threshold`, пользовательским «Не знаю» и пустым evidence. Успешная RAG-
+генерация fail-closed: отсутствие citations/quotes, неизвестный `[Sx]`, подменённая
+metadata или цитата не из соответствующего request-local chunk превращают только
+эту ветку в ошибку postflight. Cancellation останавливает текущий этап кооперативно.
 
 `requestId` — новый UUID для каждого намеренного запуска. Повтор **той же** команды
 с тем же ID возвращает исходный `operationId`, даже после завершения или отмены.

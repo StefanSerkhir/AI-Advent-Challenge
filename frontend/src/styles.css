@@ -455,7 +455,8 @@ button {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.rag-diagnostics {
+.rag-diagnostics,
+.rag-evidence {
   display: grid;
   gap: 7px;
   margin: 14px 0 0;
@@ -464,6 +465,32 @@ button {
   border-radius: 8px;
   background: #f5f9fd;
   font-size: 11px;
+}
+.rag-evidence {
+  border-color: #b7dfcf;
+  background: #f3fbf7;
+}
+.rag-section-title {
+  display: block;
+  margin-top: 8px;
+}
+.rag-evidence p {
+  margin: 0;
+}
+.rag-evidence ol,
+.rag-evidence ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+}
+.rag-evidence li,
+.rag-evidence code,
+.rag-evidence q {
+  overflow-wrap: anywhere;
+}
+.rag-quotes q {
+  margin-left: 5px;
 }
 .rag-diagnostics-heading {
   display: flex;

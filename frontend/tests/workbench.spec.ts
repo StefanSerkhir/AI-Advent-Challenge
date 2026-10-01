@@ -203,6 +203,16 @@ test("RAG mode shows raw and enhanced pipelines and preserves completed branches
   await expect(cards.nth(2)).toContainText("УЛУЧШЕННЫЙ RAG");
   await expect(cards.nth(1)).toContainText("[S1]");
   await expect(cards.nth(2)).toContainText("[S1]");
+  const rawEvidence = cards.nth(1).getByTestId("rag-evidence");
+  await expect(rawEvidence).toContainText("Проверка evidence");
+  await expect(rawEvidence).toContainText("проверено");
+  await expect(rawEvidence).toContainText("Источники");
+  await expect(rawEvidence).toContainText("section:");
+  await expect(rawEvidence).toContainText("chunk_id:");
+  await expect(rawEvidence).toContainText("Цитаты");
+  await expect(rawEvidence).toContainText("README.md");
+  await expect(rawEvidence).toContainText("Production web-приложение запускается командой ./gradlew runWeb");
+  await expect(rawEvidence.locator("q")).toHaveCount(1);
   const rawSources = cards.nth(1).getByTestId("rag-sources");
   await expect(rawSources).toContainText("Обычный pipeline");
   await expect(rawSources).toContainText("rewrite и threshold не применялись");
@@ -221,6 +231,9 @@ test("RAG mode shows raw and enhanced pipelines and preserves completed branches
   expect(diagnostics.candidateCount).toBe(10);
   expect(diagnostics.filteredCount).toBeGreaterThan(0);
   expect(diagnostics.filteredCount).toBeLessThan(diagnostics.candidateCount);
+  expect(diagnostics.abstained).toBe(false);
+  expect(diagnostics.evidence.status).toBe("verified");
+  expect(diagnostics.evidence.sources[0].quotes.length).toBeGreaterThan(0);
   expect(diagnostics.sources.map((source) => source.rank)).toEqual(
     Array.from({length: diagnostics.filteredCount}, (_, index) => index + 1),
   );
@@ -238,6 +251,33 @@ test("RAG mode shows raw and enhanced pipelines and preserves completed branches
   await setMode(page, "compare");
   await expect(page.getByLabel("Кандидатов до фильтрации")).toHaveCount(0);
   await expect(page.getByLabel("Минимальная similarity")).toHaveCount(0);
+});
+
+test("enhanced RAG abstains normally when every candidate is below threshold", async ({page}) => {
+  await setMode(page, "rag");
+  await send(page, "Детерминированный вопрос со слабой релевантностью [[rag-abstain]]");
+  await done(page);
+
+  const cards = page.getByTestId("exchange").last().getByTestId("response-card");
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(0)).not.toContainText("Ошибка модели");
+  await expect(cards.nth(1).getByTestId("rag-evidence")).toContainText("проверено");
+  await expect(cards.nth(2).getByTestId("rag-abstention")).toContainText(
+    "Не знаю: найденный контекст недостаточно релевантен. Уточните вопрос или укажите нужный документ/раздел.",
+  );
+  const evidence = cards.nth(2).getByTestId("rag-evidence");
+  await expect(evidence).toContainText("не применяется");
+  await expect(evidence).toContainText("Источников нет");
+  await expect(evidence).toContainText("Цитат нет");
+  await expect(cards.nth(2)).not.toContainText("Ошибка RAG");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const enhanced = state.exchanges.at(-1)!.outputs[2];
+  expect(enhanced.error).toBeNull();
+  expect(enhanced.ragDiagnostics!.abstained).toBe(true);
+  expect(enhanced.ragDiagnostics!.abstentionReason).toBe("below_threshold");
+  expect(enhanced.ragDiagnostics!.sources).toEqual([]);
+  expect(enhanced.ragDiagnostics!.evidence.sources).toEqual([]);
 });
 
 test("simple agent calls tracker through MCP and shows diagnostics", async ({page}) => {

@@ -2,10 +2,7 @@ package org.example.rag
 
 import kotlinx.coroutines.runBlocking
 import org.example.app.RagComparisonRunner
-import org.example.indexing.DeterministicFakeEmbeddingClient
-import org.example.indexing.DocumentRetriever
-import org.example.indexing.JsonDocumentIndexStore
-import org.example.indexing.createRagFixtureIndex
+import org.example.indexing.*
 import org.example.llm.*
 import java.nio.file.Files
 import kotlin.test.Test
@@ -32,7 +29,7 @@ class RagEvaluationTest {
                     }
                     val rag = "предоставленный контекст" in system
                     return CompletionResult(
-                        content = if (rag) "Grounded fixture answer [S1]." else "Baseline fixture answer.",
+                        content = if (rag) groundedRagFixtureAnswer(messages.last().content) else "Baseline fixture answer.",
                         finishReason = "stop",
                         usage = TokenUsage(12, 4, 16),
                         model = "fixture-model",
@@ -52,6 +49,9 @@ class RagEvaluationTest {
             assertTrue(report.cases.all { it.baseline.content != null && it.raw.answer.content != null && it.enhanced.answer.content != null })
             assertTrue(report.cases.all { it.raw.retrievedSources.size == 5 && it.raw.citationsValid })
             assertTrue(report.cases.all { it.enhanced.retrievedSources.size == 5 && it.enhanced.citationsValid })
+            assertTrue(report.cases.all { it.raw.sourcesPresent && it.raw.quotesPresent && it.raw.quotesExact })
+            assertTrue(report.cases.all { it.enhanced.sourcesPresent && it.enhanced.quotesPresent && it.enhanced.quotesExact })
+            assertTrue(report.cases.all { it.raw.retrievedSources.sumOf { source -> source.quotes.size } >= 1 })
             assertTrue(report.cases.all { it.enhanced.rewrite?.totalTokens == 11 })
             assertTrue(report.cases.all { it.raw.manualAssessment.correctness == null && it.enhanced.manualAssessment.correctness == null })
 
@@ -69,7 +69,7 @@ class RagEvaluationTest {
     }
 
     @Test
-    fun `report store migrates format v1 and round trips v2`() {
+    fun `report store migrates format v1 and round trips v3`() {
         val directory = Files.createTempDirectory("rag-evaluation-v1")
         try {
             val json = directory.resolve("comparison.json")
@@ -94,12 +94,55 @@ class RagEvaluationTest {
             """.trimIndent())
             val store = RagEvaluationReportStore(json, markdown)
             val migrated = store.load()
-            assertEquals(2, migrated.formatVersion)
+            assertEquals(3, migrated.formatVersion)
             assertEquals("rag [S1]", migrated.cases.single().raw.answer.content)
             assertContains(migrated.cases.single().enhanced.answer.error.orEmpty(), "v1")
 
             store.save(migrated)
             assertEquals(migrated, store.load())
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `report store explicitly migrates format v2 without inventing historical quotes`() {
+        val directory = Files.createTempDirectory("rag-evaluation-v2")
+        try {
+            val json = directory.resolve("comparison.json")
+            val markdown = directory.resolve("comparison.md")
+            Files.writeString(json, """
+                {
+                  "formatVersion": 2,
+                  "model": "old-model",
+                  "note": "old v2 report",
+                  "cases": [{
+                    "id": "old",
+                    "question": "question",
+                    "expectation": "expectation",
+                    "expectedSources": ["README.md"],
+                    "baseline": {"content":"baseline","model":"old-model","elapsedMillis":1},
+                    "raw": {
+                      "answer":{"content":"rag [S1]","model":"old-model","elapsedMillis":2},
+                      "retrievedSources":[{"rank":1,"score":0.9,"chunkId":"c1","source":"README.md","title":"README","section":"Intro"}],
+                      "expectedSourceFound":true,
+                      "citationsValid":true
+                    },
+                    "enhanced": {
+                      "answer":{"content":"enhanced [S1]","model":"old-model","elapsedMillis":3},
+                      "retrievedSources":[{"rank":1,"score":0.9,"chunkId":"c1","source":"README.md","title":"README","section":"Intro"}],
+                      "expectedSourceFound":true,
+                      "citationsValid":true
+                    }
+                  }]
+                }
+            """.trimIndent())
+            val migrated = RagEvaluationReportStore(json, markdown).load()
+            assertEquals(3, migrated.formatVersion)
+            assertTrue(migrated.cases.single().raw.sourcesPresent)
+            assertTrue(!migrated.cases.single().raw.quotesPresent)
+            assertTrue(!migrated.cases.single().raw.quotesExact)
+            assertContains(migrated.note, "format v2")
         } finally {
             directory.toFile().deleteRecursively()
         }

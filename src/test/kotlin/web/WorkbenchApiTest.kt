@@ -17,10 +17,7 @@ import org.example.app.DEFAULT_STOP_SEQUENCE
 import org.example.app.ResponseMode
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
-import org.example.indexing.DeterministicFakeEmbeddingClient
-import org.example.indexing.DocumentRetriever
-import org.example.indexing.JsonDocumentIndexStore
-import org.example.indexing.createRagFixtureIndex
+import org.example.indexing.*
 import org.example.llm.*
 import org.example.mcp.*
 import java.io.IOException
@@ -70,7 +67,10 @@ class WorkbenchApiTest {
             CompletionResult(
                 when {
                     "Перепиши исходный вопрос" in system -> "production web запуск runWeb"
-                    "предоставленный контекст" in system -> "Запуск: `./gradlew runWeb` [S1]."
+                    "предоставленный контекст" in system -> groundedRagFixtureAnswer(
+                        messages.last().content,
+                        "Запуск: `./gradlew runWeb` [S1].",
+                    )
                     else -> "Baseline answer"
                 },
                 "stop",
@@ -94,6 +94,11 @@ class WorkbenchApiTest {
             assertEquals(10, diagnostics.candidateCount)
             assertTrue(diagnostics.filteredCount in 1..5)
             assertEquals((1..diagnostics.filteredCount).toList(), diagnostics.sources.map { it.rank })
+            assertEquals("verified", diagnostics.evidence.status)
+            assertTrue(diagnostics.evidence.sources.isNotEmpty())
+            assertTrue(diagnostics.evidence.sources.all { it.source.isNotBlank() && it.section.isNotBlank() && it.chunkId.isNotBlank() })
+            assertTrue(diagnostics.evidence.sources.all { it.quotes.isNotEmpty() })
+            assertFalse(diagnostics.abstained)
             assertEquals(HistoryDto(0, 0), state.history)
             assertTrue(state.assistantMemory.layers.all { it.entries.isEmpty() })
             assertEquals(listOf(LlmRole.USER), calls.first().map { it.role })
@@ -103,6 +108,7 @@ class WorkbenchApiTest {
             val json = api.snapshot(state)
             assertFalse(json.contains("embedding" + "\":["))
             assertFalse(json.contains("Недоверенный пример из документа"))
+            assertFalse(json.contains("Production web-приложение запускается командой ./gradlew runWeb и открывается по адресу http://127.0.0.1:8080. Требуются"))
         } finally {
             c.shutdown()
             directory.toFile().deleteRecursively()
@@ -130,6 +136,60 @@ class WorkbenchApiTest {
             assertContains(exchange.outputs[1].error.orEmpty(), "buildDocumentIndexes")
             assertContains(exchange.outputs[2].error.orEmpty(), "buildDocumentIndexes")
             assertFalse(exchange.outputs[2].ragDiagnostics!!.applied)
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `enhanced RAG abstention is a completed API result and skips final generation`() = runBlocking {
+        val directory = Files.createTempDirectory("rag-api-abstention")
+        val indexFile = createRagFixtureIndex(directory)
+        var llmCalls = 0
+        val c = controller(
+            mode = ResponseMode.RAG_COMPARISON,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    object : EmbeddingClient {
+                        override val provider = descriptor.provider
+                        override val model = descriptor.model
+                        override suspend fun embed(texts: List<String>) =
+                            texts.map { EmbeddingVector(List(descriptor.dimensions) { 0f }) }
+                    }
+                }
+            },
+        ) { model, messages, _ ->
+            llmCalls++
+            val system = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
+            CompletionResult(
+                content = when {
+                    "Перепиши исходный вопрос" in system -> "no relevant fixture context"
+                    "предоставленный контекст" in system -> groundedRagFixtureAnswer(messages.last().content)
+                    else -> "Baseline answer"
+                },
+                finishReason = "stop",
+                usage = TokenUsage(3, 2, 5),
+                model = model,
+            )
+        }
+        try {
+            WorkbenchApi(c).start(command(prompt = "weakly related question"))
+            c.awaitCurrentRequest()
+            val exchange = c.state.value.toDto().exchanges.single()
+            val enhanced = exchange.outputs[2]
+            assertEquals("completed", exchange.status)
+            assertEquals(3, llmCalls)
+            assertNull(enhanced.error)
+            assertEquals(org.example.app.NO_RELEVANT_RAG_CONTEXT_MESSAGE, enhanced.content)
+            val diagnostics = assertNotNull(enhanced.ragDiagnostics)
+            assertTrue(diagnostics.abstained)
+            assertEquals("below_threshold", diagnostics.abstentionReason)
+            assertEquals(10, diagnostics.candidateCount)
+            assertEquals(0, diagnostics.filteredCount)
+            assertTrue(diagnostics.sources.isEmpty())
+            assertEquals("not_applicable", diagnostics.evidence.status)
+            assertTrue(diagnostics.evidence.sources.isEmpty())
         } finally {
             c.shutdown()
             directory.toFile().deleteRecursively()
