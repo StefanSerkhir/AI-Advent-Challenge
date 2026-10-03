@@ -68,6 +68,7 @@ test.beforeEach(async ({ page }) => {
         historyEnabled: true,
         contextStrategy: "SLIDING_WINDOW",
         recentMessagesLimit: 10,
+        assistantRagEnabled: false,
       },
     },
   });
@@ -278,6 +279,83 @@ test("enhanced RAG abstains normally when every candidate is below threshold", a
   expect(enhanced.ragDiagnostics!.abstentionReason).toBe("below_threshold");
   expect(enhanced.ragDiagnostics!.sources).toEqual([]);
   expect(enhanced.ragDiagnostics!.evidence.sources).toEqual([]);
+});
+
+test("memory-layer RAG chat retrieves on follow ups, verifies evidence and survives a new dialogue", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await page.getByLabel("Стратегия контекста").selectOption("MEMORY_LAYERS");
+  await expect.poll(async () =>
+    ((await (await page.request.get("/api/state")).json()) as State).settings.contextStrategy,
+  ).toBe("MEMORY_LAYERS");
+  await ready(page);
+  await expect(page.getByLabel("RAG-чат с источниками")).toBeVisible();
+  await page.getByLabel("RAG-чат с источниками").press("Space");
+  await expect.poll(async () =>
+    ((await (await page.request.get("/api/state")).json()) as State).settings.assistantRagEnabled,
+  ).toBe(true);
+  await ready(page);
+  await expect(page.getByLabel("RAG-чат с источниками")).toBeChecked();
+  await expect(page.getByTestId("rag-settings")).toBeVisible();
+  await page.getByLabel("Сообщений в краткосрочной памяти").fill("4");
+  await page.getByLabel("Сообщений в краткосрочной памяти").press("Enter");
+  await expect.poll(async () =>
+    ((await (await page.request.get("/api/state")).json()) as State).settings.recentMessagesLimit,
+  ).toBe(4);
+  await ready(page);
+
+  let state = await (await page.request.get("/api/state")).json() as State;
+  let response = await page.request.post("/api/assistant/memory", {
+    headers,
+    data: {expectedSettingsVersion: state.settingsVersion, layer: "WORKING", text: "Ограничение: сохранить JDK 21"},
+  });
+  state = await response.json() as State;
+  response = await page.request.post("/api/assistant/memory", {
+    headers,
+    data: {expectedSettingsVersion: state.settingsVersion, layer: "WORKING", text: "Термин: итог означает release checklist"},
+  });
+  state = await response.json() as State;
+  response = await page.request.post("/api/assistant/task-state/start", {
+    headers,
+    data: {
+      expectedSettingsVersion: state.settingsVersion,
+      goal: "Подготовить release checklist",
+      currentStep: "Собрать подтверждённые шаги",
+      expectedAction: "Продолжить список",
+    },
+  });
+  state = await response.json() as State;
+  await expect(page.getByTestId("task-state-panel")).toContainText("Подготовить release checklist");
+
+  for (const prompt of ["Каков первый шаг release checklist?", "Продолжай", "А второй вариант?"]) {
+    await send(page, prompt);
+    await done(page);
+    const card = page.getByTestId("exchange").last().getByTestId("response-card");
+    await expect(card).toContainText("[S1]");
+    await expect(card.getByTestId("rag-evidence")).toContainText("проверено");
+    await expect(card.getByTestId("rag-evidence")).toContainText("RELEASE_PLAYBOOK.md");
+    await expect(card.getByTestId("rag-sources")).toContainText("Контекстный RAG-чат");
+  }
+
+  state = await (await page.request.get("/api/state")).json() as State;
+  const outputs = state.exchanges.slice(-3).map((exchange) => exchange.outputs[0]);
+  expect(outputs.every((output) => output.ragDiagnostics?.evidence.status === "verified")).toBe(true);
+  expect(outputs.every((output) => output.ragDiagnostics?.retrievalQuery?.includes("цель=Подготовить release checklist"))).toBe(true);
+  expect(outputs.every((output) => output.ragDiagnostics?.retrievalQuery?.includes("Ограничение: сохранить JDK 21"))).toBe(true);
+  expect(outputs.at(-1)?.ragDiagnostics?.retrievalQuery).toContain("Контекстный RAG-ответ");
+  expect(state.assistantMemory.layers.find((item) => item.layer === "SHORT_TERM")?.count).toBe(4);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", {name: "Новый диалог", exact: true}).click();
+  await expect(page.locator('[data-layer="SHORT_TERM"] .memory-entry')).toHaveCount(0);
+  await expect(page.locator('[data-layer="WORKING"]')).toContainText("сохранить JDK 21");
+  await expect(page.getByTestId("task-state-panel")).toContainText("Подготовить release checklist");
+
+  await send(page, "Продолжай [[rag-abstain]]");
+  await done(page);
+  const abstention = page.getByTestId("exchange").last().getByTestId("response-card");
+  await expect(abstention.getByTestId("rag-abstention")).toContainText("Не знаю");
+  await expect(abstention.getByTestId("rag-evidence")).toContainText("Источники: не найдены");
+  await expect(abstention).not.toContainText("Ошибка RAG");
 });
 
 test("simple agent calls tracker through MCP and shows diagnostics", async ({page}) => {

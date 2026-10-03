@@ -36,6 +36,7 @@ export interface Settings {
   contextOverflowPolicy: "REJECT" | "DROP_OLDEST";
   contextStrategy: ContextStrategy;
   recentMessagesLimit: number;
+  assistantRagEnabled: boolean;
   ragCandidateLimit: number;
   ragResultLimit: number;
   ragMinSimilarity: number;
@@ -167,7 +168,7 @@ export interface RagEvidenceSource {
 }
 export interface RagDiagnostics {
   applied: boolean;
-  pipeline: "raw" | "enhanced";
+  pipeline: "raw" | "enhanced" | "assistant_contextual";
   queryRewritten: boolean;
   retrievalQuery: string | null;
   candidateLimit: number;

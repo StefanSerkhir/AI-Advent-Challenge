@@ -116,6 +116,82 @@ class WorkbenchApiTest {
     }
 
     @Test
+    fun `assistant RAG setting is contextual transactional and exposed through the regular output DTO`() = runBlocking {
+        val directory = Files.createTempDirectory("assistant-rag-api")
+        val indexFile = createRagFixtureIndex(directory)
+        val retrievalQueries = mutableListOf<String>()
+        val c = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    val delegate = DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                    object : EmbeddingClient {
+                        override val provider = delegate.provider
+                        override val model = delegate.model
+                        override suspend fun embed(texts: List<String>): List<EmbeddingVector> {
+                            retrievalQueries += texts
+                            return delegate.embed(texts.map { RAG_FIXTURE_RUN_WEB_TEXT })
+                        }
+                    }
+                }
+            },
+        ) { model, messages, _ ->
+            val system = messages.first().content
+            assertContains(system, "retrieval-augmented generation")
+            CompletionResult(
+                groundedAssistantRagFixtureAnswer(
+                    messages.last().content,
+                    "Запуск подтверждён локальной документацией [S1].",
+                ),
+                "stop",
+                TokenUsage(30, 10, 40),
+                model,
+            )
+        }
+        try {
+            val api = WorkbenchApi(c)
+            val initial = c.state.value.toDto()
+            val configured = api.settings(SettingsCommand(
+                initial.settingsVersion,
+                initial.settings.copy(
+                    mode = "unrestricted",
+                    contextStrategy = "MEMORY_LAYERS",
+                    recentMessagesLimit = 4,
+                    assistantRagEnabled = true,
+                    ragCandidateLimit = 8,
+                    ragResultLimit = 3,
+                    ragMinSimilarity = 0.2,
+                ),
+            ))
+            api.addMemory(MemoryAddCommand(configured.settingsVersion, "WORKING", "Ограничение: только JDK 21"))
+            api.startTaskState(TaskStateStartCommand(
+                c.state.value.settingsVersion,
+                "Подготовить запуск",
+                "Проверить команду",
+                "Продолжить инструкцию",
+            ))
+            api.start(command(c.state.value.settingsVersion, "Продолжай"))
+            c.awaitCurrentRequest()
+
+            val state = c.state.value.toDto()
+            val output = state.exchanges.single().outputs.single()
+            assertEquals("completed", state.exchanges.single().status)
+            assertEquals("assistant_contextual", output.ragDiagnostics?.pipeline)
+            assertEquals("verified", output.ragDiagnostics?.evidence?.status)
+            assertEquals("README.md", output.ragDiagnostics?.evidence?.sources?.single()?.source)
+            assertTrue(output.mcpCalls.isEmpty())
+            assertEquals(2, state.assistantMemory.layers.first { it.layer == "SHORT_TERM" }.count)
+            assertContains(retrievalQueries.single(), "Текущий вопрос: Продолжай")
+            assertContains(retrievalQueries.single(), "цель=Подготовить запуск")
+            assertContains(retrievalQueries.single(), "Ограничение: только JDK 21")
+            assertFalse(api.snapshot(state).contains("Требуются JDK 21+, Node.js 22.12+ и ключ выбранного провайдера"))
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `RAG retrieval failure keeps successful baseline card`() = runBlocking {
         val directory = Files.createTempDirectory("rag-api-missing")
         val c = controller(
@@ -917,6 +993,7 @@ class WorkbenchApiTest {
                 mode = "controlled", maxTokens = 123, maxWords = 12, bulletCount = 2,
                 stopSequence = "DONE", historyEnabled = false, contextStrategy = "STICKY_FACTS",
                 recentMessagesLimit = 4,
+                assistantRagEnabled = true,
                 ragCandidateLimit = 12,
                 ragResultLimit = 6,
                 ragMinSimilarity = 0.35,
@@ -926,6 +1003,7 @@ class WorkbenchApiTest {
             assertEquals("123", store.load().maxTokens)
             assertEquals("STICKY_FACTS", store.load().contextStrategy)
             assertEquals("4", store.load().recentMessagesLimit)
+            assertEquals("true", store.load().assistantRagEnabled)
             assertEquals("12", store.load().ragCandidateLimit)
             assertEquals("6", store.load().ragResultLimit)
             assertEquals("0.35", store.load().ragMinSimilarity)

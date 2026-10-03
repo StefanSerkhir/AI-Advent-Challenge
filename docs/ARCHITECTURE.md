@@ -206,6 +206,26 @@ chunk_id копируются только из request-local retrieval result. 
 финальный enhanced LLM-вызов пропускается, а branch завершается abstention с
 `below_threshold`, не технической ошибкой.
 
+Опциональный assistant RAG использует тот же `DocumentRetriever`, стабильный
+filter и evidence validator, но остаётся внутри существующей ветки
+`UNRESTRICTED + MEMORY_LAYERS`. Настройка `assistantRagEnabled=false` не создаёт
+response mode и не меняет `RAG_COMPARISON`. Для каждого хода
+`buildAssistantRagRetrievalQuery` строит bounded query до 4000 символов из
+текущего вопроса, active task, включённого WORKING и последних завершённых
+SHORT_TERM-сообщений. Затем `ragCandidateLimit → threshold → ragResultLimit`
+даёт request-local chunks. Evidence добавляется в единственный текущий user
+message перед prompt и помечается недоверенными данными; system/memory order не
+меняется. При включённом assistant RAG MCP каталог не передаётся модели, поэтому
+tool result не может быть принят как документный источник.
+
+Assistant output буферизуется. После invariant и task postflight общий evidence
+validator дополнительно требует «Ответ», «Цитаты», «Источники», разрешает в
+sources-секции только метки `[Sx]`, проверяет exact quote и присоединяет metadata
+из retrieval result. Только затем `AssistantMemoryManager.commitShortTermPair`
+атомарно сохраняет пару. Ноль результатов — нормальный abstention без generation;
+retrieval/generation/evidence/persistence error, cancellation и незавершённый
+stream проходят до commit и оставляют SHORT_TERM неизменным.
+
 `WorkbenchController` активирует `LocalMcpGateway` сразу при создании web runtime,
 поэтому восстановленные расписания работают до первого пользовательского запроса.
 Шлюз кэширует каталог отдельно для каждой сессии и сериализует её protocol operations.
@@ -260,6 +280,10 @@ Monitor запрашивает snapshot через настоящий `scheduler
 ### Настройки и режимы
 
 `AppSettings` хранит выбранный провайдер, модель, `ResponseMode`, лимиты ответа, историю, overflow policy, `ContextStrategy` и `recentMessagesLimit`. `LocalConfig` отображает эти значения в `.env`.
+
+`assistantRagEnabled` — persisted-настройка `AppSettings`/`.env`, применяемая
+только при `UNRESTRICTED + MEMORY_LAYERS`. Общие RAG limits используются также
+assistant-веткой; отключённый флаг сохраняет прежнее поведение всех режимов.
 
 Текущие wire-id режимов определены в `ResponseMode.cliValue`:
 
@@ -585,6 +609,13 @@ rewrite usage и реально использованные rank/source/section
 Raw явно помечает отсутствие rewrite/threshold. Context/memory/branch
 controls скрыты: эксперимент имеет независимый request-local контекст.
 
+Для `unrestricted + MEMORY_LAYERS` sidebar показывает отдельный переключатель
+RAG-чата и RAG limits только при его включении. Обычная карточка агента получает
+тот же `ragDiagnostics`, что comparison-карточки: фактический contextual query,
+counts/threshold, source IDs, verified quotes и evidence status. WORKING подписан
+как память текущей задачи и предоставляет явные типы ввода «Уточнение»,
+«Ограничение» и «Термин» поверх существующего memory CRUD.
+
 Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: порядковый
 номер, `serverId / toolName`, безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
 том же полном SSE snapshot; отдельного endpoint и клиентского источника истины нет.
@@ -658,6 +689,10 @@ API-ключ сохраняется только в локальном `.env`; A
   compatibility/dimensions/cancellation, threshold boundary, rerank/zero result,
   изоляцию baseline/raw/enhanced, untrusted chunks/citations, partial result,
   rewrite usage, десять cases, report v3 и миграцию v1/v2;
+- `AssistantRagTest` проверяет retrieval на каждом ходе, bounded contextual query,
+  task/WORKING/SHORT_TERM и выключенный слой, sources/exact quotes/abstention,
+  неизвестные citations и отсутствие commit при retrieval/generation/postflight/
+  persistence error и cancellation;
 
 Основная команда: `./gradlew test`.
 

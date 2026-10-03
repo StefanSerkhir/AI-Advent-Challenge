@@ -50,6 +50,7 @@ data class AppSettings(
     var contextOverflowPolicy: ContextOverflowPolicy = ContextOverflowPolicy.REJECT,
     var contextStrategy: ContextStrategy = ContextStrategy.SLIDING_WINDOW,
     var recentMessagesLimit: Int = DEFAULT_RECENT_MESSAGES_LIMIT,
+    var assistantRagEnabled: Boolean = false,
     var ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
     var ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
     var ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,

@@ -12,7 +12,8 @@ build/
 .llm-document-index/
 .llm-rag-evaluation/
 .llm-context-*.json
-/video/
+/video/*
+!/video/rag-memory-chat-demo.webm
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

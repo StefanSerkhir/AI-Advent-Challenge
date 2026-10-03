@@ -22,6 +22,7 @@ private const val HISTORY_ENABLED_NAME = "history_enabled"
 private const val CONTEXT_OVERFLOW_POLICY_NAME = "context_overflow_policy"
 private const val CONTEXT_STRATEGY_NAME = "context_strategy"
 private const val RECENT_MESSAGES_LIMIT_NAME = "recent_messages_limit"
+private const val ASSISTANT_RAG_ENABLED_NAME = "assistant_rag_enabled"
 private const val RAG_CANDIDATE_LIMIT_NAME = "rag_candidate_limit"
 private const val RAG_RESULT_LIMIT_NAME = "rag_result_limit"
 private const val RAG_MIN_SIMILARITY_NAME = "rag_min_similarity"
@@ -41,6 +42,7 @@ data class LocalConfig(
     val contextOverflowPolicy: String? = null,
     val contextStrategy: String? = null,
     val recentMessagesLimit: String? = null,
+    val assistantRagEnabled: String? = null,
     val ragCandidateLimit: String? = null,
     val ragResultLimit: String? = null,
     val ragMinSimilarity: String? = null,
@@ -51,7 +53,7 @@ data class LocalConfig(
         "deepSeekApiKey=${deepSeekApiKey.redacted()}, openAiApiKey=${openAiApiKey.redacted()}, " +
         "responseMode=$responseMode, maxTokens=$maxTokens, maxWords=$maxWords, " +
         "bulletCount=$bulletCount, stopSequence=$stopSequence, historyEnabled=$historyEnabled, contextOverflowPolicy=$contextOverflowPolicy, " +
-        "contextStrategy=$contextStrategy, recentMessagesLimit=$recentMessagesLimit, " +
+        "contextStrategy=$contextStrategy, recentMessagesLimit=$recentMessagesLimit, assistantRagEnabled=$assistantRagEnabled, " +
         "ragCandidateLimit=$ragCandidateLimit, ragResultLimit=$ragResultLimit, ragMinSimilarity=$ragMinSimilarity)"
 }
 
@@ -77,6 +79,7 @@ class LocalConfigStore(
             contextOverflowPolicy = loadValue(CONTEXT_OVERFLOW_POLICY_NAME, fileValues),
             contextStrategy = loadValue(CONTEXT_STRATEGY_NAME, fileValues),
             recentMessagesLimit = loadValue(RECENT_MESSAGES_LIMIT_NAME, fileValues),
+            assistantRagEnabled = loadValue(ASSISTANT_RAG_ENABLED_NAME, fileValues),
             ragCandidateLimit = loadValue(RAG_CANDIDATE_LIMIT_NAME, fileValues),
             ragResultLimit = loadValue(RAG_RESULT_LIMIT_NAME, fileValues),
             ragMinSimilarity = loadValue(RAG_MIN_SIMILARITY_NAME, fileValues),
@@ -97,6 +100,7 @@ class LocalConfigStore(
             CONTEXT_OVERFLOW_POLICY_NAME to settings.contextOverflowPolicy.name,
             CONTEXT_STRATEGY_NAME to settings.contextStrategy.name,
             RECENT_MESSAGES_LIMIT_NAME to settings.recentMessagesLimit.toString(),
+            ASSISTANT_RAG_ENABLED_NAME to settings.assistantRagEnabled.toString(),
             RAG_CANDIDATE_LIMIT_NAME to settings.ragCandidateLimit.toString(),
             RAG_RESULT_LIMIT_NAME to settings.ragResultLimit.toString(),
             RAG_MIN_SIMILARITY_NAME to settings.ragMinSimilarity.toString(),

@@ -11,7 +11,7 @@
 arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
 без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
-Для output RAG-ветки `ragDiagnostics` имеет явную форму
+Для output RAG-ветки или assistant RAG-чата `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
 strategy, embeddingModel, manifestHash, retrievedCount, rewrite, sources[],
@@ -22,7 +22,8 @@ abstained, abstentionReason, evidence }`,
 Статус равен `not_checked`, `verified` или `not_applicable`. Короткие quotes —
 единственные фрагменты chunk text по wire: backend проверил их точное вхождение
 после нормализации пробелов и сам присоединил metadata из retrieval result.
-`rewrite` содержит только elapsed, usage и стоимость служебного вызова.
+`pipeline` равен `raw`, `enhanced` или `assistant_contextual`; `rewrite` содержит
+только elapsed, usage и стоимость служебного вызова.
 Query/chunk vectors и полный chunk text по wire не передаются. У baseline-
 карточки поле равно `null`; при ошибке rewrite/retrieval RAG-карточка сохраняет
 `applied=false` и безопасную ошибку; ошибки индекса дополнительно содержат команду
@@ -74,7 +75,8 @@ Query/chunk vectors и полный chunk text по wire не передаютс
 | DELETE | `/api/notice` | `{}` → снимок без уведомления |
 | GET | `/api/events` | SSE `event: state`, `id: revision`, `data: StateDto`; heartbeat каждые 15 секунд |
 
-`SettingsDto` всегда содержит `ragCandidateLimit` (`1..50`), `ragResultLimit`
+`SettingsDto` всегда содержит `assistantRagEnabled` (default `false`),
+`ragCandidateLimit` (`1..50`), `ragResultLimit`
 (`1..20`, не больше candidate limit) и конечный `ragMinSimilarity` (`-1.0..1.0`).
 Они изменяются тем же `PUT /api/settings` с `expectedSettingsVersion`; API-ключи
 в DTO по-прежнему отсутствуют.
@@ -153,6 +155,18 @@ context-state откатывается. При ошибке или отмене 
 error, отмена, ошибка или незавершённый цикл не выполняют commit. Usage в output
 агрегирует все LLM-шаги. DeepSeek и остальные режимы не получают MCP tools и
 сохраняют прежний контракт ответа.
+
+При `unrestricted + MEMORY_LAYERS + assistantRagEnabled=true` каждый
+`POST /api/operations` сначала выполняет retrieval из `structured.json`.
+Фактический bounded query включает текущий prompt, active task и только включённые
+WORKING/SHORT_TERM-данные; candidate/threshold/top-K используют общие RAG settings.
+MCP definitions в этой ветке не передаются модели. Chunks остаются request-local,
+а output получает `pipeline=assistant_contextual`, source IDs и backend-verified
+quotes. Успешная generation обязана содержать секции «Ответ», «Цитаты» и
+«Источники»; неизвестная citation, отсутствующая секция, metadata модели или
+неточная цитата завершают operation ошибкой до commit. При нуле релевантных chunks
+operation завершается abstention без generation и с `evidence=not_applicable`.
+Только полностью успешный postflight атомарно добавляет пару в SHORT_TERM.
 
 Scheduler tools имеют строгие аргументы. `scheduler_create` требует `requestId`,
 `title`, `scheduleType`, `taskType` и поля выбранных видов; `scheduler_list`

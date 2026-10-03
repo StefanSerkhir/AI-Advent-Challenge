@@ -12,12 +12,12 @@ Fixture расположен только в test source set. Он исполь�
 
 Контрольный fixture-прогон текущего репозитория:
 
-- документов: `72`;
-- символов: `745497`;
-- слов: `67723`;
-- приблизительных страниц: `414.17`;
-- fixed chunks: `793`;
-- structured chunks: `1426`.
+- документов: `74`;
+- символов: `816813`;
+- слов: `74240`;
+- приблизительных страниц: `453.79`;
+- fixed chunks: `867`;
+- structured chunks: `1508`.
 
 Страница оценивается по явной стабильной формуле `characterCount / 1800`. Минимально допустимый corpus равен 20 таким страницам; меньший объём завершает запуск ошибкой до embeddings и создания output-каталога.
 
@@ -117,6 +117,13 @@ Raw RAG передаёт исходный вопрос и limit `rag_result_limi
 оставляет `score >= rag_min_similarity`, снова сортирует score/`chunkId`, берёт
 `rag_result_limit` и перенумеровывает rank/citations. Универсально правильного
 threshold нет: его нужно калибровать для конкретных corpus и embedding model.
+
+Тот же `DocumentRetriever` используется опциональным RAG-чатом Простого агента
+при `unrestricted + MEMORY_LAYERS`. В отличие от независимого comparison runner,
+он получает bounded contextual query из текущего вопроса, active task,
+включённого WORKING и хвоста завершённого SHORT_TERM, затем применяет общий
+candidate/threshold/top-K filter. Chunks остаются request-local и входят в
+generation как недоверенный блок перед единственным текущим prompt.
 
 Полный текст каждого chunk используется только при построении request-local RAG
 prompt и локальной postflight-проверке. Модель возвращает ответ с `[Sx]` и

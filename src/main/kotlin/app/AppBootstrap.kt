@@ -51,6 +51,16 @@ class AppBootstrap private constructor(
                 }
             }
 
+            fun boolean(name: String, raw: String?, default: Boolean): Boolean = when (raw?.lowercase()) {
+                null -> default
+                "true", "on", "1" -> true
+                "false", "off", "0" -> false
+                else -> {
+                    warnings += "$name в .env имеет неверное значение; используется $default"
+                    default
+                }
+            }
+
             val historyEnabled = when (config.historyEnabled?.lowercase()) {
                 null -> true
                 "true", "on", "1" -> true
@@ -99,6 +109,7 @@ class AppBootstrap private constructor(
                 } ?: ContextOverflowPolicy.REJECT,
                 contextStrategy = contextStrategy,
                 recentMessagesLimit = positiveInt("recent_messages_limit", config.recentMessagesLimit, 10),
+                assistantRagEnabled = boolean("assistant_rag_enabled", config.assistantRagEnabled, false),
                 ragCandidateLimit = ragCandidateLimit,
                 ragResultLimit = ragResultLimit,
                 ragMinSimilarity = finiteDouble(

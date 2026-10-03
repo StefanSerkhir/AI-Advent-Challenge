@@ -211,7 +211,7 @@ function ResponseCard({ output }: { output: Output }) {
           </Badge>
         </div>
         <strong>Источники</strong>
-        {output.ragDiagnostics.evidence.sources.length === 0 ? <p className="micro">Источников нет.</p> :
+        {output.ragDiagnostics.evidence.sources.length === 0 ? <p className="micro">Источники: не найдены. Источников нет.</p> :
           <ol>
             {output.ragDiagnostics.evidence.sources.map((source) => <li key={source.chunkId}>
               <div><strong>[S{source.rank}]</strong> <code>{source.source}</code></div>
@@ -231,7 +231,11 @@ function ResponseCard({ output }: { output: Output }) {
       </div>}
       {output.ragDiagnostics && <div className="rag-diagnostics" data-testid="rag-sources">
         <div className="rag-diagnostics-heading">
-          <strong>{output.ragDiagnostics.pipeline === "enhanced" ? "Улучшенный pipeline" : "Обычный pipeline"}</strong>
+          <strong>{output.ragDiagnostics.pipeline === "enhanced"
+            ? "Улучшенный pipeline"
+            : output.ragDiagnostics.pipeline === "assistant_contextual"
+              ? "Контекстный RAG-чат"
+              : "Обычный pipeline"}</strong>
           <Badge size="xs" variant="light" color={output.ragDiagnostics.applied ? "teal" : "gray"}>
             {output.ragDiagnostics.candidateCount} → {output.ragDiagnostics.filteredCount}
           </Badge>

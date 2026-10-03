@@ -125,6 +125,36 @@ function SimilaritySetting({
     }}
   />;
 }
+
+function RagSettings({workbench: w, locked}: {workbench: Workbench; locked: boolean}) {
+  const settings = w.state!.settings;
+  return <div data-testid="rag-settings">
+    <div className="settings-pair">
+      <BoundedNumberSetting
+        label="Кандидатов до фильтрации"
+        value={settings.ragCandidateLimit}
+        min={settings.ragResultLimit}
+        max={50}
+        disabled={locked}
+        onSave={(value) => void w.settings({ragCandidateLimit: value})}
+      />
+      <BoundedNumberSetting
+        label="Источников после фильтрации"
+        value={settings.ragResultLimit}
+        min={1}
+        max={Math.min(20, settings.ragCandidateLimit)}
+        disabled={locked}
+        onSave={(value) => void w.settings({ragResultLimit: value})}
+      />
+    </div>
+    <SimilaritySetting
+      value={settings.ragMinSimilarity}
+      disabled={locked}
+      onSave={(value) => void w.settings({ragMinSimilarity: value})}
+    />
+  </div>;
+}
+
 export function Sidebar({ workbench: w }: { workbench: Workbench }) {
   const s = w.state!;
   const mode = s.modes.find((m) => m.id === s.settings.mode)!;
@@ -215,31 +245,7 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
             onSave={(value) => void w.settings({ maxTokens: value })}
           />
         )}
-        {mode.id === "rag" && <>
-          <div className="settings-pair" data-testid="rag-settings">
-            <BoundedNumberSetting
-              label="Кандидатов до фильтрации"
-              value={s.settings.ragCandidateLimit}
-              min={s.settings.ragResultLimit}
-              max={50}
-              disabled={locked}
-              onSave={(value) => void w.settings({ ragCandidateLimit: value })}
-            />
-            <BoundedNumberSetting
-              label="Источников после фильтрации"
-              value={s.settings.ragResultLimit}
-              min={1}
-              max={Math.min(20, s.settings.ragCandidateLimit)}
-              disabled={locked}
-              onSave={(value) => void w.settings({ ragResultLimit: value })}
-            />
-          </div>
-          <SimilaritySetting
-            value={s.settings.ragMinSimilarity}
-            disabled={locked}
-            onSave={(value) => void w.settings({ ragMinSimilarity: value })}
-          />
-        </>}
+        {mode.id === "rag" && <RagSettings workbench={w} locked={locked}/>}
         {mode.usesTextConstraints && (
           <>
             <div className="settings-pair">
@@ -356,6 +362,14 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
                 )}
                 {s.settings.contextStrategy === "MEMORY_LAYERS" && (
                   <>
+                    <Switch
+                      label="RAG-чат с источниками"
+                      description="Ищет контекст в локальном индексе на каждом ходе и принимает только ответы с проверенными ссылками и цитатами."
+                      checked={s.settings.assistantRagEnabled}
+                      disabled={locked}
+                      onChange={(event) => void w.settings({assistantRagEnabled: event.currentTarget.checked})}
+                    />
+                    {s.settings.assistantRagEnabled && <RagSettings workbench={w} locked={locked}/>}
                     <NumberSetting
                       label="Сообщений в краткосрочной памяти"
                       value={s.settings.recentMessagesLimit}

@@ -21,6 +21,7 @@ data class SettingsDto(
     val contextOverflowPolicy: String = "REJECT",
     val contextStrategy: String = "SLIDING_WINDOW",
     val recentMessagesLimit: Int = 10,
+    val assistantRagEnabled: Boolean = false,
     val ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
     val ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
     val ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
@@ -412,7 +413,7 @@ data class StateDto(
 fun AppSettings.toDto() = SettingsDto(
     llmKind.name, model, responseMode.cliValue, maxTokens, maxWords, bulletCount,
     stopSequence, historyEnabled, contextOverflowPolicy.name, contextStrategy.name,
-    recentMessagesLimit, ragCandidateLimit, ragResultLimit, ragMinSimilarity,
+    recentMessagesLimit, assistantRagEnabled, ragCandidateLimit, ragResultLimit, ragMinSimilarity,
 )
 
 fun SettingsDto.toSettings(): AppSettings {
@@ -446,6 +447,7 @@ fun SettingsDto.toSettings(): AppSettings {
         contextOverflowPolicy = overflowPolicy,
         contextStrategy = strategy,
         recentMessagesLimit = recentMessagesLimit,
+        assistantRagEnabled = assistantRagEnabled,
         ragCandidateLimit = ragCandidateLimit,
         ragResultLimit = ragResultLimit,
         ragMinSimilarity = ragMinSimilarity,

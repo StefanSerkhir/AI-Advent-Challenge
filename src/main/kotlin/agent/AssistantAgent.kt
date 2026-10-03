@@ -2,6 +2,9 @@ package org.example.agent
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import org.example.app.*
+import org.example.indexing.DocumentRetrievalResult
+import org.example.indexing.filterRagCandidates
 import org.example.llm.*
 import org.example.mcp.McpGateway
 import org.example.tokens.*
@@ -13,6 +16,7 @@ data class AssistantAgentResponse(
     val taskStateDiagnostics: TaskStateDiagnostics,
     val invariantDiagnostics: AssistantInvariantDiagnostics,
     val mcpCalls: List<McpCallDiagnostic> = emptyList(),
+    val ragDiagnostics: RagDiagnostics? = null,
 )
 
 /** Independent assistant pipeline. It never reads or writes LlmAgent/ContextManager history. */
@@ -25,6 +29,7 @@ class AssistantAgent(
     private val invariantStateProvider: () -> AssistantInvariantState = { AssistantInvariantState() },
     private val mcpGateway: McpGateway? = null,
     private val containsSensitiveText: (String) -> Boolean = { false },
+    private val ragRetrieve: (suspend (String, Int) -> DocumentRetrievalResult)? = null,
     private val clientProvider: () -> LlmClient,
 ) {
     private val completedMetrics = mutableListOf<TurnTokenMetrics>()
@@ -38,6 +43,10 @@ class AssistantAgent(
         onDelta: (String) -> Unit = {},
         onMetrics: (TurnTokenMetrics) -> Unit = {},
         mcpEnabled: Boolean = false,
+        ragEnabled: Boolean = false,
+        ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
+        ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
+        ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
     ): AssistantAgentResponse {
         val normalized = prompt.trim()
         require(normalized.isNotEmpty()) { "Запрос ассистенту не может быть пустым." }
@@ -49,8 +58,39 @@ class AssistantAgent(
         }
         val activeTask = persistedTask?.takeUnless { it.phase == TaskPhase.DONE }
         val invariants = invariantStateProvider()
-        val currentUserMessage = LlmMessage(LlmRole.USER, invariantProtectedUserMessage(normalized, invariants))
-        val systemInstructions = assistantSystemInstructions(invariants, memory.state.profile, activeTask)
+        require(!ragEnabled || ragCandidateLimit > 0)
+        require(!ragEnabled || ragResultLimit in 1..ragCandidateLimit)
+        require(!ragEnabled || ragMinSimilarity.isFinite() && ragMinSimilarity in -1.0..1.0)
+        val rag = if (ragEnabled) {
+            val retrieve = requireNotNull(ragRetrieve) { "RAG retrieval не настроен для Простого агента." }
+            val query = buildAssistantRagRetrievalQuery(normalized, activeTask, memory)
+            val candidates = retrieve(query, ragCandidateLimit)
+            val selected = filterRagCandidates(candidates, ragMinSimilarity, ragResultLimit)
+            AssistantRagPreparation(
+                selected,
+                selected.toRagDiagnostics(
+                    pipeline = "assistant_contextual",
+                    queryRewritten = query != normalized,
+                    retrievalQuery = query,
+                    candidateLimit = ragCandidateLimit,
+                    candidateCount = candidates.chunks.size,
+                    resultLimit = ragResultLimit,
+                    minSimilarity = ragMinSimilarity,
+                    discardedCount = candidates.chunks.size - selected.chunks.size,
+                    rewrite = null,
+                ),
+            )
+        } else {
+            null
+        }
+        val userContent = rag?.retrieval?.takeIf { it.chunks.isNotEmpty() }
+            ?.let { assistantRagGroundedUserMessage(normalized, it) }
+            ?: normalized
+        val currentUserMessage = LlmMessage(LlmRole.USER, invariantProtectedUserMessage(userContent, invariants))
+        val systemInstructions = buildString {
+            append(assistantSystemInstructions(invariants, memory.state.profile, activeTask))
+            if (ragEnabled) append('\n').append(ASSISTANT_RAG_SYSTEM_PROMPT)
+        }
         val requestHistory = listOf(LlmMessage(LlmRole.SYSTEM, systemInstructions)) + memory.historyMessages
         val profile = profileProvider(model)
         val preparation = try {
@@ -74,25 +114,57 @@ class AssistantAgent(
                 schema = ASSISTANT_INVARIANT_RESPONSE_SCHEMA,
             ).takeIf { invariants.invariants.isNotEmpty() },
         )
-        val buffersForPostflight = invariants.invariants.isNotEmpty() || activeTask != null
-        val execution = executeWithMcpTools(
+        val buffersForPostflight = invariants.invariants.isNotEmpty() || activeTask != null || ragEnabled
+        val abstained = rag?.retrieval?.chunks?.isEmpty() == true
+        val execution = if (abstained) null else executeWithMcpTools(
             client = clientProvider(),
             messages = preparation.activeMessages,
             options = options,
             gateway = mcpGateway,
-            mcpEnabled = mcpEnabled,
+            // Tool results are not document evidence. RAG chat therefore has one deterministic source pipeline.
+            mcpEnabled = mcpEnabled && !ragEnabled,
             containsSensitiveText = containsSensitiveText,
             onDelta = if (buffersForPostflight) { _ -> } else onDelta,
         )
-        val rawCompletion = execution.completion
-        val invariantEnforcement = enforceInvariantResponse(rawCompletion.content, invariants)
-        val taskEnforcement = enforceTaskLifecycleResponse(invariantEnforcement.content, activeTask)
-        val responseBlocked = invariantEnforcement.blocked || taskEnforcement.blocked
-        val completion = rawCompletion.copy(content = taskEnforcement.content)
+        var invariantBlocked = false
+        var taskBlocked = false
+        var ragDiagnostics = rag?.diagnostics
+        val completion = if (execution == null) {
+            ragDiagnostics = requireNotNull(ragDiagnostics).copy(
+                applied = false,
+                abstained = true,
+                abstentionReason = "below_threshold",
+                evidence = RagEvidence(status = RagEvidenceStatus.NOT_APPLICABLE),
+            )
+            CompletionResult(
+                content = NO_RELEVANT_RAG_CONTEXT_MESSAGE,
+                finishReason = "abstained",
+                usage = null,
+                model = model,
+            )
+        } else {
+            val rawCompletion = execution.completion
+            val invariantEnforcement = enforceInvariantResponse(rawCompletion.content, invariants)
+            val taskEnforcement = enforceTaskLifecycleResponse(invariantEnforcement.content, activeTask)
+            invariantBlocked = invariantEnforcement.blocked
+            taskBlocked = taskEnforcement.blocked
+            var content = taskEnforcement.content
+            if (!invariantBlocked && !taskBlocked && rag != null) {
+                val validated = validateRagCitations(
+                    content,
+                    rag.retrieval.chunks,
+                    requireSourcesSection = true,
+                )
+                content = validated.answer
+                ragDiagnostics = ragDiagnostics?.copy(evidence = validated.evidence)
+            }
+            rawCompletion.copy(content = content)
+        }
+        val responseBlocked = invariantBlocked || taskBlocked
         if (buffersForPostflight) onDelta(completion.content)
         completion.usage?.let(TokenCostCalculator::validateUsage)
         val billedProfile = completion.model?.let(profileProvider) ?: profile
-        val cost = aggregateStepCost(execution.llmSteps, profileProvider, costCalculator, model)
+        val cost = execution?.let { aggregateStepCost(it.llmSteps, profileProvider, costCalculator, model) }
         val withoutTotals = prepared.copy(
             model = completion.model ?: model,
             assistantMessage = completion.content,
@@ -107,7 +179,7 @@ class AssistantAgent(
         val persistedHistory = memory.state.shortTerm.map {
             LlmMessage(if (it.role == MemoryEntryRole.ASSISTANT) LlmRole.ASSISTANT else LlmRole.USER, it.text)
         }
-        val persistCompletedTurn = !responseBlocked && execution.mcpSucceeded
+        val persistCompletedTurn = !responseBlocked && execution?.mcpSucceeded != false
         val historyTokens = tokenEstimator.estimateMessages(
             if (!persistCompletedTurn) persistedHistory else
                 persistedHistory + LlmMessage(LlmRole.USER, normalized) + LlmMessage(LlmRole.ASSISTANT, completion.content),
@@ -156,16 +228,17 @@ class AssistantAgent(
                 taskId = taskApplied?.id,
                 stateVersion = taskApplied?.version,
                 phase = taskApplied?.phase,
-                responseBlocked = taskEnforcement.blocked,
+                responseBlocked = taskBlocked,
             ),
             AssistantInvariantDiagnostics(
                 applied = invariantsApplied,
                 stateVersion = invariants.version,
                 appliedCount = if (invariantsApplied) invariants.invariants.size else 0,
                 appliedInvariantIds = if (invariantsApplied) invariants.invariants.map(AssistantInvariant::id) else emptyList(),
-                responseBlocked = invariantEnforcement.blocked,
+                responseBlocked = invariantBlocked,
             ),
-            execution.mcpCalls,
+            execution?.mcpCalls.orEmpty(),
+            ragDiagnostics,
         )
     }
 
@@ -204,6 +277,66 @@ class AssistantAgent(
         pricingSourceUrl = profile?.sourceUrl,
         contextProfileSimulated = profile?.simulated == true,
     )
+}
+
+const val MAX_ASSISTANT_RAG_QUERY_CHARACTERS = 4_000
+private const val MAX_CURRENT_QUERY_PART_CHARACTERS = 1_400
+private const val MAX_TASK_QUERY_PART_CHARACTERS = 1_000
+private const val MAX_WORKING_ENTRY_QUERY_CHARACTERS = 500
+private const val MAX_SHORT_TERM_ENTRY_QUERY_CHARACTERS = 350
+private const val MAX_SHORT_TERM_QUERY_ENTRIES = 6
+
+private data class AssistantRagPreparation(
+    val retrieval: DocumentRetrievalResult,
+    val diagnostics: RagDiagnostics,
+)
+
+/**
+ * Deterministic bounded query for conversational retrieval. It includes only enabled memory layers,
+ * and only persisted complete SHORT_TERM pairs supplied by [AssistantMemoryManager.prepare].
+ */
+fun buildAssistantRagRetrievalQuery(
+    currentPrompt: String,
+    activeTask: AgentTaskState?,
+    memory: PreparedAssistantMemory,
+    maxCharacters: Int = MAX_ASSISTANT_RAG_QUERY_CHARACTERS,
+): String {
+    require(currentPrompt.isNotBlank())
+    require(maxCharacters in 256..MAX_ASSISTANT_RAG_QUERY_CHARACTERS)
+    val parts = mutableListOf<String>()
+    parts += "Текущий вопрос: ${currentPrompt.trim().takeQueryCharacters(MAX_CURRENT_QUERY_PART_CHARACTERS)}"
+    if (activeTask != null) {
+        parts += "Активная задача: ${buildString {
+            append("цель=").append(activeTask.goal)
+            append("; текущий шаг=").append(activeTask.currentStep)
+            append("; следующее действие=").append(activeTask.expectedAction)
+        }.takeQueryCharacters(MAX_TASK_QUERY_PART_CHARACTERS)}"
+    }
+    if (memory.state.settings.workingEnabled) {
+        memory.state.working.forEach { entry ->
+            parts += "Рабочая память текущей задачи: ${entry.text.takeQueryCharacters(MAX_WORKING_ENTRY_QUERY_CHARACTERS)}"
+        }
+    }
+    if (memory.state.settings.shortTermEnabled) {
+        memory.state.shortTerm.takeLast(MAX_SHORT_TERM_QUERY_ENTRIES).forEach { entry ->
+            val role = if (entry.role == MemoryEntryRole.ASSISTANT) "ассистент" else "пользователь"
+            parts += "Недавний успешный ход ($role): ${entry.text.takeQueryCharacters(MAX_SHORT_TERM_ENTRY_QUERY_CHARACTERS)}"
+        }
+    }
+    val result = StringBuilder()
+    for (part in parts) {
+        val separator = if (result.isEmpty()) "" else "\n"
+        val remaining = maxCharacters - result.length - separator.length
+        if (remaining <= 0) break
+        result.append(separator).append(part.takeQueryCharacters(remaining))
+    }
+    return result.toString()
+}
+
+private fun String.takeQueryCharacters(limit: Int): String {
+    if (length <= limit) return this
+    val safeEnd = if (limit > 0 && this[limit - 1].isHighSurrogate()) limit - 1 else limit
+    return substring(0, safeEnd)
 }
 
 private const val USER_PROFILE_MARKER = "=== USER PROFILE DATA ==="

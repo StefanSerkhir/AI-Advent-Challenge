@@ -45,6 +45,7 @@ class LocalConfigStoreTest {
                     historyEnabled = false,
                     contextStrategy = ContextStrategy.STICKY_FACTS,
                     recentMessagesLimit = 7,
+                    assistantRagEnabled = true,
                     ragCandidateLimit = 12,
                     ragResultLimit = 6,
                     ragMinSimilarity = 0.35,
@@ -64,6 +65,7 @@ class LocalConfigStoreTest {
             assertEquals("off", reloaded.stopSequence)
             assertEquals("STICKY_FACTS", reloaded.contextStrategy)
             assertEquals("7", reloaded.recentMessagesLimit)
+            assertEquals("true", reloaded.assistantRagEnabled)
             assertEquals("12", reloaded.ragCandidateLimit)
             assertEquals("6", reloaded.ragResultLimit)
             assertEquals("0.35", reloaded.ragMinSimilarity)
@@ -87,6 +89,7 @@ class LocalConfigStoreTest {
             rag_candidate_limit=100
             rag_result_limit=0
             rag_min_similarity=NaN
+            assistant_rag_enabled=perhaps
             """.trimIndent(),
         )
 
@@ -102,6 +105,7 @@ class LocalConfigStoreTest {
             assertEquals(true, bootstrap.settings.historyEnabled)
             assertEquals(ContextStrategy.SLIDING_WINDOW, bootstrap.settings.contextStrategy)
             assertEquals(10, bootstrap.settings.recentMessagesLimit)
+            assertFalse(bootstrap.settings.assistantRagEnabled)
             assertEquals(10, bootstrap.settings.ragCandidateLimit)
             assertEquals(5, bootstrap.settings.ragResultLimit)
             assertEquals(0.20, bootstrap.settings.ragMinSimilarity)
@@ -112,6 +116,7 @@ class LocalConfigStoreTest {
             assertContains(bootstrap.warning.orEmpty(), "rag_candidate_limit")
             assertContains(bootstrap.warning.orEmpty(), "rag_result_limit")
             assertContains(bootstrap.warning.orEmpty(), "rag_min_similarity")
+            assertContains(bootstrap.warning.orEmpty(), "assistant_rag_enabled")
             assertNull(config.apiKey)
 
             val invalidProvider = AppBootstrap.from(

@@ -130,6 +130,11 @@ class WorkbenchController(
         invariantStateProvider = assistantInvariantManager::state,
         mcpGateway = mcpGateway,
         containsSensitiveText = { text -> apiKeys.values.any { key -> key.isNotEmpty() && key in text } },
+        ragRetrieve = { query, limit ->
+            val retriever = documentRetrieverProvider?.invoke(apiKeys.toMap())
+                ?: error("RAG retrieval не настроен. Постройте локальный индекс и перезапустите приложение.")
+            retriever.retrieve(query, limit)
+        },
     ) {
         requestClient.get() ?: error("Клиент запроса не инициализирован")
     }
@@ -574,7 +579,11 @@ class WorkbenchController(
         val total = when (settings.responseMode) {
             ResponseMode.COMPARE -> 2
             ResponseMode.CONTROLLED -> 1
-            ResponseMode.UNRESTRICTED -> if (settings.contextStrategy == ContextStrategy.STICKY_FACTS && settings.historyEnabled) 2 else 1
+            ResponseMode.UNRESTRICTED -> when {
+                settings.contextStrategy == ContextStrategy.MEMORY_LAYERS && settings.assistantRagEnabled -> 2
+                settings.contextStrategy == ContextStrategy.STICKY_FACTS && settings.historyEnabled -> 2
+                else -> 1
+            }
             ResponseMode.REASONING -> TOTAL_REASONING_API_CALLS
             ResponseMode.TEMPERATURE -> TOTAL_TEMPERATURE_API_CALLS
             ResponseMode.MODEL_COMPARISON -> TOTAL_MODEL_COMPARISON_API_CALLS
@@ -618,7 +627,11 @@ class WorkbenchController(
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
                         if (settings.responseMode == ResponseMode.UNRESTRICTED &&
                             settings.contextStrategy == ContextStrategy.MEMORY_LAYERS) {
-                            reportProgress(1, 1, "Агент формирует ответ со слоями памяти")
+                            reportProgress(
+                                1,
+                                if (settings.assistantRagEnabled) 2 else 1,
+                                if (settings.assistantRagEnabled) "RAG-чат: contextual retrieval" else "Агент формирует ответ со слоями памяти",
+                            )
                             var preparedMetrics: TurnTokenMetrics? = null
                             val response = assistantAgent.respond(
                                 prompt = normalizedPrompt,
@@ -627,6 +640,10 @@ class WorkbenchController(
                                 overflowPolicy = settings.contextOverflowPolicy,
                                 shortTermMessageLimit = settings.recentMessagesLimit,
                                 mcpEnabled = settings.llmKind == LlmKind.OPENAI,
+                                ragEnabled = settings.assistantRagEnabled,
+                                ragCandidateLimit = settings.ragCandidateLimit,
+                                ragResultLimit = settings.ragResultLimit,
+                                ragMinSimilarity = settings.ragMinSimilarity,
                                 onDelta = { content -> publishStreamingOutput(ExperimentOutputDelta(
                                     "assistant", "ОТВЕТ АГЕНТА", content, tokenMetrics = preparedMetrics,
                                 ).asOutput()) },
@@ -637,6 +654,9 @@ class WorkbenchController(
                                     ).asOutput())
                                 },
                             )
+                            if (settings.assistantRagEnabled) {
+                                reportProgress(2, 2, "RAG-чат: evidence проверено")
+                            }
                             addOutput(ExperimentOutput(
                                 id = "assistant",
                                 title = "ОТВЕТ АГЕНТА",
@@ -647,6 +667,7 @@ class WorkbenchController(
                                 taskStateDiagnostics = response.taskStateDiagnostics,
                                 assistantInvariantDiagnostics = response.invariantDiagnostics,
                                 mcpCalls = response.mcpCalls,
+                                ragDiagnostics = response.ragDiagnostics,
                             ))
                             publish { it.copy(
                                 assistantMemory = assistantMemoryManager.state(),

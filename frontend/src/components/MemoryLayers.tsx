@@ -15,9 +15,11 @@ const labels: Record<MemoryLayer, string> = {
 export function MemoryLayers({workbench: w, locked}: {workbench: Workbench; locked: boolean}) {
   const state = w.state!;
   const [layer, setLayer] = useState<MemoryLayer>("WORKING");
+  const [workingKind, setWorkingKind] = useState("Уточнение");
   const [text, setText] = useState("");
   const add = async () => {
-    if (text.trim() && await w.addMemory(layer, text)) setText("");
+    const value = layer === "WORKING" ? `${workingKind}: ${text.trim()}` : text.trim();
+    if (text.trim() && await w.addMemory(layer, value)) setText("");
   };
   return <div className="memory-layers" data-testid="memory-layers">
     <p className="micro">Все три слоя работают одновременно. Краткосрочный слой пополняется только завершёнными парами диалога.</p>
@@ -29,6 +31,7 @@ export function MemoryLayers({workbench: w, locked}: {workbench: Workbench; lock
         <strong>{labels[memory.layer]}</strong>
         <Badge size="xs" variant="light">{memory.count}</Badge>
       </div>
+      {memory.layer === "WORKING" && <p className="micro">Память текущей задачи: явные уточнения, ограничения и согласованные термины. Их можно редактировать и удалять.</p>}
       <Switch
         size="xs"
         label="Учитывать в ответе"
@@ -64,6 +67,9 @@ export function MemoryLayers({workbench: w, locked}: {workbench: Workbench; lock
       <NativeSelect label="Добавить в слой" value={layer} disabled={locked}
         data={[{value: "WORKING", label: labels.WORKING}, {value: "LONG_TERM", label: labels.LONG_TERM}]}
         onChange={(event) => setLayer(event.currentTarget.value as MemoryLayer)}/>
+      {layer === "WORKING" && <NativeSelect label="Тип записи текущей задачи" value={workingKind} disabled={locked}
+        data={["Уточнение", "Ограничение", "Термин"]}
+        onChange={(event) => setWorkingKind(event.currentTarget.value)}/>}
       <Textarea label="Текст записи" value={text} maxLength={16384} disabled={locked}
         onChange={(event) => setText(event.currentTarget.value)} minRows={2}/>
       <Button size="xs" leftSection={<IconMessagePlus size={14}/>} disabled={locked || !text.trim()} onClick={() => void add()}>Добавить запись</Button>

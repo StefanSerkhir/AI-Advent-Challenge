@@ -50,6 +50,15 @@ fun main() {
                         return texts.map { text ->
                             if ("[[rag-abstain]]" in text || "fixture-no-relevant-context" in text) {
                                 EmbeddingVector(List(descriptor.dimensions) { 0f })
+                            } else if ("Текущий вопрос:" in text &&
+                                ("документного rag" in text.lowercase() || "structure-aware" in text.lowercase() ||
+                                    "descriptor embedding" in text.lowercase())) {
+                                delegate.embed(listOf(RAG_FIXTURE_INDEXING_TEXT)).single()
+                            } else if ("Текущий вопрос:" in text &&
+                                ("backup" in text.lowercase() || "копи" in text.lowercase() || "restore drill" in text.lowercase())) {
+                                delegate.embed(listOf(RAG_FIXTURE_BACKUP_TEXT)).single()
+                            } else if ("Текущий вопрос:" in text) {
+                                delegate.embed(listOf(RAG_FIXTURE_RELEASE_TEXT)).single()
                             } else if ("Как запустить production web-приложение?" in text) {
                                 delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
                             } else {
@@ -106,7 +115,8 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         if ("[[baseline-error]]" in prompt && "предоставленный контекст" !in assistantProfile) {
             throw LlmApiException("Fixture baseline error")
         }
-        if ("[[rag-error]]" in prompt && "предоставленный контекст" in assistantProfile) {
+        if ("[[rag-error]]" in prompt &&
+            ("предоставленный контекст" in assistantProfile || "retrieval-augmented generation" in assistantProfile)) {
             throw LlmApiException("Fixture RAG error")
         }
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
@@ -213,6 +223,11 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                 groundedRagFixtureAnswer(
                     prompt,
                     "Production web-приложение запускается командой `./gradlew runWeb` [S1].",
+                )
+            "retrieval-augmented generation" in assistantProfile && "RETRIEVED DOCUMENT EVIDENCE" in prompt ->
+                groundedAssistantRagFixtureAnswer(
+                    prompt,
+                    "Контекстный RAG-ответ подтверждён локальным источником [S1].",
                 )
             prompt == PIPELINE_FIXTURE_PROMPT && SAVE_TO_FILE_TOOL in pipelineResults -> {
                 val saved = parseFixtureToolResult(requireNotNull(pipelineResults[SAVE_TO_FILE_TOOL]))
