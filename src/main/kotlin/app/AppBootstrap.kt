@@ -117,7 +117,7 @@ class AppBootstrap private constructor(
                 ),
             )
             val apiKeys = buildMap {
-                config.apiKey?.let { put(configuredLlmKind, it) }
+                config.apiKey?.takeIf { configuredLlmKind.requiresApiKey }?.let { put(configuredLlmKind, it) }
                 config.deepSeekApiKey?.let { put(LlmKind.DEEPSEEK, it) }
                 config.openAiApiKey?.let { put(LlmKind.OPENAI, it) }
             }

@@ -743,6 +743,25 @@ test("prompt focus uses one clean highlight around the composer", async ({
     .toBe("rgb(133, 139, 217)");
 });
 
+test("local Ollama provider hides API key form and can run without a key", async ({page}) => {
+  await page.goto("/");
+  await ready(page);
+
+  await page.getByLabel("Провайдер", {exact: true}).selectOption("OLLAMA");
+  await expect.poll(async () =>
+    ((await (await page.request.get("/api/state")).json()) as State).settings.provider,
+  ).toBe("OLLAMA");
+  await expect(page.getByLabel("Модель", {exact: true})).toHaveValue("qwen3:14b");
+  await expect(page.getByLabel("API-ключ", {exact: true})).toHaveCount(0);
+  await expect(page.getByTestId("local-provider-note")).toContainText("API-ключ не требуется");
+  await expect(page.getByTestId("local-provider-note")).toContainText("127.0.0.1:11434");
+
+  await setMode(page, "unrestricted");
+  await send(page, "Локальный тест без API-ключа");
+  await done(page);
+  await expect(page.getByTestId("response-card").last()).toContainText("Ответ");
+});
+
 test("all eight modes, demos, history, settings, keys and keyboard shortcuts", async ({
   page,
 }) => {

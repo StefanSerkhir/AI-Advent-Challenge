@@ -22,6 +22,25 @@ Gradle установит frontend-зависимости из lock-файла, 
 `./llm` и `./gradlew :run` запускают web-приложение.
 Остановка — `Ctrl+C`; сервер отменяет корутины и закрывает общий HttpClient.
 
+### Локальная Ollama без API-ключа
+
+На Apple Silicon с 32 ГБ unified memory можно запустить полностью локальную
+`qwen3:14b` (Q4_K_M, около 9,3 ГБ) через Ollama. Workbench использует только
+фиксированный loopback endpoint `http://127.0.0.1:11434/v1/chat/completions`:
+
+```bash
+brew install ollama
+OLLAMA_HOST=127.0.0.1:11434 ollama serve
+# в другом терминале
+ollama pull qwen3:14b
+./gradlew runLocalLlmDemo
+```
+
+В UI выберите **Ollama (локально)** → `qwen3:14b`: поле ключа скрыто, запрос не
+блокируется отсутствующим ключом, а облачная API-стоимость отсутствует. Подробная
+установка, CLI/curl smoke-check, три реальных запроса и запись видео описаны в
+[локальной LLM-демонстрации](docs/LOCAL_LLM_DEMO.md).
+
 ## Локальный пример MCP
 
 В проекте есть воспроизводимая локальная orchestration Model Context Protocol,
@@ -150,14 +169,16 @@ WEB_PORT=8090 ./gradlew runWeb
 
 ## Возможности
 
-Доступны два провайдера:
+Доступны три провайдера:
 
 - DeepSeek, модель `deepseek-v4-flash`;
 - OpenAI, модели `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` и
-  `gpt-4.1-mini`.
+  `gpt-4.1-mini`;
+- Ollama (локально), модель `qwen3:14b`, без API-ключа и облачной API-стоимости.
 
 Провайдер и модель переключаются в боковой панели. Активная модель, провайдер,
-API-ключи и параметры ответа сохраняются в локальном `.env`.
+ключи облачных провайдеров и параметры ответа сохраняются в локальном `.env`.
+Для Ollama ключ не создаётся и не сохраняется.
 
 Поддерживаются восемь режимов:
 
@@ -438,8 +459,18 @@ deepseek_api_key=ВАШ_DEEPSEEK_API_KEY
 # openai_api_key=ВАШ_OPENAI_API_KEY
 ```
 
+Локальный вариант не содержит ключа:
+
+```dotenv
+llm_kind=Ollama
+llm_model=qwen3:14b
+response_mode=unrestricted
+history_enabled=false
+```
+
 Для обратной совместимости поддерживается `llm_api_key`: он относится к активному
-`llm_kind`. Специализированные `deepseek_api_key` и `openai_api_key` имеют
+провайдеру, если тот требует ключ; при `llm_kind=Ollama` значение игнорируется.
+Специализированные `deepseek_api_key` и `openai_api_key` имеют
 приоритет. Дополнительные параметры перечислены в `.env.example`; интерфейс
 обновляет их автоматически.
 
@@ -779,7 +810,9 @@ KaTeX работает без доверенных команд; внешние 
 обычно прерывается сразу, но окончательное прекращение зависит от текущего сетевого
 этапа и платформы.
 
-DeepSeek получает `max_tokens` и API-параметр `stop`. OpenAI получает
+DeepSeek и Ollama получают `max_tokens` и поддерживаемый OpenAI-compatible
+streaming contract; Ollama вызывается без `Authorization` только на фиксированном
+`127.0.0.1:11434`. OpenAI получает
 `max_completion_tokens`; для моделей без поддержки stop sequence ограничение
 дублируется явной инструкцией. Температурный эксперимент с `gpt-5.6-luna`
 сохраняет прежнее поведение и использует `gpt-4.1-mini`, потому что Luna принимает

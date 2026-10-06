@@ -204,6 +204,7 @@ private fun String?.normalizedValue(): String? = this
 private fun LlmKind.configValue(): String = when (this) {
     LlmKind.DEEPSEEK -> "Deepseek"
     LlmKind.OPENAI -> "OpenAI"
+    LlmKind.OLLAMA -> "Ollama"
 }
 
 private fun String?.redacted(): String = if (this == null) "null" else "<redacted>"

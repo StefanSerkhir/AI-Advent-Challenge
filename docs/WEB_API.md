@@ -4,6 +4,13 @@
 `src/main/kotlin/web/ApiDtos.kt`; TypeScript: `frontend/src/api/types.ts`.
 Ключи не входят в состояние. Все ошибки JSON имеют `{ "code": "...", "message": "..." }`.
 
+Каждый элемент `providers[]` имеет форму
+`{ id, title, hasKey, requiresApiKey, models[] }`. У `OLLAMA`
+`requiresApiKey=false`, `hasKey=false`; его единственная штатная модель —
+`qwen3:14b`. UI скрывает key form, а `PUT /api/key` для `OLLAMA` возвращает
+`400 validation`. Provider endpoint не передаётся по wire и остаётся фиксированным
+loopback `http://127.0.0.1:11434/v1/chat/completions`.
+
 Каждый `outputs[]` содержит `mcpCalls`: упорядоченный массив
 `{ serverId, toolName, arguments, status, result }`. `serverId` — безопасный
 стабильный ID фактического server-owner из объединённого `tools/list`; позиция в
@@ -43,7 +50,7 @@ Query/chunk vectors и полный chunk text по wire не передаютс
 | GET | `/api/state` | Полный `StateDto`: настройки, каталог, история, память, `assistantInvariants`, `taskState`, `backgroundTasks`, результаты, операция, уведомление |
 | GET | `/api/settings` | Тот же полный снимок; ключи представлены только `hasKey` |
 | PUT | `/api/settings` | `{ expectedSettingsVersion, settings: SettingsDto }` → снимок после сохранения |
-| PUT | `/api/key` | `{ expectedSettingsVersion, provider, key }` → снимок без ключа |
+| PUT | `/api/key` | `{ expectedSettingsVersion, provider, key }` → снимок без ключа; для провайдера с `requiresApiKey=false` — `400 validation` |
 | POST | `/api/operations` | `{ requestId, expectedSettingsVersion, prompt, demo: null \| "reasoning" \| "temperature" }` → `202 { operationId }` |
 | POST | `/api/context/checkpoint` | `{ expectedSettingsVersion }` → создаёт immutable checkpoint и ветки A/B |
 | POST | `/api/context/branch` | `{ expectedSettingsVersion, branchId }` → переключает активную ветку |
@@ -154,7 +161,8 @@ context-state откатывается. При ошибке или отмене 
 историю и `SHORT_TERM` попадает только успешная пара user/final assistant; tool
 error, отмена, ошибка или незавершённый цикл не выполняют commit. Usage в output
 агрегирует все LLM-шаги. DeepSeek и остальные режимы не получают MCP tools и
-сохраняют прежний контракт ответа.
+сохраняют прежний контракт ответа. Ollama также не получает tools и работает без
+ключа через OpenAI-compatible streaming endpoint на loopback.
 
 При `unrestricted + MEMORY_LAYERS + assistantRagEnabled=true` каждый
 `POST /api/operations` сначала выполняет retrieval из `structured.json`.

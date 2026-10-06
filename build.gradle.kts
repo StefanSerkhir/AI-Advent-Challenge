@@ -68,6 +68,12 @@ tasks.register<JavaExec>("runMcpDemo") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.mcp.McpDemoClientKt"
 }
+tasks.register<JavaExec>("runLocalLlmDemo") {
+    group = "verification"
+    description = "Run three real streaming prompts against local Ollama qwen3:14b on 127.0.0.1:11434"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.cli.LocalLlmDemoKt"
+}
 tasks.register<JavaExec>("buildDocumentIndexes") {
     group = "application"
     description = "Build local fixed and structure-aware document indexes with OpenAI embeddings"

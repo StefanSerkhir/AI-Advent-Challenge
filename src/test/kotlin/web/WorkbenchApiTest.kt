@@ -50,6 +50,61 @@ class WorkbenchApiTest {
         documentRetrieverProvider = documentRetrieverProvider, persistSettings = persist)
 
     @Test
+    fun `Ollama runs without a key and never receives MCP tools`() = runBlocking {
+        var catalogReads = 0
+        val observedOptions = mutableListOf<CompletionOptions>()
+        val gateway = object : McpGateway {
+            override suspend fun listTools(): List<McpTool> {
+                catalogReads++
+                return listOf(McpTool("should_not_be_visible", "test", buildJsonObject { put("type", "object") }, "test"))
+            }
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject) =
+                error("Ollama must not call MCP")
+            override suspend fun close() = Unit
+        }
+        val controller = WorkbenchController(
+            initialSettings = AppSettings(LlmKind.OLLAMA, responseMode = ResponseMode.UNRESTRICTED),
+            initialApiKeys = emptyMap(),
+            mcpGateway = gateway,
+            clientFactory = { kind, key, model ->
+                assertEquals(LlmKind.OLLAMA, kind)
+                assertNull(key)
+                object : LlmClient {
+                    override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                        observedOptions += options
+                        return completion(model)
+                    }
+                }
+            },
+        )
+        try {
+            val api = WorkbenchApi(controller)
+            val state = controller.state.value.toDto()
+            val ollama = state.providers.single { it.id == "OLLAMA" }
+            assertFalse(ollama.requiresApiKey)
+            assertFalse(ollama.hasKey)
+            assertEquals("qwen3:14b", ollama.models.single().id)
+
+            api.start(StartCommand("ollama-request-1", state.settingsVersion, "Локальный запрос"))
+            controller.awaitCurrentRequest()
+
+            val completed = controller.state.value.toDto().exchanges.single()
+            assertEquals("completed", completed.status)
+            assertNull(completed.outputs.single().tokenMetrics?.turnCostUsd?.value)
+            assertNull(completed.outputs.single().tokenMetrics?.pricingProfileId)
+            assertEquals(0, catalogReads)
+            assertTrue(observedOptions.single().tools.isEmpty())
+            val problem = assertFailsWith<ApiProblem> {
+                api.key(KeyCommand(controller.state.value.settingsVersion, "OLLAMA", "not-used"))
+            }
+            assertEquals(400, problem.status)
+            assertContains(problem.message, "не требуется")
+        } finally {
+            controller.shutdown()
+        }
+    }
+
+    @Test
     fun `RAG mode exposes diagnostics without vectors or chunk text and does not persist history or memory`() = runBlocking {
         val directory = Files.createTempDirectory("rag-api")
         val indexFile = createRagFixtureIndex(directory)
@@ -980,8 +1035,10 @@ class WorkbenchApiTest {
         try {
             val initial = client.get("$base/settings").state()
             assertEquals(8, initial.modes.size)
-            assertEquals(2, initial.providers.size)
+            assertEquals(3, initial.providers.size)
             assertFalse(initial.providers.any { it.hasKey })
+            assertFalse(initial.providers.single { it.id == "OLLAMA" }.requiresApiKey)
+            assertTrue(initial.providers.filter { it.id != "OLLAMA" }.all { it.requiresApiKey })
             assertEquals(HttpStatusCode.BadRequest, client.post("$base/operations") { localJson(apiJson.encodeToString(command())) }.status)
             val key = "replacement-secret-xyz"
             val saved = client.put("$base/key") { localJson(apiJson.encodeToString(KeyCommand(0, "OPENAI", key))) }
@@ -1016,6 +1073,15 @@ class WorkbenchApiTest {
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(ragMinSimilarity = 1.1)))) }.status)
             assertEquals(HttpStatusCode.BadRequest, client.put("$base/key") { localJson("{broken $key}") }.status)
             assertFalse(client.get("$base/state").bodyAsText().contains(key))
+            val local = client.put("$base/settings") {
+                localJson(apiJson.encodeToString(SettingsCommand(2, changed.copy(provider = "OLLAMA", model = "qwen3:14b"))))
+            }.state()
+            val rejectedLocalKey = client.put("$base/key") {
+                localJson(apiJson.encodeToString(KeyCommand(local.settingsVersion, "OLLAMA", "must-not-be-saved")))
+            }
+            assertEquals(HttpStatusCode.BadRequest, rejectedLocalKey.status)
+            assertContains(rejectedLocalKey.bodyAsText(), "не требуется")
+            assertFalse(Files.readString(directory.resolve(".env")).contains("must-not-be-saved"))
             assertEquals(HttpStatusCode.Conflict, client.put("$base/settings") { localJson(apiJson.encodeToString(SettingsCommand(1, changed))) }.status)
         } finally { c.shutdown(); directory.toFile().deleteRecursively() }
     }
@@ -1222,7 +1288,7 @@ class WorkbenchApiTest {
         val c = controller { _, _, _ -> awaitCancellation() }
         val api = WorkbenchApi(c)
         try {
-            val changed = api.settings(SettingsCommand(0, c.state.value.settings.toDto().copy(provider = "DEEPSEEK", mode = "models", maxTokens = 3)))
+            val changed = api.settings(SettingsCommand(0, c.state.value.settings.toDto().copy(provider = "OLLAMA", mode = "models", maxTokens = 3)))
             assertEquals("OPENAI", changed.settings.provider)
             assertEquals(1000, changed.settings.maxTokens)
             val manual = api.settings(SettingsCommand(1, changed.settings.copy(maxTokens = 120)))

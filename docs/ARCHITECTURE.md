@@ -7,7 +7,7 @@
 LLM Workbench — локальное web-приложение для диалогов с LLM, сравнения способов ответа и демонстрации управления токенами и контекстом. Один JVM-процесс:
 
 - читает локальную конфигурацию и постоянное состояние;
-- вызывает OpenAI или DeepSeek;
+- вызывает OpenAI, DeepSeek или локальную Ollama;
 - управляет операциями, историей, памятью, метриками и стоимостью;
 - отдаёт REST/SSE API и статическую production-сборку React.
 
@@ -19,7 +19,7 @@ flowchart LR
     API --> Controller[WorkbenchController]
     Controller --> Runners[Mode runners / agents]
     Runners --> Client[LlmClient]
-    Client --> Providers[OpenAI / DeepSeek]
+    Client --> Providers[OpenAI / DeepSeek / Ollama loopback]
     Controller --> Stores[Local .env and versioned JSON stores]
     Controller -->|StateFlow snapshots| SSE[Ktor SSE]
     SSE --> UI
@@ -32,6 +32,7 @@ flowchart LR
 | `src/main/kotlin/llm` | Общий `LlmClient`, сообщения, completion events/options/usage, каталог моделей и фабрика провайдеров |
 | `src/main/kotlin/llm/openai` | OpenAI-compatible transport и OpenAI-адаптер |
 | `src/main/kotlin/llm/deepseek` | DeepSeek-адаптер |
+| `src/main/kotlin/llm/ollama` | Локальный Ollama-адаптер с фиксированным loopback endpoint и без Authorization |
 | `src/main/kotlin/network` | Настройка общего Ktor `HttpClient`, таймаутов и retry |
 | `src/main/kotlin/config` | Чтение и атомарное сохранение локального `.env` |
 | `src/main/kotlin/tokens` | Оценка токенов, профили окон/цен, подготовка контекста, overflow и агрегаты |
@@ -284,6 +285,17 @@ Monitor запрашивает snapshot через настоящий `scheduler
 `assistantRagEnabled` — persisted-настройка `AppSettings`/`.env`, применяемая
 только при `UNRESTRICTED + MEMORY_LAYERS`. Общие RAG limits используются также
 assistant-веткой; отключённый флаг сохраняет прежнее поведение всех режимов.
+
+`LlmKind.OLLAMA` использует единственную модель каталога `qwen3:14b` и
+`http://127.0.0.1:11434/v1/chat/completions`. Произвольного base URL в настройках
+нет. `requiresApiKey=false` проходит через `ProviderDto`; controller не требует
+ключ при запуске, а endpoint сохранения ключа отклоняет Ollama. Общий
+OpenAI-compatible transport добавляет Bearer header только при непустом облачном
+ключе. Для Qwen3 адаптер по умолчанию передаёт `reasoning_effort=none`, чтобы
+скрытое thinking не исчерпывало лимит ответа до появления пользовательского
+текста; явная настройка effort имеет приоритет. MCP по-прежнему включается
+исключительно для `LlmKind.OPENAI`, а
+`MODEL_COMPARISON` серверно принудительно выбирает OpenAI.
 
 Текущие wire-id режимов определены в `ResponseMode.cliValue`:
 
@@ -726,7 +738,7 @@ pipeline-summary.md».
 
 ### Новый провайдер или модель
 
-1. Добавить/обновить `LlmKind`, `LlmModels` и provider adapter.
+1. Добавить/обновить `LlmKind`, `LlmModels`, признак `requiresApiKey` и provider adapter.
 2. Проверить mapping options, streaming final event и usage details.
 3. Добавить профиль контекста/цены только из подтверждённого источника.
 4. Обновить bootstrap/config, DTO catalog, UI и adapter tests.

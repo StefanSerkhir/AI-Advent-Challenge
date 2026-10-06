@@ -98,7 +98,7 @@ class WorkbenchController(
     taskStateStore: TaskStateStore = InMemoryTaskStateStore(),
     private val mcpGateway: McpGateway? = null,
     private val documentRetrieverProvider: ((Map<LlmKind, String>) -> DocumentRetriever)? = null,
-    private val clientFactory: (LlmKind, String, String) -> LlmClient,
+    private val clientFactory: (LlmKind, String?, String) -> LlmClient,
     private val persistSettings: (AppSettings, Map<LlmKind, String>) -> Unit = { _, _ -> },
     private val workerScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : AutoCloseable {
@@ -243,6 +243,7 @@ class WorkbenchController(
         }
         val settings = _state.value.settings
         val kind = if (settings.responseMode == ResponseMode.MODEL_COMPARISON) LlmKind.OPENAI else settings.llmKind
+        require(kind.requiresApiKey) { "Для ${kind.displayName()} API-ключ не требуется и не сохраняется." }
         val keys = apiKeys + (kind to normalized)
         // Do not include the entered key even when a persistence adapter echoes it in an exception.
         try { persistSettings(settings.copy(), keys) } catch (_: Exception) {
@@ -563,7 +564,7 @@ class WorkbenchController(
             settings.llmKind
         }
         val apiKey = apiKeys[requestKind]
-        if (apiKey == null && settings.responseMode != ResponseMode.TOKENS_CONTEXT) {
+        if (requestKind.requiresApiKey && apiKey == null && settings.responseMode != ResponseMode.TOKENS_CONTEXT) {
             publish {
                 it.copy(
                     notice = UiNotice(
@@ -621,7 +622,7 @@ class WorkbenchController(
             try {
                 ensureActive()
                 if (settings.responseMode !in setOf(ResponseMode.MODEL_COMPARISON, ResponseMode.TOKENS_CONTEXT)) {
-                    requestClient.set(clientFactory(requestKind, requireNotNull(apiKey), settings.model))
+                    requestClient.set(clientFactory(requestKind, apiKey, settings.model))
                 }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
@@ -921,4 +922,5 @@ private const val ASSISTANT_INVARIANTS_SAVE_ERROR =
 fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "DeepSeek"
     LlmKind.OPENAI -> "OpenAI"
+    LlmKind.OLLAMA -> "Ollama (локально)"
 }

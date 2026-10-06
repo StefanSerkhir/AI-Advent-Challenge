@@ -8,7 +8,7 @@ export type Mode =
   | "models"
   | "rag"
   | "tokens";
-export type Provider = "DEEPSEEK" | "OPENAI";
+export type Provider = "DEEPSEEK" | "OPENAI" | "OLLAMA";
 export type ContextStrategy = "SLIDING_WINDOW" | "STICKY_FACTS" | "BRANCHING" | "MEMORY_LAYERS";
 export type MemoryLayer = "SHORT_TERM" | "WORKING" | "LONG_TERM";
 export type AssistantInvariantCategory = "ARCHITECTURE" | "TECH_DECISION" | "STACK" | "BUSINESS_RULE" | "OTHER";
@@ -45,6 +45,7 @@ export interface ProviderInfo {
   id: Provider;
   title: string;
   hasKey: boolean;
+  requiresApiKey: boolean;
   models: { id: string; title: string }[];
 }
 export interface ModeInfo {

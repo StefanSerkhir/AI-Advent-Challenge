@@ -10,6 +10,31 @@ import kotlin.test.*
 class InteractiveCliTest {
 
     @Test
+    fun `Ollama CLI runs without an API key and rejects key command`() = runBlocking {
+        val terminal = RecordingTerminal()
+        var observedKey: String? = "not-called"
+        val cli = InteractiveCli(
+            settings = AppSettings(LlmKind.OLLAMA, responseMode = ResponseMode.CONTROLLED),
+            initialApiKeys = emptyMap(),
+            clientFactory = { kind, key ->
+                assertEquals(LlmKind.OLLAMA, kind)
+                observedKey = key
+                StubLlmClient
+            },
+            terminal = terminal,
+            historyStore = NoOpConversationHistoryStore,
+        )
+
+        cli.processLine("/api-key must-not-be-saved")
+        cli.processLine("Локальный запрос")
+        cli.processLine("/settings")
+
+        assertNull(observedKey)
+        assertContains(terminal.output.toString(), "API-ключ не требуется")
+        assertFalse(terminal.output.toString().contains("must-not-be-saved"))
+    }
+
+    @Test
     fun `commands change settings at runtime without exposing key`() = runBlocking {
         val terminal = RecordingTerminal()
         val settings = AppSettings(llmKind = LlmKind.DEEPSEEK)

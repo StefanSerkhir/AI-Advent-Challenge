@@ -175,6 +175,7 @@ data class StructuredOutput(
 }
 
 enum class ReasoningEffort(val apiValue: String) {
+    NONE("none"),
     MEDIUM("medium"),
 }
 

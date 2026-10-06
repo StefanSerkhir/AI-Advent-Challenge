@@ -158,35 +158,39 @@ private fun SettingsPanel(
             enabled = connectionSelectionEnabled,
             onSelected = onUpdateModel,
         )
-        OutlinedTextField(
-            value = apiKeyDraft,
-            onValueChange = { apiKeyDraft = it },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = enabled,
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            label = { Text("API Key") },
-            placeholder = {
-                Text(
-                    if (settings.llmKind in state.configuredProviders) "Ключ уже сохранён" else "Введите ключ",
-                    fontSize = 12.sp,
-                )
-            },
-        )
-        Button(
-            onClick = {
-                if (onSaveApiKey(apiKeyDraft)) apiKeyDraft = ""
-            },
-            enabled = enabled && apiKeyDraft.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (settings.llmKind in state.configuredProviders) "Заменить ключ" else "Сохранить ключ")
+        if (settings.llmKind.requiresApiKey) {
+            OutlinedTextField(
+                value = apiKeyDraft,
+                onValueChange = { apiKeyDraft = it },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = enabled,
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                label = { Text("API Key") },
+                placeholder = {
+                    Text(
+                        if (settings.llmKind in state.configuredProviders) "Ключ уже сохранён" else "Введите ключ",
+                        fontSize = 12.sp,
+                    )
+                },
+            )
+            Button(
+                onClick = {
+                    if (onSaveApiKey(apiKeyDraft)) apiKeyDraft = ""
+                },
+                enabled = enabled && apiKeyDraft.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (settings.llmKind in state.configuredProviders) "Заменить ключ" else "Сохранить ключ")
+            }
+            Text(
+                if (settings.llmKind in state.configuredProviders) "Ключ настроен · значение скрыто" else "Ключ не настроен",
+                color = if (settings.llmKind in state.configuredProviders) Success else Danger,
+                fontSize = 12.sp,
+            )
+        } else {
+            Text("API-ключ не требуется · локальный loopback", color = Success, fontSize = 12.sp)
         }
-        Text(
-            if (settings.llmKind in state.configuredProviders) "Ключ настроен · значение скрыто" else "Ключ не настроен",
-            color = if (settings.llmKind in state.configuredProviders) Success else Danger,
-            fontSize = 12.sp,
-        )
 
         Divider()
         SectionTitle("Режим ответа")

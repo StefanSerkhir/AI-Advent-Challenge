@@ -15,10 +15,14 @@ object LlmModels {
         LlmModel("gpt-5.6-sol", "GPT-5.6 Sol"),
         LlmModel("gpt-4.1-mini", "GPT-4.1 mini"),
     )
+    private val ollamaModels = listOf(
+        LlmModel("qwen3:14b", "Qwen3 14B (Q4_K_M)"),
+    )
 
     fun availableFor(kind: LlmKind): List<LlmModel> = when (kind) {
         LlmKind.DEEPSEEK -> deepSeekModels
         LlmKind.OPENAI -> openAiModels
+        LlmKind.OLLAMA -> ollamaModels
     }
 
     fun defaultFor(kind: LlmKind): String = availableFor(kind).first().id

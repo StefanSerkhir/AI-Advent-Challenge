@@ -74,6 +74,9 @@ class WorkbenchApi(val controller: WorkbenchController) {
         if (command.provider != controller.state.value.settings.llmKind.name) {
             throw ApiProblem(409, "stale_settings", "Провайдер изменился. Повторите сохранение для выбранного провайдера.")
         }
+        if (!controller.state.value.settings.llmKind.requiresApiKey) {
+            throw ApiProblem(400, "validation", "Для Ollama API-ключ не требуется и не сохраняется.")
+        }
         controller.saveApiKey(command.key)
         controller.state.value.toDto()
     }

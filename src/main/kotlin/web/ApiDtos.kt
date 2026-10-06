@@ -99,7 +99,13 @@ data class ErrorDto(val code: String, val message: String)
 @Serializable
 data class ModelDto(val id: String, val title: String)
 @Serializable
-data class ProviderDto(val id: String, val title: String, val hasKey: Boolean, val models: List<ModelDto>)
+data class ProviderDto(
+    val id: String,
+    val title: String,
+    val hasKey: Boolean,
+    val requiresApiKey: Boolean,
+    val models: List<ModelDto>,
+)
 @Serializable
 data class ModeDto(
     val id: String, val title: String, val description: String,
@@ -645,6 +651,7 @@ private fun SchedulerSnapshot.toDto() = BackgroundTasksDto(
 fun WorkbenchState.toDto(): StateDto = StateDto(
     revision, settingsVersion, settings.toDto(),
     providers = LlmKind.entries.map { kind -> ProviderDto(kind.name, kind.displayName(), kind in configuredProviders,
+        kind.requiresApiKey,
         (LlmModels.availableFor(kind) + if (kind == settings.llmKind) listOf(LlmModel(settings.model)) else emptyList())
             .distinctBy { it.id }.map { ModelDto(it.id, it.displayName) }) },
     modes = modes,

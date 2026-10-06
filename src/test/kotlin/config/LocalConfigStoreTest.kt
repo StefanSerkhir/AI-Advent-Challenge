@@ -154,4 +154,16 @@ class LocalConfigStoreTest {
         assertEquals("gpt-5.6-luna", bootstrap.settings.model)
         assertEquals("openai-dummy-key", bootstrap.apiKeys[LlmKind.OPENAI])
     }
+
+    @Test
+    fun `Ollama parses with local default model and never adopts legacy api key`() {
+        val bootstrap = AppBootstrap.from(
+            LocalConfig(llmKind = "Ollama", apiKey = "must-not-be-used"),
+        )
+
+        assertEquals(LlmKind.OLLAMA, bootstrap.settings.llmKind)
+        assertEquals("qwen3:14b", bootstrap.settings.model)
+        assertFalse(LlmKind.OLLAMA.requiresApiKey)
+        assertFalse(bootstrap.apiKeys.containsKey(LlmKind.OLLAMA))
+    }
 }

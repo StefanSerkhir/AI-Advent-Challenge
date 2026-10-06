@@ -21,12 +21,13 @@ data class OpenAiCompatibleConfig(
     val useMaxCompletionTokens: Boolean = false,
     val supportsStopSequences: Boolean = true,
     val supportsReasoningEffort: Boolean = false,
+    val defaultReasoningEffort: ReasoningEffort? = null,
     val supportsJsonSchema: Boolean = false,
     val supportsTools: Boolean = false,
 )
 
 class OpenAiCompatibleLlmClient(
-    private val apiKey: String,
+    private val apiKey: String?,
     private val httpClient: HttpClient,
     private val config: OpenAiCompatibleConfig,
 ) : LlmClient {
@@ -126,7 +127,9 @@ class OpenAiCompatibleLlmClient(
         options: CompletionOptions,
         streaming: Boolean,
     ) {
-        header(HttpHeaders.Authorization, "Bearer $apiKey")
+        apiKey?.takeIf(String::isNotBlank)?.let { token ->
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
         contentType(ContentType.Application.Json)
         setBody(
             ChatCompletionRequest(
@@ -159,7 +162,7 @@ class OpenAiCompatibleLlmClient(
                 stop = options.stopSequences
                     .takeIf { config.supportsStopSequences && it.isNotEmpty() },
                 temperature = options.temperature,
-                reasoningEffort = options.reasoningEffort
+                reasoningEffort = (options.reasoningEffort ?: config.defaultReasoningEffort)
                     ?.apiValue
                     .takeIf { config.supportsReasoningEffort },
                 stream = true.takeIf { streaming },
@@ -200,8 +203,11 @@ class OpenAiCompatibleLlmClient(
             val root = streamJson.parseToJsonElement(errorBody).jsonObject
             root["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
         }.getOrNull() ?: errorBody
-        val safeProviderMessage = providerMessage
-            .replace(apiKey, "<redacted>")
+        val safeProviderMessage = apiKey
+            ?.takeIf(String::isNotBlank)
+            ?.let { providerMessage.replace(it, "<redacted>") }
+            ?: providerMessage
+        val sanitizedProviderMessage = safeProviderMessage
             .replace(Regex("(?i)bearer\\s+[A-Za-z0-9._-]+"), "Bearer <redacted>")
             .replace(Regex("sk-[A-Za-z0-9_-]{8,}"), "<redacted>")
             .filter { it == '\n' || it == '\t' || !it.isISOControl() }
@@ -221,7 +227,7 @@ class OpenAiCompatibleLlmClient(
             409 -> "провайдер сообщил о конфликте запроса; попробуйте ещё раз"
             429 -> "превышен лимит запросов; подождите и повторите попытку"
             in 500..599 -> "сервис LLM временно недоступен (${status.value})"
-            400 -> safeProviderMessage.takeIf(String::isNotBlank)
+            400 -> sanitizedProviderMessage.takeIf(String::isNotBlank)
                 ?.let { "LLM-провайдер отклонил запрос: $it" }
                 ?: "LLM API вернул ошибку 400"
             else -> "LLM API вернул ошибку ${status.value}"

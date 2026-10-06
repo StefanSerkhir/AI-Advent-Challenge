@@ -174,10 +174,10 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
           <IconPlugConnected size={16} /> Подключение{" "}
           <Badge
             size="xs"
-            color={provider.hasKey ? "teal" : "gray"}
+            color={!provider.requiresApiKey || provider.hasKey ? "teal" : "gray"}
             variant="dot"
           >
-            {provider.hasKey ? "Ключ настроен" : "Нет ключа"}
+            {!provider.requiresApiKey ? "API-ключ не требуется" : provider.hasKey ? "Ключ настроен" : "Нет ключа"}
           </Badge>
         </div>
         <NativeSelect
@@ -196,31 +196,35 @@ export function Sidebar({ workbench: w }: { workbench: Workbench }) {
           data={provider.models.map((m) => ({ value: m.id, label: m.title }))}
           onChange={(e) => void w.settings({ model: e.currentTarget.value })}
         />
-        <PasswordInput
-          label="API-ключ"
-          placeholder={
-            provider.hasKey
-              ? "Сохранён · введите для замены"
-              : "Введите ключ провайдера"
-          }
-          value={key}
-          onChange={(e) => setKey(e.currentTarget.value)}
-          disabled={locked}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <Button
-          fullWidth
-          variant="light"
-          leftSection={<IconKey size={15} />}
-          disabled={locked || !key.trim()}
-          onClick={async () => {
-            if (await w.saveKey(provider.id, key)) setKey("");
-          }}
-        >
-          {provider.hasKey ? "Заменить ключ" : "Сохранить ключ"}
-        </Button>
-        <p className="micro">Ключ хранится только в локальном .env</p>
+        {provider.requiresApiKey ? <>
+          <PasswordInput
+            label="API-ключ"
+            placeholder={
+              provider.hasKey
+                ? "Сохранён · введите для замены"
+                : "Введите ключ провайдера"
+            }
+            value={key}
+            onChange={(e) => setKey(e.currentTarget.value)}
+            disabled={locked}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Button
+            fullWidth
+            variant="light"
+            leftSection={<IconKey size={15} />}
+            disabled={locked || !key.trim()}
+            onClick={async () => {
+              if (await w.saveKey(provider.id, key)) setKey("");
+            }}
+          >
+            {provider.hasKey ? "Заменить ключ" : "Сохранить ключ"}
+          </Button>
+          <p className="micro">Ключ хранится только в локальном .env</p>
+        </> : <p className="micro" data-testid="local-provider-note">
+          API-ключ не требуется. Запросы идут локально через <code>127.0.0.1:11434</code>; облачная API-стоимость отсутствует.
+        </p>}
       </section>
       <Divider />
       <section>

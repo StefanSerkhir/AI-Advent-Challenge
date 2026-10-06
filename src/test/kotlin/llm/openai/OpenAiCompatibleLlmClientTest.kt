@@ -3,6 +3,7 @@ package org.example.llm.openai
 import io.ktor.client.*
 import io.ktor.client.engine.mock.*
 import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.serialization.kotlinx.json.*
@@ -11,9 +12,106 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.example.llm.*
 import org.example.llm.deepseek.DeepSeekLlmClient
+import org.example.llm.ollama.OLLAMA_CHAT_COMPLETIONS_URL
+import org.example.llm.ollama.OllamaLlmClient
+import java.io.IOException
 import kotlin.test.*
 
 class OpenAiCompatibleLlmClientTest {
+    @Test
+    fun `Ollama streams without authorization while cloud providers keep bearer auth`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val http = HttpClient(MockEngine { request ->
+            captured += request
+            if (captured.size == 1) {
+                respond(
+                    content = """
+                        data: {"model":"qwen3:14b","choices":[{"index":0,"delta":{"content":"Локальный ответ"},"finish_reason":"stop"}]}
+
+                        data: [DONE]
+
+                    """.trimIndent(),
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()),
+                )
+            } else if (captured.size == 2) {
+                respond(
+                    """{"choices":[{"message":{"role":"assistant","content":"Локальный completion"},"finish_reason":"stop"}],"model":"qwen3:14b"}""",
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            } else {
+                respond(
+                    """{"choices":[{"message":{"role":"assistant","content":"Облачный ответ"},"finish_reason":"stop"}],"model":"deepseek-v4-flash"}""",
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            }
+        }) { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } }
+        try {
+            val events = OllamaLlmClient(http).stream("Привет").toList()
+            assertEquals("Локальный ответ", events.filterIsInstance<TextDelta>().joinToString("") { it.text })
+            assertEquals(OLLAMA_CHAT_COMPLETIONS_URL, captured[0].url.toString())
+            assertNull(captured[0].headers[HttpHeaders.Authorization])
+            val body = Json.parseToJsonElement((captured[0].body as TextContent).text).jsonObject
+            assertEquals("qwen3:14b", body["model"]?.jsonPrimitive?.content)
+            assertEquals(true, body["stream"]?.jsonPrimitive?.boolean)
+            assertEquals("none", body["reasoning_effort"]?.jsonPrimitive?.content)
+
+            val completion = OllamaLlmClient(http).complete("Привет ещё раз")
+            assertEquals("Локальный completion", completion.content)
+            assertEquals(OLLAMA_CHAT_COMPLETIONS_URL, captured[1].url.toString())
+            assertNull(captured[1].headers[HttpHeaders.Authorization])
+            val completionBody = Json.parseToJsonElement((captured[1].body as TextContent).text).jsonObject
+            assertTrue(completionBody["stream"] == null || completionBody["stream"]?.jsonPrimitive?.boolean == false)
+            assertEquals("none", completionBody["reasoning_effort"]?.jsonPrimitive?.content)
+
+            OpenAiLlmClient("openai-secret", http).complete("Привет")
+            DeepSeekLlmClient("deepseek-secret", http).complete("Привет")
+            assertEquals("Bearer openai-secret", captured[2].headers[HttpHeaders.Authorization])
+            assertEquals("Bearer deepseek-secret", captured[3].headers[HttpHeaders.Authorization])
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
+    fun `Ollama network failure is a safe local user error`() = runBlocking {
+        val http = HttpClient(MockEngine { throw IOException("private transport detail") }) {
+            install(ContentNegotiation) { json() }
+        }
+        try {
+            val error = assertFailsWith<LlmApiException> { OllamaLlmClient(http).complete("Привет") }
+            assertContains(error.message.orEmpty(), "127.0.0.1:11434")
+            assertContains(error.message.orEmpty(), "qwen3:14b")
+            assertFalse(error.message.orEmpty().contains("private transport detail"))
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
+    fun `blank optional credential neither sends authorization nor corrupts provider errors`() = runBlocking {
+        var authorization: String? = "not-captured"
+        val http = HttpClient(MockEngine { request ->
+            authorization = request.headers[HttpHeaders.Authorization]
+            respond(
+                """{"error":{"message":"model qwen3:missing was not found"}}""",
+                status = HttpStatusCode.NotFound,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }) { install(ContentNegotiation) { json() } }
+        try {
+            val client = OpenAiCompatibleLlmClient(
+                apiKey = "",
+                httpClient = http,
+                config = OpenAiCompatibleConfig("http://127.0.0.1:11434/v1/chat/completions", "qwen3:missing"),
+            )
+            val error = assertFailsWith<LlmApiException> { client.complete("Привет") }
+            assertNull(authorization)
+            assertEquals("выбранная модель или API endpoint не найдены", error.message)
+        } finally {
+            http.close()
+        }
+    }
+
     @Test
     fun `tools are serialized and assistant tool calls plus tool results form the next request`() = runBlocking {
         val requests = mutableListOf<JsonObject>()

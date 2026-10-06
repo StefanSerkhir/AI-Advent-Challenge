@@ -42,7 +42,7 @@ object SystemTerminal : Terminal {
 class InteractiveCli(
     val settings: AppSettings,
     initialApiKeys: Map<LlmKind, String>,
-    private val clientFactory: (LlmKind, String) -> LlmClient,
+    private val clientFactory: (LlmKind, String?) -> LlmClient,
     private val terminal: Terminal = SystemTerminal,
     historyStore: ConversationHistoryStore = JsonConversationHistoryStore(),
 ) {
@@ -65,10 +65,12 @@ class InteractiveCli(
     )
 
     private fun currentClient(): LlmClient {
-        val apiKey = apiKeys[settings.llmKind] ?: throw MissingApiKeyException(
-            "API-ключ для ${settings.llmKind.displayName()} не задан. " +
-                "Используйте /api-key <ключ>.",
-        )
+        val apiKey = apiKeys[settings.llmKind]
+        if (settings.llmKind.requiresApiKey && apiKey == null) {
+            throw MissingApiKeyException(
+                "API-ключ для ${settings.llmKind.displayName()} не задан. Используйте /api-key <ключ>.",
+            )
+        }
         return clientFactory(settings.llmKind, apiKey)
     }
 
@@ -242,7 +244,7 @@ class InteractiveCli(
 
     private fun changeProvider(value: String) {
         if (value.isBlank()) {
-            terminal.println("Использование: /provider OpenAI|Deepseek")
+            terminal.println("Использование: /provider OpenAI|Deepseek|Ollama")
             return
         }
 
@@ -255,7 +257,9 @@ class InteractiveCli(
 
         settings.llmKind = kind
         terminal.setTitle(windowTitle())
-        val keyStatus = if (apiKeys.containsKey(kind)) {
+        val keyStatus = if (!kind.requiresApiKey) {
+            "API-ключ не требуется"
+        } else if (apiKeys.containsKey(kind)) {
             "ключ настроен"
         } else {
             "ключ не задан; используйте /api-key <ключ>"
@@ -264,6 +268,10 @@ class InteractiveCli(
     }
 
     private fun changeApiKey(value: String) {
+        if (!settings.llmKind.requiresApiKey) {
+            terminal.println("Для ${settings.llmKind.displayName()} API-ключ не требуется и не сохраняется.")
+            return
+        }
         if (value.isBlank()) {
             terminal.println("Использование: /api-key <ключ>")
             return
@@ -355,7 +363,7 @@ class InteractiveCli(
             """
             Текущие настройки:
             - Провайдер: ${settings.llmKind.displayName()}
-            - API-ключ: ${if (apiKeys.containsKey(settings.llmKind)) "задан" else "не задан"}
+            - API-ключ: ${if (!settings.llmKind.requiresApiKey) "не требуется" else if (apiKeys.containsKey(settings.llmKind)) "задан" else "не задан"}
             - Режим: ${settings.responseMode.cliValue}
             - Количество пунктов: ${settings.bulletCount}
             - Максимум слов: ${settings.maxWords}
@@ -371,7 +379,7 @@ class InteractiveCli(
         terminal.println(
             """
             Команды:
-              /provider OpenAI|Deepseek          сменить провайдера
+              /provider OpenAI|Deepseek|Ollama   сменить провайдера
               /api-key <ключ>                    задать ключ текущего провайдера
               /mode compare|controlled|unrestricted|reasoning|temperature
               /reason-demo                       сравнить 4 способа на задаче о шкафчиках
@@ -407,6 +415,7 @@ private class MissingApiKeyException(message: String) : RuntimeException(message
 private fun LlmKind.displayName(): String = when (this) {
     LlmKind.DEEPSEEK -> "Deepseek"
     LlmKind.OPENAI -> "OpenAI"
+    LlmKind.OLLAMA -> "Ollama (локально)"
 }
 
 private fun Boolean.onOff(): String = if (this) "on" else "off"
