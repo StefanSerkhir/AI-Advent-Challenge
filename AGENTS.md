@@ -13,6 +13,7 @@
 - Frontend: React, TypeScript, Mantine, Vite; исходники находятся в `frontend/src`.
 - Production entry point: `org.example.web.WebMainKt`.
 - Детерминированный web fixture: `org.example.web.WebFixtureKt`; он находится в test source set и не попадает в production-сборку.
+- Локальный LLM-провайдер реализован в `src/main/kotlin/llm/ollama`; Ollama работает отдельным локальным процессом на `127.0.0.1:11434`, а воспроизводимый real-inference runner запускается задачей `runLocalLlmDemo`.
 - Локальный MCP реализован в `src/main/kotlin/mcp`: web runtime запускает stdio-сервер отдельным JVM-процессом через `LocalMcpGateway`.
 - Legacy Compose UI изолирован в `legacy-desktop`; не переносите из него зависимости в web runtime.
 
@@ -27,7 +28,9 @@
 - `SHORT_TERM` пополняется только полной парой user/assistant после успешного завершения потока и сохранения. Ошибка, отмена и незавершённый stream не меняют память. «Новый диалог» очищает только `SHORT_TERM`; «Завершить задачу» — только `WORKING`; `LONG_TERM` переживает оба действия и перезапуск.
 - Флаги слоёв исключают данные из следующего запроса, но не удаляют их. Диагностика ответа должна отражать реально использованные слои, количества и ID записей.
 - Профиль, инварианты и FSM задачи изменяются только явными командами и не очищаются действиями памяти/истории. FSM доступна только при `UNRESTRICTED + MEMORY_LAYERS`: переходы `PLANNING → EXECUTION → VALIDATION → DONE` выполняют только соответствующие API-команды, текст модели не меняет фазу, пауза блокирует запуск, а «Завершить задачу» не переводит FSM в `DONE`.
-- Локальные MCP tools доступны только для OpenAI в режиме `UNRESTRICTED`. Каталог берётся из `tools/list`; не хардкодьте маршрут модели. Не более трёх `tools/call` выполняются за запрос, assistant/tool messages остаются request-local, а результаты считаются недоверенными данными. MCP-ошибка, блокировка invariant/task postflight, отмена или незавершённый цикл не должны коммитить историю или `SHORT_TERM`.
+- `LlmKind.OLLAMA` — keyless-провайдер «Ollama (локально)» с моделью по умолчанию `qwen3:14b` и фиксированным endpoint `http://127.0.0.1:11434/v1/chat/completions`. Не добавляйте произвольный base URL, `ollama_api_key` или фиктивный ключ. Для Ollama `requiresApiKey=false`, форма ключа скрыта, `PUT /api/key` отклоняется, `Authorization` не отправляется, а отсутствие подтверждённого ценового профиля даёт стоимость `н/д`, не облачный тариф.
+- Для Qwen3 локальный адаптер по умолчанию передаёт `reasoning_effort=none`: включённое по умолчанию скрытое thinking может исчерпать `max_tokens` до появления видимого ответа. Явно переданный поддерживаемый effort имеет приоритет; не меняйте поведение OpenAI и DeepSeek.
+- Локальные MCP tools доступны только для OpenAI в режиме `UNRESTRICTED`; Ollama и DeepSeek tools не получают. Режим `MODEL_COMPARISON` остаётся OpenAI-only. Каталог берётся из `tools/list`; не хардкодьте маршрут модели. Не более трёх `tools/call` выполняются за запрос, assistant/tool messages остаются request-local, а результаты считаются недоверенными данными. MCP-ошибка, блокировка invariant/task postflight, отмена или незавершённый цикл не должны коммитить историю или `SHORT_TERM`.
 - Расписания выполняются локально в дочернем MCP-процессе только пока жив JVM runtime. REST/SSE публикует их read-only snapshot; создание и отмена остаются MCP-инструментами. `save_to_file` пишет только безопасное имя в настроенный output-каталог, без absolute path, traversal и symlink-цели.
 - Постоянные JSON-файлы версионируются и заменяются атомарно. Не меняйте существующий формат без явной миграции и тестов обратной совместимости.
 - API-ключи не возвращаются клиенту, не попадают в логи, ошибки, fixture, browser storage, persistent memory или Git.
@@ -50,7 +53,8 @@
 ## Безопасная разработка и проверки
 
 - Реальные платные API не должны использоваться unit-, API- или browser-тестами. Для автоматических и ручных безопасных проверок используйте детерминированные fake clients и `runWebFixture`. Платный вызов допустим только по прямому запросу пользователя.
-- Не запускайте production-приложение, если порт уже занят: сначала определите процесс и убедитесь, что это не пользовательский экземпляр.
+- Обычный test suite не должен запускать или загружать настоящую Ollama-модель. Для real-local проверки используйте отдельно `runLocalLlmDemo` и production web runtime только когда задача явно требует реальный локальный inference; не выдавайте fixture/fake за эту проверку.
+- Перед запуском Ollama или production web runtime проверьте соответствующий порт через `lsof -nP -iTCP:<порт> -sTCP:LISTEN`; не запускайте второй экземпляр и не останавливайте неизвестный или пользовательский процесс. Для Ollama сохраняйте loopback-привязку и проверяйте наличие `qwen3:14b` через `ollama list`/`ollama show`.
 - Не редактируйте `.env`, `.llm-history.json`, `.llm-context-state.json`, `.llm-assistant-memory.json`, `.llm-assistant-invariants.json`, `.llm-task-state.json`, `.llm-scheduler-state.json` и `.llm-mcp-output/` без прямой необходимости задачи. Никогда не показывайте содержимое ключей.
 - Не добавляйте production-зависимость ради тестовой утилиты.
 - Тестируйте пропорционально изменению. Полная локальная проверка:
@@ -70,10 +74,12 @@ npm --prefix frontend run test:e2e
 ```bash
 ./gradlew runWeb                         # production UI + реальный выбранный API, 127.0.0.1:8080
 ./gradlew runWebFixture                  # локальный deterministic fixture без платного API
+./gradlew runLocalLlmDemo                # три real-local streaming-запроса к Ollama qwen3:14b
 ./gradlew runMcpDemo                     # локальная MCP-проверка без API-ключей и внешних сервисов
 WEB_DEV_PORT=5173 ./gradlew runWeb       # backend для Vite dev server
 npm --prefix frontend ci
 npm --prefix frontend run dev
+npm --prefix frontend run record:local-llm-demo  # запись real-local UI; существующий файл защищён
 ./gradlew installDist
 ./gradlew :legacy-desktop:run
 ```
@@ -84,4 +90,5 @@ npm --prefix frontend run dev
 
 - Просмотрите `git diff --check` и `git diff` только по затронутым файлам.
 - Сообщите, какие файлы изменены и какие проверки фактически выполнены.
-- Не заявляйте об успешной проверке реального API, если использовался fixture или fake client.
+- Раздельно указывайте проверки с fake/fixture, real-local Ollama и платным/облачным API. Не заявляйте об успешной real-local или cloud-проверке, если фактически использовался только fixture/fake client.
+- При обновлении `video/local-llm-demo.webm` проверяйте ненулевой размер, длительность и разрешение через `ffprobe` или Chromium-аналог; перезапись допускается только с `LOCAL_LLM_DEMO_OVERWRITE=1`.
