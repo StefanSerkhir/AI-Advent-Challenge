@@ -12,21 +12,36 @@ Fixture расположен только в test source set. Он исполь�
 
 Контрольный fixture-прогон текущего репозитория:
 
-- документов: `74`;
-- символов: `816813`;
-- слов: `74240`;
-- приблизительных страниц: `453.79`;
-- fixed chunks: `867`;
-- structured chunks: `1508`.
+- документов: `81`;
+- символов: `869586`;
+- слов: `79291`;
+- приблизительных страниц: `483.10`;
+- fixed chunks: `922`;
+- structured chunks: `1578`.
 
 Страница оценивается по явной стабильной формуле `characterCount / 1800`. Минимально допустимый corpus равен 20 таким страницам; меньший объём завершает запуск ошибкой до embeddings и создания output-каталога.
 
 ## Production-запуск
 
-Реальная индексация использует существующий `openai_api_key` из `.env` в корне corpus и может быть платной. Codex и автоматические тесты эту команду не запускают. Пользователь запускает её явно:
+Основной полностью локальный путь использует Ollama, не читает `.env`, не требует
+API-ключа и не обращается к облачным endpoints:
 
 ```bash
-./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy both --fixed-chunk-size 1200 --overlap 200 --embedding-model text-embedding-3-small --batch-size 64"
+ollama pull qwen3-embedding:0.6b
+./gradlew buildLocalDocumentIndex
+```
+
+Эквивалентный полный CLI-вызов:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-provider ollama --embedding-model qwen3-embedding:0.6b --batch-size 32"
+```
+
+Обратно совместимый OpenAI-вариант использует существующий `openai_api_key` из
+`.env` в корне corpus и может быть платным. Автоматические тесты его не запускают:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy both --fixed-chunk-size 1200 --overlap 200 --embedding-provider openai --embedding-model text-embedding-3-small --batch-size 64"
 ```
 
 Параметры:
@@ -38,10 +53,20 @@ Fixture расположен только в test source set. Он исполь�
 | `--strategy` | `both` | `fixed`, `structured` или `both` |
 | `--fixed-chunk-size` | `1200` | Максимальный размер fixed chunk в UTF-16 offsets без разрыва surrogate pair |
 | `--overlap` | `200` | Перекрытие fixed chunks |
-| `--embedding-model` | `text-embedding-3-small` | OpenAI embedding model |
+| `--embedding-provider` | `openai` | `openai` или `ollama` |
+| `--embedding-model` | зависит от provider | `text-embedding-3-small` или `qwen3-embedding:0.6b` |
 | `--batch-size` | `64` | Число текстов в одном embedding batch |
 
-CLI вызывает `POST /v1/embeddings` через общий Ktor `HttpClient`, но использует собственный ограниченный retry для `408`, `409`, `429`, `5xx` и временных сетевых ошибок. Ответ восстанавливается по `data[].index`; количество vectors, единая размерность и конечность каждого `Float` проверяются до сохранения. Cancellation остаётся кооперативной. Provider errors очищаются от настроенного ключа, bearer tokens и строк вида `sk-...`.
+`OpenAiEmbeddingClient` вызывает `POST /v1/embeddings` через общий Ktor
+`HttpClient`, использует ограниченный retry для `408`, `409`, `429`, `5xx` и
+временных сетевых ошибок и восстанавливает порядок по `data[].index`.
+`OllamaEmbeddingClient` вызывает только фиксированный loopback
+`http://127.0.0.1:11434/api/embed`, отправляет batch `input` и `truncate=false`,
+не добавляет `Authorization` и не поддерживает произвольный base URL. Оба клиента
+до сохранения проверяют количество vectors, непустую единую фактическую
+размерность и конечность каждого `Float`; cancellation остаётся кооперативной.
+Сообщения Ollama о недоступном runtime/отсутствующей модели не включают response
+body, а OpenAI provider errors очищаются от ключа, bearer tokens и строк `sk-...`.
 
 ## Corpus
 
@@ -105,7 +130,8 @@ Web-режим `rag` не строит второй индекс. `DocumentRetri
 существующим `JsonDocumentIndexStore`, затем:
 
 1. проверяет versioned документ целиком и требует strategy `structured`;
-2. создаёт `EmbeddingClient` с точными `provider/model` из index descriptor;
+2. создаёт `EmbeddingClient` с точными `provider/model` из index descriptor:
+   OpenAI с настроенным ключом или keyless Ollama; неизвестный provider отклоняется;
 3. получает один embedding переданного retrieval query и проверяет его dimension;
 4. вызывает общий `search`, использующий `cosineSimilarity`;
 5. возвращает до переданного limit без merge: score descending, стабильный
@@ -136,7 +162,7 @@ metadata и только проверенные короткие quotes; vectors
 client, RAG LLM-вызов не начинается и пользователь получает команду:
 
 ```bash
-./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
+./gradlew buildLocalDocumentIndex
 ```
 
 Baseline и ранее завершённая RAG-ветка уже могут быть готовы к этому моменту и
@@ -154,17 +180,20 @@ Baseline и ранее завершённая RAG-ветка уже могут �
 ARCHITECTURE, WEB_API и этим документом; исправлений относительно предложенного
 набора не потребовалось.
 
-Production evaluation запускается только явно:
+Production evaluation запускается только явно и по умолчанию полностью локальна:
 
 ```bash
 ./gradlew runRagEvaluation
 ```
 
-Команда использует существующие `.env` и `structured.json`, выполняет до 40
-generation calls (baseline, raw, rewrite и, если фильтр не пуст, enhanced для
-каждого case) и до 20 query embedding calls и атомарно сохраняет:
+Команда требует локальный descriptor `ollama/qwen3-embedding:0.6b`, выполняет
+десять cases через `qwen3:14b`, а на representative cases отдельно делает warm-up
+и минимум три измеряемых stability-повтора с замороженным retrieval context.
+Облачная ветка выполняется только при одновременном наличии ключа и явном
+`--allow-cloud`; иначе она записывается как `skipped`, не блокируя local-only run.
+Результат атомарно сохраняется:
 
-- `.llm-rag-evaluation/comparison.json` формата v3 (v1/v2 читаются с миграцией);
+- `.llm-rag-evaluation/comparison.json` формата v4 (v1/v2/v3 читаются с миграцией);
 - `.llm-rag-evaluation/comparison.md`.
 
 Для каждого case сохраняются expectation, expected sources, три ответа, raw и

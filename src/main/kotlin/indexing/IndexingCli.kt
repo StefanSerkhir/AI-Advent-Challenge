@@ -10,14 +10,23 @@ fun main(args: Array<String>) = runBlocking {
     val arguments = IndexingCliArguments.parse(args)
     val root = arguments.root.absolute().normalize()
     val output = if (arguments.output.isAbsolute) arguments.output.normalize() else root.resolve(arguments.output).normalize()
-    val openAiKey = LocalConfigStore(root.resolve(".env")).load().openAiApiKey
-        ?.takeIf(String::isNotBlank)
-        ?: error("В существующей конфигурации не задан openai_api_key. Индексация не запущена.")
+    val openAiKey = if (arguments.embeddingProvider == EmbeddingProvider.OPENAI) {
+        LocalConfigStore(root.resolve(".env")).load().openAiApiKey
+            ?.takeIf(String::isNotBlank)
+            ?: error("В существующей конфигурации не задан openai_api_key. Индексация не запущена.")
+    } else {
+        null
+    }
     val httpClient = createHttpClient(maxRetries = 0)
     try {
         val result = DocumentIndexPipeline(
-            embeddingClient = OpenAiEmbeddingClient(openAiKey, httpClient, arguments.embeddingModel),
-            knownSecrets = listOf(openAiKey),
+            embeddingClient = createEmbeddingClient(
+                provider = arguments.embeddingProvider.wireName,
+                model = arguments.embeddingModel,
+                httpClient = httpClient,
+                openAiApiKey = openAiKey,
+            ),
+            knownSecrets = listOfNotNull(openAiKey),
         ).run(
             IndexingOptions(
                 corpusRoot = root,
@@ -47,6 +56,7 @@ data class IndexingCliArguments(
     val strategies: RequestedStrategies = RequestedStrategies.BOTH,
     val fixedChunkSize: Int = DEFAULT_FIXED_CHUNK_SIZE,
     val overlap: Int = DEFAULT_FIXED_OVERLAP,
+    val embeddingProvider: EmbeddingProvider = EmbeddingProvider.OPENAI,
     val embeddingModel: String = DEFAULT_EMBEDDING_MODEL,
     val batchSize: Int = DEFAULT_EMBEDDING_BATCH_SIZE,
 ) {
@@ -71,13 +81,15 @@ data class IndexingCliArguments(
                 "both" -> RequestedStrategies.BOTH
                 else -> throw IllegalArgumentException("--strategy должен быть fixed, structured или both")
             }
+            val embeddingProvider = EmbeddingProvider.fromWireName(values["embedding-provider"] ?: "openai")
             return IndexingCliArguments(
                 root = Path.of(values["root"] ?: "."),
                 output = Path.of(values["output"] ?: ".llm-document-index"),
                 strategies = strategy,
                 fixedChunkSize = intValue(values, "fixed-chunk-size", DEFAULT_FIXED_CHUNK_SIZE),
                 overlap = intValue(values, "overlap", DEFAULT_FIXED_OVERLAP),
-                embeddingModel = values["embedding-model"]?.takeIf(String::isNotBlank) ?: DEFAULT_EMBEDDING_MODEL,
+                embeddingProvider = embeddingProvider,
+                embeddingModel = values["embedding-model"]?.takeIf(String::isNotBlank) ?: embeddingProvider.defaultModel,
                 batchSize = intValue(values, "batch-size", DEFAULT_EMBEDDING_BATCH_SIZE),
             ).also {
                 require(it.fixedChunkSize >= 100) { "--fixed-chunk-size должен быть не меньше 100" }
@@ -87,7 +99,7 @@ data class IndexingCliArguments(
         }
 
         private val KNOWN_ARGUMENTS = setOf(
-            "root", "output", "strategy", "fixed-chunk-size", "overlap", "embedding-model", "batch-size",
+            "root", "output", "strategy", "fixed-chunk-size", "overlap", "embedding-provider", "embedding-model", "batch-size",
         )
 
         private fun intValue(values: Map<String, String>, name: String, default: Int): Int =

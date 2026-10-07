@@ -7,7 +7,7 @@ import kotlinx.coroutines.yield
 
 const val DEFAULT_RAG_RETRIEVAL_LIMIT = 5
 const val DOCUMENT_INDEX_BUILD_COMMAND =
-    "./gradlew buildDocumentIndexes --args=\"--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64\""
+    "./gradlew buildLocalDocumentIndex"
 
 data class RetrievedDocumentChunk(
     val rank: Int,
@@ -24,6 +24,10 @@ data class DocumentRetrievalResult(
     val embeddingModel: String,
     val manifestHash: String,
     val chunks: List<RetrievedDocumentChunk>,
+    val embeddingProvider: String = "unknown",
+    val queryEmbeddingElapsedMillis: Long = 0,
+    val searchElapsedMillis: Long = 0,
+    val retrievalElapsedMillis: Long = 0,
 )
 
 class DocumentRetrievalException(message: String, cause: Throwable? = null) :
@@ -32,11 +36,13 @@ class DocumentRetrievalException(message: String, cause: Throwable? = null) :
 /** Production retrieval boundary shared by the web RAG mode and evaluation CLI. */
 class DocumentRetriever(
     private val indexStore: JsonDocumentIndexStore,
+    private val nanoTime: () -> Long = System::nanoTime,
     private val embeddingClientFactory: (EmbeddingDescriptor) -> EmbeddingClient,
 ) {
     suspend fun retrieve(question: String, limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT): DocumentRetrievalResult {
         require(question.isNotBlank()) { "Вопрос для RAG не может быть пустым" }
         require(limit > 0) { "Retrieval limit должен быть положительным" }
+        val retrievalStarted = nanoTime()
         currentCoroutineContext().ensureActive()
 
         val index = try {
@@ -73,6 +79,7 @@ class DocumentRetriever(
             )
         }
 
+        val embeddingStarted = nanoTime()
         val queryVector = try {
             embeddingClient.embed(listOf(question)).singleOrNull()
                 ?: throw IllegalArgumentException("Embedding client вернул неверное число query vectors")
@@ -83,6 +90,7 @@ class DocumentRetriever(
         } catch (error: Exception) {
             throw DocumentRetrievalException("Не удалось создать embedding вопроса: ${safeReason(error)}", error)
         }
+        val queryEmbeddingElapsedMillis = elapsedMillis(embeddingStarted)
         currentCoroutineContext().ensureActive()
         if (queryVector.values.size != index.embedding.dimensions) {
             throw DocumentRetrievalException(
@@ -93,6 +101,7 @@ class DocumentRetriever(
 
         // search() owns the common cosine implementation and deterministic score/chunkId ordering.
         yield()
+        val searchStarted = nanoTime()
         val hits = try {
             search(index, queryVector, limit)
         } catch (error: CancellationException) {
@@ -100,13 +109,18 @@ class DocumentRetriever(
         } catch (error: Exception) {
             throw DocumentRetrievalException("Не удалось выполнить поиск по локальному индексу: ${safeReason(error)}", error)
         }
+        val searchElapsedMillis = elapsedMillis(searchStarted)
         currentCoroutineContext().ensureActive()
         if (hits.isEmpty()) throw unavailableIndex(null)
 
         return DocumentRetrievalResult(
             strategy = index.strategy,
+            embeddingProvider = index.embedding.provider,
             embeddingModel = index.embedding.model,
             manifestHash = index.corpus.manifestHash,
+            queryEmbeddingElapsedMillis = queryEmbeddingElapsedMillis,
+            searchElapsedMillis = searchElapsedMillis,
+            retrievalElapsedMillis = elapsedMillis(retrievalStarted),
             chunks = hits.mapIndexed { indexOfHit, hit ->
                 RetrievedDocumentChunk(
                     rank = indexOfHit + 1,
@@ -132,4 +146,6 @@ class DocumentRetriever(
         ?.take(500)
         ?.takeIf(String::isNotBlank)
         ?: "неизвестная ошибка"
+
+    private fun elapsedMillis(started: Long): Long = (nanoTime() - started).coerceAtLeast(0L) / 1_000_000
 }

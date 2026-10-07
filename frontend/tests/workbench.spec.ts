@@ -216,6 +216,10 @@ test("RAG mode shows raw and enhanced pipelines and preserves completed branches
   await expect(rawEvidence.locator("q")).toHaveCount(1);
   const rawSources = cards.nth(1).getByTestId("rag-sources");
   await expect(rawSources).toContainText("Обычный pipeline");
+  await expect(rawSources.getByTestId("rag-locality")).toContainText("fake/deterministic-hash-v1");
+  await expect(rawSources).toContainText("query embedding");
+  await expect(rawSources).toContainText("cosine search");
+  await expect(rawSources).toContainText("Генерация: openai/");
   await expect(rawSources).toContainText("rewrite и threshold не применялись");
   await expect(rawSources.locator("li")).toHaveCount(5);
   const enhancedSources = cards.nth(2).getByTestId("rag-sources");
@@ -252,6 +256,26 @@ test("RAG mode shows raw and enhanced pipelines and preserves completed branches
   await setMode(page, "compare");
   await expect(page.getByLabel("Кандидатов до фильтрации")).toHaveCount(0);
   await expect(page.getByLabel("Минимальная similarity")).toHaveCount(0);
+});
+
+test("Ollama RAG fixture is keyless and keeps all three branches without external network", async ({page}) => {
+  await ready(page);
+  await page.getByLabel("Провайдер", {exact: true}).selectOption("OLLAMA");
+  await expect.poll(async () =>
+    ((await (await page.request.get("/api/state")).json()) as State).settings.provider,
+  ).toBe("OLLAMA");
+  await setMode(page, "rag");
+  await expect(page.getByTestId("local-provider-note")).toBeVisible();
+  await expect(page.getByLabel("API Key")).toHaveCount(0);
+
+  await send(page, "Как запустить production web-приложение?");
+  await done(page);
+  const cards = page.getByTestId("exchange").last().getByTestId("response-card");
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(1).getByTestId("rag-evidence")).toContainText("проверено");
+  await expect(cards.nth(2).getByTestId("rag-evidence")).toContainText("проверено");
+  await expect(cards.nth(1).getByTestId("rag-sources")).toContainText("Генерация: ollama/qwen3:14b");
+  await expect(cards.nth(1)).toContainText("стоимость н/д");
 });
 
 test("enhanced RAG abstains normally when every candidate is below threshold", async ({page}) => {

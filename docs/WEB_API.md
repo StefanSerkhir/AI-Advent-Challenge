@@ -21,7 +21,9 @@ arguments/result уже ограничены и очищены для диагн
 Для output RAG-ветки или assistant RAG-чата `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
-strategy, embeddingModel, manifestHash, retrievedCount, rewrite, sources[],
+strategy, embeddingProvider, embeddingModel, manifestHash,
+queryEmbeddingElapsedMillis, searchElapsedMillis, retrievalElapsedMillis,
+generationProvider, generationModel, retrievedCount, rewrite, sources[],
 abstained, abstentionReason, evidence }`,
 где source содержит только `{ rank, score, chunkId, source, title, section }`.
 `evidence` имеет форму `{ status, citationCount, quoteCount, sources[] }`; каждый
@@ -31,6 +33,10 @@ abstained, abstentionReason, evidence }`,
 после нормализации пробелов и сам присоединил metadata из retrieval result.
 `pipeline` равен `raw`, `enhanced` или `assistant_contextual`; `rewrite` содержит
 только elapsed, usage и стоимость служебного вызова.
+Пары `embeddingProvider/embeddingModel` и `generationProvider/generationModel`
+позволяют проверить полностью локальную цепочку `ollama/qwen3-embedding:0.6b` →
+`ollama/qwen3:14b`; стоимость в `outputs[].metrics.estimatedCostUsd` при Ollama
+равна `null` и показывается UI как `н/д`.
 Query/chunk vectors и полный chunk text по wire не передаются. У baseline-
 карточки поле равно `null`; при ошибке rewrite/retrieval RAG-карточка сохраняет
 `applied=false` и безопасную ошибку; ошибки индекса дополнительно содержат команду

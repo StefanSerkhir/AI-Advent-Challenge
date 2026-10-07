@@ -1,5 +1,7 @@
 package org.example.indexing
 
+import io.ktor.client.*
+import io.ktor.client.engine.mock.*
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import kotlin.io.path.createDirectories
@@ -86,12 +88,29 @@ class DocumentIndexPipelineTest {
     fun `CLI parses all production parameters`() {
         val parsed = IndexingCliArguments.parse(arrayOf(
             "--root=/repo", "--output", "indexes", "--strategy", "structured",
-            "--fixed-chunk-size", "1400", "--overlap", "100", "--embedding-model", "custom", "--batch-size", "12",
+            "--fixed-chunk-size", "1400", "--overlap", "100", "--embedding-provider", "ollama",
+            "--embedding-model", "custom", "--batch-size", "12",
         ))
         assertEquals(RequestedStrategies.STRUCTURED, parsed.strategies)
         assertEquals(1400, parsed.fixedChunkSize)
         assertEquals(100, parsed.overlap)
+        assertEquals(EmbeddingProvider.OLLAMA, parsed.embeddingProvider)
         assertEquals("custom", parsed.embeddingModel)
         assertEquals(12, parsed.batchSize)
+    }
+
+    @Test
+    fun `CLI defaults local provider to keyless Ollama embedding model`() {
+        val parsed = IndexingCliArguments.parse(arrayOf("--embedding-provider", "ollama"))
+        assertEquals(EmbeddingProvider.OLLAMA, parsed.embeddingProvider)
+        assertEquals(DEFAULT_OLLAMA_EMBEDDING_MODEL, parsed.embeddingModel)
+        val http = HttpClient(MockEngine { respondOk() })
+        try {
+            val client = createEmbeddingClient(parsed.embeddingProvider.wireName, parsed.embeddingModel, http)
+            assertEquals("ollama", client.provider)
+            assertEquals(DEFAULT_OLLAMA_EMBEDDING_MODEL, client.model)
+        } finally {
+            http.close()
+        }
     }
 }

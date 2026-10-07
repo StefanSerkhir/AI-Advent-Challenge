@@ -27,8 +27,10 @@ OLLAMA_HOST=127.0.0.1:11434 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 o
 
 ```bash
 ollama pull qwen3:14b
+ollama pull qwen3-embedding:0.6b
 ollama list
 ollama show qwen3:14b
+ollama show qwen3-embedding:0.6b
 ```
 
 Перед отдельным запуском проверяйте владельца порта и не останавливайте чужой
@@ -117,6 +119,10 @@ LOCAL_LLM_DEMO_OVERWRITE=1 npm --prefix frontend run record:local-llm-demo
 ```
 
 Готовый файл: [`video/local-llm-demo.webm`](../video/local-llm-demo.webm).
+
+Эта запись проверяет только локальную генерацию без document retrieval. Полный
+keyless RAG, локальный индекс/evaluation и отдельное видео описаны в
+[LOCAL_RAG_DEMO.md](LOCAL_RAG_DEMO.md).
 
 ## Результаты
 

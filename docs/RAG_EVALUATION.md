@@ -32,31 +32,47 @@ Evaluation сравнивает три независимые карточки �
 
 ## Production-запуск и стоимость
 
-Сначала явно постройте production structure-aware индекс. Обе команды могут быть
-платными и не запускаются автоматическими тестами или Codex без отдельного прямого
-разрешения:
+Сначала явно постройте полностью локальный structure-aware индекс. Эти команды
+не требуют API-ключей; автоматические тесты их не запускают, потому что они
+загружают настоящий Ollama runtime и модели:
 
 ```bash
-./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
+ollama pull qwen3:14b
+ollama pull qwen3-embedding:0.6b
+./gradlew buildLocalDocumentIndex
 ./gradlew runRagEvaluation
 ```
 
 Для 10 cases evaluation выполняет до 40 generation calls: 10 baseline, 10 raw,
-10 rewrite и до 10 enhanced. Enhanced generation пропускается при нуле sources.
+10 rewrite и до 10 enhanced через `qwen3:14b`. Enhanced generation пропускается при нуле sources.
 Retrieval добавляет до 20 query embedding calls: по исходному и переписанному
-запросу для каждого успешно дошедшего до retrieval case. Значения `rag_candidate_limit`,
+запросу для каждого успешно дошедшего до retrieval case через descriptor
+`ollama/qwen3-embedding:0.6b`. Значения `rag_candidate_limit`,
 `rag_result_limit` и `rag_min_similarity` читаются из локальных настроек; модель и
 max tokens можно переопределить CLI-параметрами:
 
 ```bash
-./gradlew runRagEvaluation --args="--root . --output .llm-rag-evaluation --model gpt-4.1-mini --max-tokens 600"
+./gradlew runRagEvaluation --args="--root . --output .llm-rag-evaluation --model qwen3:14b --max-tokens 600 --repetitions 3 --timeout-seconds 180"
 ```
 
-## Report v3
+Дополнительно representative cases `production-web-start`, `memory-layers-order`
+и `request-id-idempotency` проходят один warm-up и не менее трёх измеряемых
+повторов. Внутри каждого повтора retrieval выполняется один раз, а всем generation
+providers передаются одинаковые frozen chunks, prompt и max tokens. OpenAI можно
+включить только осознанно:
+
+```bash
+./gradlew runRagEvaluation --args="--allow-cloud --cloud-model gpt-4.1-mini"
+```
+
+Даже при наличии ключа cloud-вызов без `--allow-cloud` не выполняется и получает
+статус `skipped`. Без ключа `--allow-cloud` также даёт `skipped`, а не ошибку.
+
+## Report v4
 
 Результат атомарно записывается в исключённый из Git каталог:
 
-- `.llm-rag-evaluation/comparison.json` — machine-readable format v3;
+- `.llm-rag-evaluation/comparison.json` — machine-readable format v4;
 - `.llm-rag-evaluation/comparison.md` — читаемое side-by-side сравнение.
 
 Для raw и enhanced отдельно сохраняются ответ/ошибка, usage, стоимость и elapsed,
@@ -64,9 +80,17 @@ retrieval query, candidate/result limits, threshold, counts, retrieved metadata,
 проверенные короткие цитаты и отдельные `sourcesPresent`, `quotesPresent`,
 `citationsValid`, `quotesExact`, `expectedSourceFound`, abstention fields. Vectors,
 полные chunk texts и rewrite prompt в report не записываются. Старые v1/v2
-читаются с явной миграцией: v1 превращает прежнюю RAG-ветку в raw; v1/v2 не
+и v3 читаются с явной миграцией: v1 превращает прежнюю RAG-ветку в raw; v1/v2 не
 получают выдуманных historical quotes, поэтому quote flags остаются false.
-Следующее сохранение создаёт v3.
+Следующее сохранение создаёт v4.
+
+`providerComparison` сохраняет provider/model, фактически полученный answer,
+success/error/timeout, отдельные embedding/retrieval/generation timings,
+end-to-end latency, usage/cost, sources/chunk IDs, expected-source hit,
+citations/quotes, abstention и nullable manual assessment только при реально
+полученном ответе. Aggregate содержит completion/citation rates, error/timeout
+counts, стабильность chunk IDs, p50/p95 и min/max latency. Для Ollama стоимость
+остаётся `null`/`н/д`.
 
 Markdown содержит общую raw/enhanced таблицу и отдельные ответы/источники. При
 нуле результатов enhanced generation пропускается, но report сохраняет rewrite
@@ -88,7 +112,8 @@ production evaluation с ручной оценкой, а не фактом пр�
 ## Безопасные проверки
 
 `RagEvaluationTest` использует deterministic fake generation/query embeddings,
-проверяет десять cases, round-trip v3 и миграцию v1/v2. Browser fixture показывает
+проверяет десять cases, frozen provider context, stability aggregate, round-trip
+v4 и миграцию v1/v2/v3. Browser fixture показывает
 три карточки, rewrite query, `10 → N`, threshold, verified evidence, изолированный
 сбой enhanced-ветки и нормальный abstention без источников/цитат.
 

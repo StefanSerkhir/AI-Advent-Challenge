@@ -69,7 +69,7 @@ class RagEvaluationTest {
     }
 
     @Test
-    fun `report store migrates format v1 and round trips v3`() {
+    fun `report store migrates format v1 and round trips v4`() {
         val directory = Files.createTempDirectory("rag-evaluation-v1")
         try {
             val json = directory.resolve("comparison.json")
@@ -94,7 +94,7 @@ class RagEvaluationTest {
             """.trimIndent())
             val store = RagEvaluationReportStore(json, markdown)
             val migrated = store.load()
-            assertEquals(3, migrated.formatVersion)
+            assertEquals(4, migrated.formatVersion)
             assertEquals("rag [S1]", migrated.cases.single().raw.answer.content)
             assertContains(migrated.cases.single().enhanced.answer.error.orEmpty(), "v1")
 
@@ -138,11 +138,71 @@ class RagEvaluationTest {
                 }
             """.trimIndent())
             val migrated = RagEvaluationReportStore(json, markdown).load()
-            assertEquals(3, migrated.formatVersion)
+            assertEquals(4, migrated.formatVersion)
             assertTrue(migrated.cases.single().raw.sourcesPresent)
             assertTrue(!migrated.cases.single().raw.quotesPresent)
             assertTrue(!migrated.cases.single().raw.quotesExact)
             assertContains(migrated.note, "format v2")
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `provider comparison freezes context per repeat separates warmup and reports stability`() = runBlocking {
+        val directory = Files.createTempDirectory("rag-provider-comparison")
+        try {
+            val indexFile = createRagFixtureIndex(directory)
+            val retriever = DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+            }
+            val client = object : LlmClient {
+                override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions) = CompletionResult(
+                    groundedRagFixtureAnswer(messages.last().content),
+                    "stop",
+                    TokenUsage(10, 5, 15),
+                    "local-model",
+                )
+            }
+            val comparison = RagProviderComparisonRunner(
+                retriever = retriever,
+                availableTargets = listOf(RagGenerationTarget("ollama", "local-model") { client }),
+                skippedTargets = listOf(("openai" to "cloud-model") to "not explicitly allowed"),
+                resultLimit = 5,
+                repeats = 3,
+            ).run(listOf(RAG_EVALUATION_CASES.first()), maxTokens = 100)
+
+            assertEquals(1, comparison.warmUpRunsPerAvailableProvider)
+            assertEquals(3, comparison.runs.size)
+            assertTrue(comparison.runs.all { it.success && it.citationsValid && it.quotesExact })
+            val local = comparison.aggregates.single { it.provider == "ollama" }
+            assertEquals(1.0, local.completionSuccessRate)
+            assertEquals(1.0, local.verifiedCitationRate)
+            assertEquals(1.0, local.retrievedChunkIdStability)
+            assertEquals("skipped", comparison.aggregates.single { it.provider == "openai" }.status)
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `report store migrates format v3 without inventing provider comparison`() {
+        val directory = Files.createTempDirectory("rag-evaluation-v3")
+        try {
+            val json = directory.resolve("comparison.json")
+            val markdown = directory.resolve("comparison.md")
+            Files.writeString(json, """
+                {
+                  "formatVersion": 3,
+                  "model": "old-model",
+                  "note": "old v3 report",
+                  "cases": []
+                }
+            """.trimIndent())
+            val migrated = RagEvaluationReportStore(json, markdown).load()
+            assertEquals(4, migrated.formatVersion)
+            assertEquals(null, migrated.providerComparison)
+            assertContains(migrated.note, "format v3")
         } finally {
             directory.toFile().deleteRecursively()
         }

@@ -56,7 +56,7 @@ class DocumentRetrieverTest {
         val directory = Files.createTempDirectory("document-retriever-errors")
         try {
             val missing = DocumentRetriever(JsonDocumentIndexStore(directory.resolve("missing.json"))) { embeddingClient() }
-            assertContains(assertFailsWith<DocumentRetrievalException> { missing.retrieve("question") }.message.orEmpty(), "buildDocumentIndexes")
+            assertContains(assertFailsWith<DocumentRetrievalException> { missing.retrieve("question") }.message.orEmpty(), "buildLocalDocumentIndex")
 
             val corruptFile = directory.resolve("corrupt.json")
             Files.writeString(corruptFile, "{not-json")
@@ -103,13 +103,50 @@ class DocumentRetrieverTest {
         }
     }
 
+    @Test
+    fun `ollama descriptor round trips and selects a matching keyless query client`() = runBlocking {
+        val directory = Files.createTempDirectory("document-retriever-ollama")
+        try {
+            val file = directory.resolve("structured.json")
+            val original = testIndex(
+                entries = (1..3).map { "chunk-$it" to listOf(1f, it / 10f) },
+                provider = "ollama",
+                model = DEFAULT_OLLAMA_EMBEDDING_MODEL,
+            )
+            JsonDocumentIndexStore(file).save(original)
+            val loaded = JsonDocumentIndexStore(file).load()
+            assertEquals(original.embedding, loaded.embedding)
+
+            var selectedDescriptor: EmbeddingDescriptor? = null
+            val result = DocumentRetriever(JsonDocumentIndexStore(file)) { descriptor ->
+                selectedDescriptor = descriptor
+                object : EmbeddingClient {
+                    override val provider = "ollama"
+                    override val model = DEFAULT_OLLAMA_EMBEDDING_MODEL
+                    override suspend fun embed(texts: List<String>) = texts.map { EmbeddingVector(listOf(1f, 0f)) }
+                }
+            }.retrieve("question", 2)
+
+            assertEquals("ollama", selectedDescriptor?.provider)
+            assertEquals("ollama", result.embeddingProvider)
+            assertEquals(DEFAULT_OLLAMA_EMBEDDING_MODEL, result.embeddingModel)
+            assertEquals(2, result.chunks.size)
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
     private fun embeddingClient(vector: List<Float> = listOf(1f, 0f)) = object : EmbeddingClient {
         override val provider = "test"
         override val model = "test-model"
         override suspend fun embed(texts: List<String>) = texts.map { EmbeddingVector(vector) }
     }
 
-    private fun testIndex(entries: List<Pair<String, List<Float>>>): DocumentIndex {
+    private fun testIndex(
+        entries: List<Pair<String, List<Float>>>,
+        provider: String = "test",
+        model: String = "test-model",
+    ): DocumentIndex {
         val documents = entries.map { (id, _) ->
             val text = "Text for $id"
             CorpusDocumentManifest(
@@ -135,7 +172,7 @@ class DocumentRetrieverTest {
         return DocumentIndex(
             strategy = ChunkingKind.STRUCTURED,
             parameters = ChunkingParameters(1600, 0, "test"),
-            embedding = EmbeddingDescriptor("test", "test-model", 2),
+            embedding = EmbeddingDescriptor(provider, model, 2),
             corpus = manifest,
             chunks = entries.mapIndexed { index, (id, vector) ->
                 val document = documents[index]

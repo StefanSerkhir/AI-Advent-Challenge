@@ -252,8 +252,14 @@ function ResponseCard({ output }: { output: Output }) {
         {output.ragDiagnostics.rewrite && <p className="micro">
           Rewrite: {output.ragDiagnostics.rewrite.elapsedMillis} мс · usage {output.ragDiagnostics.rewrite.totalTokens ?? "н/д"} токенов · стоимость {cost(output.ragDiagnostics.rewrite.costUsd)}
         </p>}
-        {output.ragDiagnostics.embeddingModel && <p className="micro">
-          Embedding: <code>{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
+        {output.ragDiagnostics.embeddingModel && <p className="micro" data-testid="rag-locality">
+          Embedding: <code>{output.ragDiagnostics.embeddingProvider ?? "неизвестно"}/{output.ragDiagnostics.embeddingModel}</code> · manifest <code>{output.ragDiagnostics.manifestHash?.slice(0, 12)}</code>
+          {output.ragDiagnostics.queryEmbeddingElapsedMillis !== null && <> · query embedding {output.ragDiagnostics.queryEmbeddingElapsedMillis} мс</>}
+          {output.ragDiagnostics.searchElapsedMillis !== null && <> · cosine search {output.ragDiagnostics.searchElapsedMillis} мс</>}
+          {output.ragDiagnostics.retrievalElapsedMillis !== null && <> · retrieval {output.ragDiagnostics.retrievalElapsedMillis} мс</>}
+        </p>}
+        {output.ragDiagnostics.generationModel && <p className="micro">
+          Генерация: <code>{output.ragDiagnostics.generationProvider ?? "неизвестно"}/{output.ragDiagnostics.generationModel}</code> · стоимость {cost(output.metrics.estimatedCostUsd)}
         </p>}
         <strong>Найденные чанки (retrieval)</strong>
         {output.ragDiagnostics.sources.length === 0 ? <p className="micro">Релевантных источников нет.</p> :

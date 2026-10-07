@@ -8,7 +8,10 @@ import org.example.app.AppBootstrap
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfig
 import org.example.config.LocalConfigStore
-import org.example.indexing.*
+import org.example.indexing.DocumentRetrievalException
+import org.example.indexing.DocumentRetriever
+import org.example.indexing.JsonDocumentIndexStore
+import org.example.indexing.createEmbeddingClient
 import org.example.llm.LlmKind
 import org.example.llm.createLlmClient
 import org.example.mcp.LocalMcpGateway
@@ -32,17 +35,19 @@ fun main() {
         mcpGateway = LocalMcpGateway(),
         documentRetrieverProvider = { keys ->
             DocumentRetriever(JsonDocumentIndexStore(Path.of(".llm-document-index", "structured.json"))) { descriptor ->
-                if (descriptor.provider != "openai") {
+                try {
+                    createEmbeddingClient(
+                        provider = descriptor.provider,
+                        model = descriptor.model,
+                        httpClient = client,
+                        openAiApiKey = keys[LlmKind.OPENAI],
+                    )
+                } catch (error: IllegalArgumentException) {
                     throw DocumentRetrievalException(
-                        "Embedding provider '${descriptor.provider}' пока не поддерживается web runtime. " +
-                            "Перестройте индекс командой: $DOCUMENT_INDEX_BUILD_COMMAND",
+                        "Embedding provider '${descriptor.provider}' из index descriptor не поддерживается: ${error.message}",
+                        error,
                     )
                 }
-                val embeddingKey = keys[LlmKind.OPENAI]
-                    ?: throw DocumentRetrievalException(
-                        "Для query embedding нужен локально настроенный ключ OpenAI, совместимый с индексом.",
-                    )
-                OpenAiEmbeddingClient(embeddingKey, client, descriptor.model)
             }
         },
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },

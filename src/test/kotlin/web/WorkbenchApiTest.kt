@@ -146,6 +146,11 @@ class WorkbenchApiTest {
             val diagnostics = assertNotNull(exchange.outputs.last().ragDiagnostics)
             assertTrue(diagnostics.applied)
             assertTrue(diagnostics.queryRewritten)
+            assertEquals("fake", diagnostics.embeddingProvider)
+            assertEquals("openai", diagnostics.generationProvider)
+            assertEquals("gpt-5.6-luna", diagnostics.generationModel)
+            assertNotNull(diagnostics.queryEmbeddingElapsedMillis)
+            assertNotNull(diagnostics.retrievalElapsedMillis)
             assertEquals(10, diagnostics.candidateCount)
             assertTrue(diagnostics.filteredCount in 1..5)
             assertEquals((1..diagnostics.filteredCount).toList(), diagnostics.sources.map { it.rank })
@@ -264,11 +269,79 @@ class WorkbenchApiTest {
             assertEquals("completed", exchange.status)
             assertEquals("Baseline survives", exchange.outputs.first().content)
             assertEquals(3, exchange.outputs.size)
-            assertContains(exchange.outputs[1].error.orEmpty(), "buildDocumentIndexes")
-            assertContains(exchange.outputs[2].error.orEmpty(), "buildDocumentIndexes")
+            assertContains(exchange.outputs[1].error.orEmpty(), "buildLocalDocumentIndex")
+            assertContains(exchange.outputs[2].error.orEmpty(), "buildLocalDocumentIndex")
             assertFalse(exchange.outputs[2].ragDiagnostics!!.applied)
         } finally {
             c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `Ollama RAG comparison is keyless and exposes local embedding and generation diagnostics`() = runBlocking {
+        val directory = Files.createTempDirectory("ollama-rag-api")
+        try {
+            val fixtureFile = createRagFixtureIndex(directory)
+            val original = JsonDocumentIndexStore(fixtureFile).load()
+            JsonDocumentIndexStore(fixtureFile).save(
+                original.copy(embedding = original.embedding.copy(
+                    provider = "ollama",
+                    model = DEFAULT_OLLAMA_EMBEDDING_MODEL,
+                )),
+            )
+            val controller = WorkbenchController(
+                initialSettings = AppSettings(LlmKind.OLLAMA, responseMode = ResponseMode.RAG_COMPARISON),
+                initialApiKeys = emptyMap(),
+                documentRetrieverProvider = {
+                    DocumentRetriever(JsonDocumentIndexStore(fixtureFile)) { descriptor ->
+                        object : EmbeddingClient {
+                            private val delegate = DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                            override val provider = "ollama"
+                            override val model = descriptor.model
+                            override suspend fun embed(texts: List<String>) = delegate.embed(texts)
+                        }
+                    }
+                },
+                clientFactory = { kind, key, model ->
+                    assertEquals(LlmKind.OLLAMA, kind)
+                    assertNull(key)
+                    object : LlmClient {
+                        override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult {
+                            val system = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
+                            return CompletionResult(
+                                when {
+                                    "Перепиши исходный вопрос" in system -> "production web запуск runWeb"
+                                    "предоставленный контекст" in system -> groundedRagFixtureAnswer(messages.last().content)
+                                    else -> "Local baseline"
+                                },
+                                "stop",
+                                TokenUsage(12, 4, 16),
+                                model,
+                            )
+                        }
+                    }
+                },
+            )
+            try {
+                WorkbenchApi(controller).start(command(prompt = "Как запустить production web-приложение?"))
+                controller.awaitCurrentRequest()
+                val exchange = controller.state.value.toDto().exchanges.single()
+                assertEquals("completed", exchange.status)
+                assertEquals(3, exchange.outputs.size)
+                exchange.outputs.drop(1).forEach { output ->
+                    val diagnostics = assertNotNull(output.ragDiagnostics)
+                    assertEquals("ollama", diagnostics.embeddingProvider)
+                    assertEquals(DEFAULT_OLLAMA_EMBEDDING_MODEL, diagnostics.embeddingModel)
+                    assertEquals("ollama", diagnostics.generationProvider)
+                    assertEquals("qwen3:14b", diagnostics.generationModel)
+                    assertEquals("verified", diagnostics.evidence.status)
+                    assertNull(output.metrics.estimatedCostUsd)
+                }
+            } finally {
+                controller.shutdown()
+            }
+        } finally {
             directory.toFile().deleteRecursively()
         }
     }

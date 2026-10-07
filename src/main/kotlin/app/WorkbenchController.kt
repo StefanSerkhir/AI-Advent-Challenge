@@ -749,6 +749,7 @@ class WorkbenchController(
                             ragCandidateLimit = settings.ragCandidateLimit,
                             ragResultLimit = settings.ragResultLimit,
                             ragMinSimilarity = settings.ragMinSimilarity,
+                            generationProvider = settings.llmKind.name.lowercase(),
                         ),
                     )
 

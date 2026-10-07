@@ -13,7 +13,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.*
 
-const val RAG_EVALUATION_FORMAT_VERSION = 3
+const val RAG_EVALUATION_FORMAT_VERSION = 4
 
 @Serializable
 data class RagEvaluationCase(
@@ -176,9 +176,11 @@ data class RagEvaluationCaseResult(
 @Serializable
 data class RagEvaluationReport(
     val formatVersion: Int = RAG_EVALUATION_FORMAT_VERSION,
+    val provider: String = "unknown",
     val model: String,
     val note: String = "Source/quote/citation/exact-substring/usage metrics are automatic. Semantic support, correctness, completeness and groundedness require separate manual 0–2 review for raw and enhanced; fake embeddings must not be treated as production quality.",
     val cases: List<RagEvaluationCaseResult>,
+    val providerComparison: RagProviderComparison? = null,
 )
 
 class RagEvaluationRunner(
@@ -187,7 +189,12 @@ class RagEvaluationRunner(
     private val ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
     private val ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
 ) {
-    suspend fun run(model: String, maxTokens: Int): RagEvaluationReport {
+    suspend fun run(
+        model: String,
+        maxTokens: Int,
+        provider: String = "unknown",
+        providerComparison: RagProviderComparison? = null,
+    ): RagEvaluationReport {
         val results = RAG_EVALUATION_CASES.map { evaluationCase ->
             val comparison = comparisonRunner.compare(
                 evaluationCase.question,
@@ -196,6 +203,7 @@ class RagEvaluationRunner(
                 ragCandidateLimit = ragCandidateLimit,
                 ragResultLimit = ragResultLimit,
                 ragMinSimilarity = ragMinSimilarity,
+                generationProvider = provider,
             )
             val baseline = comparison.branches.single { it.branch == RagBranch.BASELINE }
             val raw = comparison.branches.single { it.branch == RagBranch.RAW }
@@ -211,7 +219,7 @@ class RagEvaluationRunner(
                 enhanced = enhanced.toPipelineResult(evaluationCase.expectedSources),
             )
         }
-        return RagEvaluationReport(model = model, cases = results)
+        return RagEvaluationReport(provider = provider, model = model, cases = results, providerComparison = providerComparison)
     }
 }
 
@@ -233,6 +241,7 @@ class RagEvaluationReportStore(
             ?: error("RAG evaluation formatVersion отсутствует")
         return when (version) {
             RAG_EVALUATION_FORMAT_VERSION -> json.decodeFromJsonElement(element)
+            3 -> json.decodeFromJsonElement<RagEvaluationReport>(element).migrateFromV3()
             2 -> json.decodeFromJsonElement<RagEvaluationReport>(element).migrateFromV2()
             1 -> json.decodeFromJsonElement<RagEvaluationReportV1>(element).migrate()
             else -> error("Unsupported RAG evaluation format: $version")
@@ -312,9 +321,10 @@ private fun RagEvaluationReport.toMarkdown(): String = buildString {
     appendLine("# RAG evaluation comparison")
     appendLine()
     appendLine("- Format version: `$formatVersion`")
-    appendLine("- Model: `$model`")
+    appendLine("- Generation: `$provider/$model`")
     appendLine("- $note")
     appendLine()
+    appendProviderComparison(providerComparison)
     cases.forEachIndexed { index, result ->
         appendLine("## ${index + 1}. ${result.question}")
         appendLine()
@@ -449,4 +459,10 @@ private fun RagEvaluationReport.migrateFromV2() = copy(
             ),
         )
     },
+)
+
+private fun RagEvaluationReport.migrateFromV3() = copy(
+    formatVersion = RAG_EVALUATION_FORMAT_VERSION,
+    note = "$note Migrated from format v3; provider comparison and stability metrics were not present.",
+    providerComparison = null,
 )

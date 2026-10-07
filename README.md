@@ -33,6 +33,8 @@ brew install ollama
 OLLAMA_HOST=127.0.0.1:11434 ollama serve
 # в другом терминале
 ollama pull qwen3:14b
+ollama pull qwen3-embedding:0.6b
+./gradlew buildLocalDocumentIndex
 ./gradlew runLocalLlmDemo
 ```
 
@@ -40,6 +42,8 @@ ollama pull qwen3:14b
 блокируется отсутствующим ключом, а облачная API-стоимость отсутствует. Подробная
 установка, CLI/curl smoke-check, три реальных запроса и запись видео описаны в
 [локальной LLM-демонстрации](docs/LOCAL_LLM_DEMO.md).
+Полностью локальный RAG, evaluation и отдельная видеозапись описаны в
+[локальной RAG-демонстрации](docs/LOCAL_RAG_DEMO.md).
 
 ## Локальный пример MCP
 
@@ -351,16 +355,26 @@ source, title, section, ordinal, offsets и content hash документа.
 ./gradlew runDocumentIndexFixture
 ```
 
-Контрольный прогон текущего corpus содержит `74` документа, `816813` символов и
-`74240` слов — около `453.79` страницы по формуле `characterCount / 1800`. Он
-создаёт `867` fixed и `1508` structured chunks. Fake-метрики проверяют
+Контрольный прогон текущего corpus содержит `81` документ, `869586` символов и
+`79291` слово — около `483.10` страницы по формуле `characterCount / 1800`. Он
+создаёт `922` fixed и `1578` structured chunks. Fake-метрики проверяют
 воспроизводимость ranking/evaluation, но не являются оценкой качества OpenAI.
 
-Реальная команда читает уже существующий `openai_api_key` из `.env`, вызывает
-OpenAI embeddings и может быть платной; автоматические проверки её не запускают:
+Production CLI поддерживает OpenAI и полностью локальные Ollama embeddings.
+Локальный вариант не читает `.env`, не требует ключей и использует фиксированный
+`http://127.0.0.1:11434/api/embed` с batch `input` и `truncate=false`:
 
 ```bash
-./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy both --fixed-chunk-size 1200 --overlap 200 --embedding-model text-embedding-3-small --batch-size 64"
+./gradlew buildLocalDocumentIndex
+# эквивалентно:
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-provider ollama --embedding-model qwen3-embedding:0.6b --batch-size 32"
+```
+
+Обратно совместимый OpenAI-вариант читает `openai_api_key` из `.env` и может
+быть платным; автоматические проверки его не запускают:
+
+```bash
+./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy both --fixed-chunk-size 1200 --overlap 200 --embedding-provider openai --embedding-model text-embedding-3-small --batch-size 64"
 ```
 
 Результат появляется в исключённом из Git каталоге `.llm-document-index/`:
@@ -399,13 +413,14 @@ embedding model и corpus. При нуле результатов enhanced gener
 цитат: backend нормализует пробелы, сверяет каждый фрагмент с соответствующим
 request-local chunk и сам подставляет source, section и chunk_id. Модель не может
 подменить эти metadata. Полные chunks остаются request-local; REST/SSE возвращает
-только pipeline/query, лимиты, threshold, counts, manifest/model, retrieval metadata
+только pipeline/query, лимиты, threshold, counts, embedding provider/model,
+manifest, query-embedding/cosine/retrieval timings, generation provider/model и retrieval metadata
 и проверенные короткие цитаты. Ошибка индекса,
 rewrite, embedding или одной LLM-ветки не удаляет уже готовые карточки. Если
 индекса нет или его descriptor несовместим, UI показывает команду построения:
 
 ```bash
-./gradlew buildDocumentIndexes --args="--root . --output .llm-document-index --strategy structured --embedding-model text-embedding-3-small --batch-size 64"
+./gradlew buildLocalDocumentIndex
 ```
 
 Безопасная browser-демонстрация работает через `./gradlew runWebFixture`: fixture
@@ -413,8 +428,8 @@ rewrite, embedding или одной LLM-ветки не удаляет уже �
 и fake generation, не читает реальные ключи и не вызывает сеть.
 
 Отдельный набор из десяти вопросов находится в `RAG_EVALUATION_CASES`. Production
-evaluation запускается только явно и выполняет до 40 generation calls и до 20
-query embedding calls для десяти cases, поэтому может быть платным. Нулевой
+evaluation запускается только явно и по умолчанию выполняет до 40 локальных
+generation calls и до 20 локальных query embedding calls для десяти cases. Нулевой
 enhanced-result или ошибка уменьшают фактическое число вызовов:
 
 ```bash
@@ -422,11 +437,22 @@ enhanced-result или ошибка уменьшают фактическое ч
 ```
 
 Он атомарно пишет versioned `.llm-rag-evaluation/comparison.json` и
-`comparison.md` формата v3; v1/v2 читаются с явной миграцией. Отчёт сопоставляет raw
+`comparison.md` формата v4; v1/v2/v3 читаются с явной миграцией. Отчёт сопоставляет raw
 и enhanced retrieval/answers side-by-side. Автоматически вычисляются отдельные
 `sourcesPresent`, `quotesPresent`, `citationsValid`, `quotesExact`,
 `expectedSourceFound` и usage metrics; correctness, completeness, groundedness и
 смысловая поддержка ответа цитатами остаются прозрачной ручной оценкой 0–2.
+Для representative cases отдельно выполняются warm-up и минимум три измеряемых
+повтора: отчёт содержит success/error/timeout, p50/p95, разброс latency, долю
+verified citations/exact quotes и стабильность retrieved chunk IDs. В каждом
+повторе generation providers получают одинаковый локально retrieved context,
+prompt и max tokens. OpenAI comparison остаётся `skipped`, пока одновременно не
+заданы ключ и явный `--allow-cloud`; отсутствие ключа не ломает local-only прогон.
+Контрольный real-local прогон 6 октября 2026 года: 9 измеряемых runs, 5 успешных,
+4 postflight-ошибки, 0 timeout; среди успешных verified citations — 100%,
+chunk-ID stability — 100%, p50/p95 — 18,380/31,892 с. Cloud/paid вызовы не
+выполнялись. Полные результаты и video metadata приведены в
+[LOCAL_RAG_DEMO.md](docs/LOCAL_RAG_DEMO.md).
 Подробности: [RAG evaluation](docs/RAG_EVALUATION.md) и
 [сценарий видео](docs/RAG_DEMO.md).
 

@@ -127,10 +127,15 @@ flowchart LR
     Eval --> Report[comparison.json + comparison.md]
 ```
 
-Production `OpenAiEmbeddingClient` использует существующий Ktor transport и
-`openai_api_key`, endpoint `/v1/embeddings`, ограниченный retry только временных
-ошибок, response-index ordering и строгую проверку vectors. `buildDocumentIndexes`
-является отдельным явно запускаемым и потенциально платным CLI. Test-only
+Production factory выбирает клиент по index descriptor. `OpenAiEmbeddingClient`
+использует существующий Ktor transport, `openai_api_key`, endpoint
+`/v1/embeddings`, ограниченный retry временных ошибок и response-index ordering.
+`OllamaEmbeddingClient` использует фиксированный
+`http://127.0.0.1:11434/api/embed`, keyless batch `input` и `truncate=false`.
+Оба строго проверяют количество, единую фактическую размерность и конечность
+vectors. `buildLocalDocumentIndex` строит structure-aware индекс полностью
+локально; `buildDocumentIndexes --embedding-provider openai|ollama` сохраняет
+обратно совместимый OpenAI путь. Test-only
 `runDocumentIndexFixture` подставляет deterministic fake, пишет во временный
 каталог, выполняет round-trip обоих indexes и не читает ключ/сеть.
 
@@ -198,7 +203,8 @@ sequenceDiagram
 в `ExperimentOutput`, DTO, SSE, evaluation-report или логи; наружу выходят только
 короткие дословные цитаты, прошедшие проверку. `RagDiagnostics`
 содержит pipeline, исходный/rewritten retrieval query, limits, threshold,
-candidate/discarded/filtered counts, embedding model, manifest hash, metadata
+candidate/discarded/filtered counts, embedding provider/model, manifest hash,
+query-embedding/search/total retrieval timings, generation provider/model, metadata
 retrieved chunks, rewrite elapsed/usage/cost, abstention reason и типизированный
 evidence. Локальная postflight-проверка требует хотя бы один источник/citation/
 quote, проверяет диапазон `[Sx]`, наличие цитаты у каждого использованного
@@ -206,6 +212,14 @@ quote, проверяет диапазон `[Sx]`, наличие цитаты �
 chunk_id копируются только из request-local retrieval result. При нуле sources
 финальный enhanced LLM-вызов пропускается, а branch завершается abstention с
 `below_threshold`, не технической ошибкой.
+
+Production evaluation v4 повторно использует те же retriever, prompts и десять
+cases. Для provider comparison retrieval выполняется локально один раз на
+case/repetition, после чего один frozen набор chunks, один prompt и max tokens
+передаются всем generation providers. Warm-up исключён из latency; не менее трёх
+измеряемых повторов дают p50/p95, range, completion/citation rates и стабильность
+chunk IDs. Ollama обязательна, OpenAI запускается только с ключом и явным
+`--allow-cloud`, иначе получает статус `skipped`.
 
 Опциональный assistant RAG использует тот же `DocumentRetriever`, стабильный
 filter и evidence validator, но остаётся внутри существующей ветки

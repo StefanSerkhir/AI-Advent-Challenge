@@ -76,13 +76,27 @@ tasks.register<JavaExec>("runLocalLlmDemo") {
 }
 tasks.register<JavaExec>("buildDocumentIndexes") {
     group = "application"
-    description = "Build local fixed and structure-aware document indexes with OpenAI embeddings"
+    description = "Build local fixed and structure-aware document indexes with OpenAI or Ollama embeddings"
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.indexing.IndexingCliKt"
 }
+tasks.register<JavaExec>("buildLocalDocumentIndex") {
+    group = "application"
+    description = "Build the structure-aware document index with local Ollama embeddings"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.indexing.IndexingCliKt"
+    args(
+        "--root", ".",
+        "--output", ".llm-document-index",
+        "--strategy", "structured",
+        "--embedding-provider", "ollama",
+        "--embedding-model", "qwen3-embedding:0.6b",
+        "--batch-size", "32",
+    )
+}
 tasks.register<JavaExec>("runRagEvaluation") {
     group = "application"
-    description = "Run the explicit production RAG comparison (20 generation calls + 10 embedding queries; may be paid)"
+    description = "Run local Ollama RAG evaluation and stability repeats; cloud comparison requires explicit --allow-cloud"
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.rag.RagEvaluationCliKt"
 }

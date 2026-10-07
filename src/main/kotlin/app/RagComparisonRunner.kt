@@ -71,8 +71,14 @@ data class RagDiagnostics(
     val discardedCount: Int = 0,
     val filteredCount: Int = 0,
     val strategy: String = "structured",
+    val embeddingProvider: String? = null,
     val embeddingModel: String? = null,
     val manifestHash: String? = null,
+    val queryEmbeddingElapsedMillis: Long? = null,
+    val searchElapsedMillis: Long? = null,
+    val retrievalElapsedMillis: Long? = null,
+    val generationProvider: String? = null,
+    val generationModel: String? = null,
     val rewrite: RagRewriteDiagnostic? = null,
     val sources: List<RagSourceDiagnostic> = emptyList(),
     val abstained: Boolean = false,
@@ -173,6 +179,7 @@ class RagComparisonRunner(
         ragCandidateLimit: Int = DEFAULT_RAG_CANDIDATE_LIMIT,
         ragResultLimit: Int = DEFAULT_RAG_RESULT_LIMIT,
         ragMinSimilarity: Double = DEFAULT_RAG_MIN_SIMILARITY,
+        generationProvider: String? = null,
     ): RagComparisonReport {
         require(question.isNotBlank()) { "Вопрос не может быть пустым" }
         require(model.isNotBlank()) { "Модель не может быть пустой" }
@@ -211,6 +218,8 @@ class RagComparisonRunner(
                 minSimilarity = null,
                 discardedCount = 0,
                 rewrite = null,
+                generationProvider = generationProvider,
+                generationModel = model,
             )
             onProgress(RagProgress(3, label = "Ответ обычного RAG"))
             if (retrieval.chunks.isEmpty()) {
@@ -259,6 +268,8 @@ class RagComparisonRunner(
                 minSimilarity = ragMinSimilarity,
                 discardedCount = candidates.chunks.size - filtered.chunks.size,
                 rewrite = rewriteDiagnostic,
+                generationProvider = generationProvider,
+                generationModel = model,
             )
             if (filtered.chunks.isEmpty()) {
                 onProgress(RagProgress(6, label = "Релевантный контекст не найден"))
@@ -647,6 +658,8 @@ fun DocumentRetrievalResult.toRagDiagnostics(
     minSimilarity: Double?,
     discardedCount: Int,
     rewrite: RagRewriteDiagnostic?,
+    generationProvider: String? = null,
+    generationModel: String? = null,
 ) = RagDiagnostics(
     applied = chunks.isNotEmpty(),
     pipeline = pipeline,
@@ -659,8 +672,14 @@ fun DocumentRetrievalResult.toRagDiagnostics(
     discardedCount = discardedCount,
     filteredCount = chunks.size,
     strategy = strategy.wireName,
+    embeddingProvider = embeddingProvider,
     embeddingModel = embeddingModel,
     manifestHash = manifestHash,
+    queryEmbeddingElapsedMillis = queryEmbeddingElapsedMillis,
+    searchElapsedMillis = searchElapsedMillis,
+    retrievalElapsedMillis = retrievalElapsedMillis,
+    generationProvider = generationProvider,
+    generationModel = generationModel,
     rewrite = rewrite,
     sources = chunks.map { chunk ->
         RagSourceDiagnostic(

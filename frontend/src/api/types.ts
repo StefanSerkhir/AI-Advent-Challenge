@@ -179,8 +179,14 @@ export interface RagDiagnostics {
   discardedCount: number;
   filteredCount: number;
   strategy: string;
+  embeddingProvider: string | null;
   embeddingModel: string | null;
   manifestHash: string | null;
+  queryEmbeddingElapsedMillis: number | null;
+  searchElapsedMillis: number | null;
+  retrievalElapsedMillis: number | null;
+  generationProvider: string | null;
+  generationModel: string | null;
   retrievedCount: number;
   rewrite: {
     elapsedMillis: number;
