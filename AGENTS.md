@@ -75,6 +75,7 @@ npm --prefix frontend run test:e2e
 ./gradlew runWeb                         # production UI + реальный выбранный API, 127.0.0.1:8080
 ./gradlew runWebFixture                  # локальный deterministic fixture без платного API
 ./gradlew runLocalLlmDemo                # три real-local streaming-запроса к Ollama qwen3:14b
+./gradlew runLocalLlmOptimization        # real-local staged tuning и финальный repository-RAG A/B
 ./gradlew runMcpDemo                     # локальная MCP-проверка без API-ключей и внешних сервисов
 WEB_DEV_PORT=5173 ./gradlew runWeb       # backend для Vite dev server
 npm --prefix frontend ci

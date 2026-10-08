@@ -11,6 +11,7 @@ build/
 .llm-mcp-output/
 .llm-document-index/
 .llm-rag-evaluation/
+.llm-local-optimization/
 .llm-context-*.json
 /video/*
 !gradle/wrapper/gradle-wrapper.jar

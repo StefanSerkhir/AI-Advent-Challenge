@@ -123,6 +123,8 @@ LOCAL_LLM_DEMO_OVERWRITE=1 npm --prefix frontend run record:local-llm-demo
 Эта запись проверяет только локальную генерацию без document retrieval. Полный
 keyless RAG, локальный индекс/evaluation и отдельное видео описаны в
 [LOCAL_RAG_DEMO.md](LOCAL_RAG_DEMO.md).
+Параметрическая оптимизация Qwen3 для repository RAG и отдельное видео описаны в
+[LOCAL_LLM_OPTIMIZATION.md](LOCAL_LLM_OPTIMIZATION.md).
 
 ## Результаты
 

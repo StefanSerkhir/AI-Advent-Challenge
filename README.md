@@ -44,6 +44,10 @@ ollama pull qwen3-embedding:0.6b
 [локальной LLM-демонстрации](docs/LOCAL_LLM_DEMO.md).
 Полностью локальный RAG, evaluation и отдельная видеозапись описаны в
 [локальной RAG-демонстрации](docs/LOCAL_RAG_DEMO.md).
+Измеренная оптимизация Qwen3 именно для русскоязычных технических repository-RAG
+ответов запускается `./gradlew runLocalLlmOptimization`; staged search,
+финальный 11-case A/B, quality gate, Modelfile, resource snapshots и отдельное
+видео описаны в [отчёте оптимизации](docs/LOCAL_LLM_OPTIMIZATION.md).
 
 ## Локальный пример MCP
 
@@ -813,6 +817,9 @@ pause/reload/resume машины состояния задачи, демо,
   cosine retrieval, evaluation и отдельный CLI;
 - `src/main/kotlin/rag/` — десять RAG evaluation cases, versioned JSON/Markdown
   report и явно запускаемый production evaluation CLI.
+- `src/main/kotlin/optimization/` — real-local staged tuning Qwen3 для repository
+  RAG, повторяемый финальный A/B, quality gate и атомарный JSON/Markdown report;
+- `ollama/` — версионированные Modelfile для воспроизводимых локальных aliases.
 
 При необходимости Compose можно запустить отдельно:
 `./gradlew :legacy-desktop:run`. Сборка нативных пакетов осталась в этом модуле,

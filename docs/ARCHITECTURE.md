@@ -42,6 +42,8 @@ flowchart LR
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
 | `src/main/kotlin/rag` | Десять RAG evaluation cases, versioned JSON/Markdown report и production evaluation CLI |
+| `src/main/kotlin/optimization` | Явно запускаемый real-local staged search Qwen3 и повторяемый финальный repository-RAG A/B с quality gate |
+| `ollama` | Версионированные Modelfile для локальных aliases; production default/endpoint не меняются |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -220,6 +222,23 @@ case/repetition, после чего один frozen набор chunks, один
 измеряемых повторов дают p50/p95, range, completion/citation rates и стабильность
 chunk IDs. Ollama обязательна, OpenAI запускается только с ключом и явным
 `--allow-cloud`, иначе получает статус `skipped`.
+
+`runLocalLlmOptimization` — отдельная verification-граница поверх тех же
+`DocumentRetriever`, `RAG_EVALUATION_CASES` и `validateRagCitations`. Она один раз
+замораживает retrieval context каждого case, staged сравнивает temperature,
+max tokens, фактическую Ollama context allocation и две версии prompt, затем
+выполняет три повтора полного 10-case набора плюс unanswerable case для baseline и
+optimized. Warm-up не входит в latency. Raw runs содержат TTFT, full latency,
+usage/throughput, citation/exact-quote/coverage/abstention/format и stability;
+агрегатор применяет заранее заданный quality floor, поэтому скорость не может
+компенсировать существенное ухудшение качества. Report пишется атомарно со
+статусом `partial` после кандидатов и `completed` после финального A/B.
+
+Alias `llm-workbench-qwen3-14b-rag` создаётся из
+`ollama/Modelfile.qwen3-14b-rag-optimized`, переиспользует Q4_K_M weights и
+меняет только `num_ctx`. Он нужен для измерения context allocation и не входит в
+production model catalog: штатной моделью остаётся `qwen3:14b`, endpoint остаётся
+фиксированным loopback, Authorization не добавляется.
 
 Опциональный assistant RAG использует тот же `DocumentRetriever`, стабильный
 filter и evidence validator, но остаётся внутри существующей ветки
@@ -581,7 +600,8 @@ JSON-блок `TASK STATE DATA`; рядом backend добавляет дове�
 | `.llm-scheduler-state.json` | `JsonSchedulerStore` в MCP-процессе | v1: расписания, агрегированные counters и до 100 последних результатов каждого расписания |
 | `.llm-mcp-output/` | MCP `save_to_file` | Только явно сохранённые UTF-8 результаты; путь никогда не возвращается в diagnostics |
 | `.llm-document-index/` | `DocumentIndexPipeline` | `fixed.json`, `structured.json` формата v1 и JSON/Markdown comparison; тексты, vectors и относительные metadata |
-| `.llm-rag-evaluation/` | `RagEvaluationReportStore` | v3 `comparison.json` и `comparison.md`: baseline/raw/enhanced, queries, counts/filter params, metadata, проверенные quotes, usage, отдельные source/quote/citation/exact flags и ручная rubric 0–2; v1/v2 читаются через миграцию |
+| `.llm-rag-evaluation/` | `RagEvaluationReportStore` | v4 `comparison.json` и `comparison.md`: baseline/raw/enhanced, queries, counts/filter params, metadata, verified quotes, usage, provider stability и ручная rubric 0–2; v1/v2/v3 читаются через миграцию |
+| `.llm-local-optimization/` | `OptimizationReportStore` | v1 `optimization.json`/`optimization.md`: partial/completed staged candidates, raw final A/B repeats, quality/latency/TTFT/throughput/resources и winner decision |
 
 JSON stores используют UTF-8, номер версии, temporary file и atomic replace с безопасным fallback, если файловая система не поддерживает atomic move. Повреждённый или неподдерживаемый документ не должен частично загружаться: runtime начинает с пустого состояния и публикует предупреждение.
 Для инвариантов commit store предшествует изменению in-memory state и публикации

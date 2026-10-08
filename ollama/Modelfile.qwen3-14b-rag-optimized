@@ -1,0 +1,6 @@
+FROM qwen3:14b
+
+# The repository RAG prompts fit comfortably in 8K. Reducing the allocation from
+# the base model's 40960-token context lowers KV-cache pressure without changing
+# weights, quantization, template, or the production endpoint.
+PARAMETER num_ctx 8192

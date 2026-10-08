@@ -100,6 +100,12 @@ tasks.register<JavaExec>("runRagEvaluation") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.rag.RagEvaluationCliKt"
 }
+tasks.register<JavaExec>("runLocalLlmOptimization") {
+    group = "verification"
+    description = "Run the real-local Qwen3 RAG parameter search and final repeated A/B evaluation"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.optimization.LocalLlmOptimizationCliKt"
+}
 // Test-only entry point: deterministic clients are never packaged in the application.
 tasks.register<JavaExec>("runWebFixture") {
     group = "verification"

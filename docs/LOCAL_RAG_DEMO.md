@@ -158,6 +158,10 @@ Production web затем реально обработал два указан�
 
 Fake/unit/browser-fixture проверки не считаются результатом real-local inference.
 
+Отдельный воспроизводимый staged search temperature/max tokens/context/prompt и
+финальный repeated A/B приведены в
+[LOCAL_LLM_OPTIMIZATION.md](LOCAL_LLM_OPTIMIZATION.md).
+
 ## Граница жизненного цикла
 
 Система полностью локальна, но не автономна от процессов: embeddings и generation
