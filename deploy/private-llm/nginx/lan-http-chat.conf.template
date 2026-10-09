@@ -1,0 +1,65 @@
+# INSECURE LAB PROFILE: Basic Auth credentials cross the LAN without TLS.
+# Run this standalone config with an explicit prefix; do not include it in the
+# TLS production gateway.
+worker_processes 1;
+error_log stderr warn;
+pid logs/nginx.pid;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    server_tokens off;
+    limit_req_zone $binary_remote_addr zone=lan_llm_api:10m rate=@LAN_LLM_RATE@;
+
+    server {
+        listen @LAN_LLM_LISTEN@;
+        server_name _;
+        access_log off;
+
+        auth_basic "LLM Workbench over insecure HTTP";
+        auth_basic_user_file "@LAN_LLM_HTPASSWD@";
+
+        client_max_body_size @LAN_LLM_MAX_BODY_SIZE@;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-LLM-Workbench-Transport "insecure-http" always;
+        add_header X-LLM-Workbench-Rate-Limit "@LAN_LLM_RATE@; burst=@LAN_LLM_BURST@" always;
+
+        location /api/ {
+            limit_req zone=lan_llm_api burst=@LAN_LLM_BURST@ nodelay;
+            limit_req_status 429;
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Authorization "";
+            proxy_set_header Host 127.0.0.1:8080;
+            proxy_set_header Origin "";
+            proxy_set_header X-Forwarded-Host "";
+            proxy_set_header X-Forwarded-Proto "";
+            proxy_set_header Tailscale-User-Login "";
+            proxy_set_header Tailscale-User-Name "";
+            proxy_set_header Tailscale-User-Profile-Pic "";
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 10m;
+            gzip off;
+        }
+
+        location / {
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Authorization "";
+            proxy_set_header Host 127.0.0.1:8080;
+            proxy_set_header Origin "";
+            proxy_set_header X-Forwarded-Host "";
+            proxy_set_header X-Forwarded-Proto "";
+            proxy_set_header Tailscale-User-Login "";
+            proxy_set_header Tailscale-User-Name "";
+            proxy_set_header Tailscale-User-Profile-Pic "";
+        }
+    }
+}

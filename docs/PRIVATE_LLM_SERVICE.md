@@ -6,6 +6,12 @@ systemd, приватным адресом Tailscale/RFC1918 и Nginx. Workbench
 а HTTP-клиенты получают защищённый OpenAI-compatible
 `POST /v1/chat/completions`.
 
+Если нужен только личный web-чат с телефона, без сетевого raw API, отдельного
+Basic Auth и ручного управления сертификатом, используйте более узкий профиль
+[Tailscale Serve](TAILSCALE_CHAT.md). Он оставляет Workbench/Ollama на loopback и
+использует Tailscale identity; описанный ниже Nginx-профиль остаётся вариантом
+для OpenAI-compatible API, server-side rate limit и независимых credentials.
+
 ```text
 клиент приватной сети
   │ HTTPS + Basic Auth, 4 r/s, burst 8

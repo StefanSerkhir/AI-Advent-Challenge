@@ -21,6 +21,7 @@ import java.nio.file.Path
 fun main() {
     val port = configuredPort("WEB_PORT", 8080)
     val devPort = System.getenv("WEB_DEV_PORT")?.let { configuredPort("WEB_DEV_PORT", 5173) }
+    val tailscaleHost = System.getenv("WEB_TAILSCALE_HOST")?.let(::normalizeTailscaleHost)
     val store = LocalConfigStore()
     val loaded = runCatching(store::load)
     val bootstrap = AppBootstrap.from(loaded.getOrDefault(LocalConfig()))
@@ -52,7 +53,9 @@ fun main() {
         },
         clientFactory = { kind, key, model -> createLlmClient(kind, key, client, model) },
         persistSettings = store::save)
-    val server = embeddedServer(Netty, host = "127.0.0.1", port = port) { workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort)) }
+    val server = embeddedServer(Netty, host = "127.0.0.1", port = port) {
+        workbenchModule(WorkbenchApi(controller), LocalAccess(port, devPort, tailscaleHost))
+    }
     val shutdown = Thread {
         runBlocking { controller.shutdown() }
         client.close()
@@ -62,6 +65,7 @@ fun main() {
     try {
         server.start(wait = false)
         println("LLM Workbench → http://127.0.0.1:$port")
+        if (tailscaleHost != null) println("Tailscale Serve → https://$tailscaleHost")
         Thread.currentThread().join()
     } finally {
         runBlocking { controller.shutdown() }

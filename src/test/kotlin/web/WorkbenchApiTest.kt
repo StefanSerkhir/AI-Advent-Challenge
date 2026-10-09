@@ -1341,6 +1341,37 @@ class WorkbenchApiTest {
     }
 
     @Test
+    fun `configured Tailscale Serve identity can access API but incomplete proxy headers fail closed`() = testApplication {
+        engine { connector { host = "localhost"; port = 8080 } }
+        val host = "macbook.example-tailnet.ts.net"
+        val client = createClient {}
+        val c = controller()
+        application { workbenchModule(WorkbenchApi(c), LocalAccess(tailscaleHost = host)) }
+        try {
+            fun HttpRequestBuilder.tailscaleHeaders(
+                includeIdentity: Boolean = true,
+                origin: String = "https://$host",
+                forwardedProto: String = "https",
+            ) {
+                header(HttpHeaders.Host, host)
+                header(HttpHeaders.Origin, origin)
+                header("X-Forwarded-Host", host)
+                header("X-Forwarded-Proto", forwardedProto)
+                if (includeIdentity) header("Tailscale-User-Login", "owner@example.com")
+            }
+
+            assertEquals(HttpStatusCode.OK, client.get("$base/state") { tailscaleHeaders() }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("$base/state") { tailscaleHeaders(includeIdentity = false) }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("$base/state") {
+                tailscaleHeaders(forwardedProto = "http")
+            }.status)
+            assertEquals(HttpStatusCode.Forbidden, client.get("$base/state") {
+                tailscaleHeaders(origin = "https://evil.example")
+            }.status)
+        } finally { c.shutdown() }
+    }
+
+    @Test
     fun `persistence failures do not publish success or leak the entered key`() = testApplication {
         engine { connector { host = "localhost"; port = 8080 } }
         val client = createClient { defaultRequest { if (!headers.contains(HttpHeaders.Host)) header(HttpHeaders.Host, "localhost:8080") } }

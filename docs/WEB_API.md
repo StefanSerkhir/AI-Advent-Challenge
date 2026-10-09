@@ -100,6 +100,16 @@ Query/chunk vectors и полный chunk text по wire не передаютс
 разработки явно допускается порт Vite через `WEB_DEV_PORT`; запросы идут через
 Vite proxy, CORS не включается. Запросы `Sec-Fetch-Site: cross-site` запрещены.
 
+Опциональный `WEB_TAILSCALE_HOST=device.tailnet.ts.net` добавляет ровно один
+HTTPS-origin Tailscale Serve, не меняя bind `127.0.0.1`. Для такого запроса
+точные `Host` и `X-Forwarded-Host` должны совпасть с настроенным именем,
+`X-Forwarded-Proto` должен быть `https`, а подтверждённый Serve-заголовок
+`Tailscale-User-Login` — непустым. Отсутствующий identity header, tagged device,
+другое имя/origin, HTTP-forwarding и `Sec-Fetch-Site: cross-site` дают `403`.
+Serve удаляет присланные клиентом identity headers до добавления собственных;
+приложение остаётся loopback-only. Это приватный доступ к существующим UI/REST/
+SSE, а не новый endpoint и не публикация `/v1/chat/completions`.
+
 ## Согласованность
 
 `revision` монотонно растёт при любом изменении снимка; `settingsVersion` — при
@@ -144,7 +154,9 @@ metadata или цитата не из соответствующего request-
 Повтор ID с другим телом возвращает `409 duplicate_id`. Запомненные ID живут до
 остановки сервера, включая команды, чьи карточки были очищены. После неопределённой
 сетевой ошибки frontend предлагает «Проверить отправку» с исходным ID и телом,
-а не создаёт ещё один платный LLM-запрос.
+а не создаёт ещё один платный LLM-запрос. Frontend не требует secure context для
+генерации ID: использует `crypto.randomUUID()` при наличии, иначе формирует UUID
+v4 из `crypto.getRandomValues()` с legacy fallback для браузера без Web Crypto.
 
 Операция запускается в области корутин контроллера, независимой от HTTP/SSE-сессии.
 Новый подписчик сразу получает полный актуальный снимок; `Last-Event-ID` не нужен

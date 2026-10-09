@@ -147,6 +147,19 @@ test.beforeEach(async ({ page }) => {
   await ready(page);
 });
 
+test("submits a request when insecure HTTP does not expose crypto randomUUID", async ({page}) => {
+  await page.evaluate(() => {
+    Object.defineProperty(globalThis.crypto, "randomUUID", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+
+  await send(page, "Проверка отправки из браузера без secure context");
+  await done(page);
+  await expect(page.getByTestId("exchange").last()).not.toContainText("crypto.randomUUID");
+});
+
 test("settings are shown only when the selected mode uses them", async ({
   page,
 }) => {
@@ -455,6 +468,16 @@ test("simple agent creates a persisted background task and SSE updates the panel
   await expect(task).toContainText("активна");
   await expect(task).toContainText("однократно");
   await expect(task).toContainText("Напоминание ожидает выполнения");
+
+  const collapse = panel.getByRole("button", {name: "Скрыть фоновые задачи"});
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await collapse.click();
+  await expect(panel.locator("#background-tasks-content")).toBeHidden();
+  await expect(panel.getByText("Фоновые задачи", {exact: true})).toBeVisible();
+  const expand = panel.getByRole("button", {name: "Показать фоновые задачи"});
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expand.click();
+  await expect(task).toBeVisible();
 
   const state = await (await page.request.get("/api/state")).json() as State;
   const scheduled = state.backgroundTasks.schedules.find((item) => item.title === "Проверить DEMO-101");

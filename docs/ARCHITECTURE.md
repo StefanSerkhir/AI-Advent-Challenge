@@ -112,6 +112,43 @@ context, below/above boundary и Nginx 413. Безмодельный
 `checkPrivateLlmDeployment` проверяет rendering и чистую логику verifier.
 Подробный runbook: [PRIVATE_LLM_SERVICE.md](PRIVATE_LLM_SERVICE.md).
 
+### Личный web-чат через Tailscale Serve
+
+`WEB_TAILSCALE_HOST` включает отдельную opt-in границу только для существующего
+Workbench UI/API. Tailscale Serve завершает автоматически управляемый HTTPS на
+точном DNS-имени узла `device.tailnet.ts.net` и проксирует запросы на
+`127.0.0.1:8080`; публичный Funnel не нужен. Raw Ollama/OpenAI-compatible API
+этот профиль не публикует.
+
+Ktor разрешает tailnet-запрос только при одновременном совпадении `Host`,
+`Origin` (если он есть) и перезаписанного Serve-заголовка `X-Forwarded-Host` с
+`WEB_TAILSCALE_HOST`, а также при `X-Forwarded-Proto: https` и непустом
+`Tailscale-User-Login`. Tailscale Serve удаляет присланные клиентом identity
+headers и добавляет подтверждённые; Workbench остаётся на loopback, поэтому
+подделать эту границу с другого LAN/tailnet-устройства напрямую нельзя. Локальный
+origin продолжает работать без Tailscale и с прежней точной allowlist.
+
+Доступ определяется Tailscale identity и ACL/grants, поэтому второй пароль Basic
+Auth не создаётся. Запросы от tagged devices, для которых Serve не добавляет
+`Tailscale-User-Login`, fail-closed отклоняются. Инструкция:
+[TAILSCALE_CHAT.md](TAILSCALE_CHAT.md).
+
+### Небезопасный HTTP-профиль домашней LAN
+
+`render_lan_http_config.py` создаёт отдельный standalone Nginx config для
+временного доступа к web-чату без TLS. Renderer принимает только точный RFC1918
+IPv4 и непривилегированный порт, абсолютный внешний `htpasswd` path и
+ограниченные rate/body значения; wildcard, loopback, CGNAT/Tailscale и public IP
+отклоняются. Профиль не публикует `/v1/chat/completions` и не меняет loopback bind
+Workbench/Ollama.
+
+Nginx проверяет Basic Auth, удаляет `Authorization`, нормализует Host/Origin и
+проксирует UI/API на `127.0.0.1:8080`. Это access control без confidentiality:
+Base64 credentials, prompt и ответ видимы сетевому наблюдателю. Поэтому профиль
+не входит в production threat model, не имеет автозапуска и предназначен только
+для краткого лабораторного использования в доверенной домашней сети. Runbook:
+[LAN_HTTP_CHAT.md](LAN_HTTP_CHAT.md).
+
 `runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler и output-каталог в fixture также настоящие, но получают отдельные пути во временном каталоге теста.
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же registry-backed
@@ -693,7 +730,9 @@ streaming/final outputs, метрики и диагностику инвариа
 
 `BackgroundTasks` — read-only панель общего workspace. Создание остаётся
 разговорным MCP-сценарием; browser storage и отдельный REST mutation не
-используются. Панель отображает `StateDto.backgroundTasks` из REST/SSE.
+используются. Панель отображает `StateDto.backgroundTasks` из REST/SSE, а её
+локальный toggle скрывает только содержимое: заголовок и счётчик остаются
+видимыми, серверное состояние и SSE-обновления не меняются.
 
 Для `rag` `Results` держит три карточки в общем SSE snapshot. Диагностика raw и
 enhanced показывает pipeline, retrieval query, `кандидаты → сохранено`, threshold,

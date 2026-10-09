@@ -21,10 +21,45 @@ import kotlin.time.Duration.Companion.seconds
 val apiJson = Json { encodeDefaults = true; ignoreUnknownKeys = false }
 
 /** Exact authority allowlist protects against DNS rebinding. No wildcard CORS. */
-data class LocalAccess(val port: Int = 8080, val devPort: Int? = null) {
+class LocalAccess(
+    val port: Int = 8080,
+    val devPort: Int? = null,
+    tailscaleHost: String? = null,
+) {
     val hosts = setOf("127.0.0.1:$port", "localhost:$port", "[::1]:$port")
     val origins = hosts.map { "http://$it" }.toSet() +
         (devPort?.let { setOf("http://127.0.0.1:$it", "http://localhost:$it") } ?: emptySet())
+    val tailscaleHost = tailscaleHost?.let(::normalizeTailscaleHost)
+    private val tailscaleHosts = this.tailscaleHost?.let { setOf(it, "$it:443") }.orEmpty()
+    private val tailscaleOrigins = tailscaleHosts.mapTo(mutableSetOf()) { "https://$it" }
+
+    fun allows(
+        host: String?,
+        origin: String?,
+        forwardedHost: String?,
+        forwardedProto: String?,
+        tailscaleUserLogin: String?,
+    ): Boolean {
+        val local = host in hosts && (origin == null || origin in origins)
+        val tailscale = host in tailscaleHosts &&
+            (origin == null || origin in tailscaleOrigins) &&
+            forwardedHost in tailscaleHosts &&
+            forwardedProto == "https" &&
+            !tailscaleUserLogin.isNullOrBlank()
+        return local || tailscale
+    }
+}
+
+private val tailscaleHostPattern = Regex(
+    """[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.ts\.net""",
+)
+
+internal fun normalizeTailscaleHost(value: String): String {
+    val normalized = value.trim().removeSuffix(".").lowercase()
+    require(normalized.length <= 253 && tailscaleHostPattern.matches(normalized) && normalized.count { it == '.' } >= 3) {
+        "WEB_TAILSCALE_HOST должен быть полным DNS-именем узла вида device.tailnet.ts.net."
+    }
+    return normalized
 }
 
 fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAccess()) {
@@ -45,10 +80,15 @@ fun Application.workbenchModule(api: WorkbenchApi, access: LocalAccess = LocalAc
     intercept(ApplicationCallPipeline.Plugins) {
         val origin = call.request.header(HttpHeaders.Origin)
         val mutation = call.request.httpMethod !in listOf(HttpMethod.Get, HttpMethod.Head)
-        if (call.request.header(HttpHeaders.Host) !in access.hosts ||
-            (origin != null && origin !in access.origins) ||
+        if (!access.allows(
+                host = call.request.header(HttpHeaders.Host),
+                origin = origin,
+                forwardedHost = call.request.header("X-Forwarded-Host"),
+                forwardedProto = call.request.header("X-Forwarded-Proto"),
+                tailscaleUserLogin = call.request.header("Tailscale-User-Login"),
+            ) ||
             call.request.header("Sec-Fetch-Site") == "cross-site") {
-            call.respond(HttpStatusCode.Forbidden, ErrorDto("forbidden", "Доступ разрешён только из локального приложения."))
+            call.respond(HttpStatusCode.Forbidden, ErrorDto("forbidden", "Доступ разрешён только локально или через настроенный приватный gateway."))
             finish()
             return@intercept
         }

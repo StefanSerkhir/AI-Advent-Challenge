@@ -26,6 +26,7 @@ def load_module(name: str, path: Path):
 
 
 renderer = load_module("private_llm_renderer", DEPLOYMENT / "render_nginx_config.py")
+lan_renderer = load_module("lan_http_renderer", DEPLOYMENT / "render_lan_http_config.py")
 verifier = load_module("private_llm_verifier", DEPLOYMENT / "verify_private_llm.py")
 
 
@@ -90,6 +91,60 @@ class RendererTest(unittest.TestCase):
         self.assertIn("WEB_PORT=8080", workbench_environment)
         self.assertNotIn("api_key", workbench_environment.lower())
         self.assertNotIn("0.0.0.0", ollama_drop_in + workbench_unit)
+
+
+class LanHttpRendererTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.environment = {
+            "LAN_LLM_LISTEN": "192.168.1.20:18080",
+            "LAN_LLM_HTPASSWD": "/Users/example/Library/Application Support/LLM Workbench LAN/gateway.htpasswd",
+            "LAN_LLM_RATE": "4r/s",
+            "LAN_LLM_BURST": "8",
+            "LAN_LLM_MAX_BODY_SIZE": "256k",
+        }
+
+    def test_renders_insecure_rfc1918_authenticated_chat_gateway(self) -> None:
+        settings = lan_renderer.Settings.from_environment(self.environment)
+        template = (DEPLOYMENT / "nginx/lan-http-chat.conf.template").read_text(encoding="utf-8")
+        rendered = lan_renderer.render(template, settings)
+
+        self.assertNotIn("@LAN_LLM_", rendered)
+        self.assertIn("listen 192.168.1.20:18080;", rendered)
+        self.assertNotIn("listen 192.168.1.20:18080 ssl;", rendered)
+        self.assertIn('auth_basic_user_file "/Users/example/Library/Application Support/LLM Workbench LAN/gateway.htpasswd";', rendered)
+        self.assertIn('add_header X-LLM-Workbench-Transport "insecure-http" always;', rendered)
+        self.assertIn("limit_req_status 429;", rendered)
+        self.assertIn("proxy_set_header Authorization \"\";", rendered)
+        self.assertIn("proxy_set_header Host 127.0.0.1:8080;", rendered)
+        self.assertIn("proxy_set_header Tailscale-User-Login \"\";", rendered)
+        self.assertNotIn("proxy_set_header Sec-Fetch-Site \"\";", rendered)
+        self.assertNotIn("127.0.0.1:11434", rendered)
+        self.assertNotIn("0.0.0.0", rendered)
+
+    def test_rejects_non_rfc1918_or_privileged_listeners(self) -> None:
+        for address in (
+            "0.0.0.0:18080",
+            "127.0.0.1:18080",
+            "100.79.67.102:18080",
+            "203.0.113.10:18080",
+            "192.168.1.20:80",
+        ):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                lan_renderer.Settings.from_environment({**self.environment, "LAN_LLM_LISTEN": address})
+
+    def test_environment_contains_path_but_no_password(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment_file = Path(directory) / "lan-http.env"
+            environment_file.write_text(
+                "\n".join(f"{key}={value}" for key, value in self.environment.items()),
+                encoding="utf-8",
+            )
+            parsed = lan_renderer.parse_environment_file(environment_file)
+            rendered = lan_renderer.render(
+                (DEPLOYMENT / "nginx/lan-http-chat.conf.template").read_text(encoding="utf-8"),
+                lan_renderer.Settings.from_environment(parsed),
+            )
+            self.assertNotIn("PASSWORD", rendered.upper())
 
 
 class VerifierLogicTest(unittest.TestCase):
