@@ -33,6 +33,9 @@ application { mainClass = "org.example.web.WebMainKt" }
 val npmCommand = if (System.getProperty("os.name").startsWith("Windows")) "npm.cmd" else "npm"
 val npmExecutable = System.getenv("PATH").split(File.pathSeparator)
     .map { file("$it/$npmCommand") }.firstOrNull { it.isFile }?.absolutePath ?: npmCommand
+val pythonCommand = if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
+val pythonExecutable = System.getenv("PATH").split(File.pathSeparator)
+    .map { file("$it/$pythonCommand") }.firstOrNull { it.isFile }?.absolutePath ?: pythonCommand
 val frontendInstall = tasks.register<Exec>("frontendInstall") {
     workingDir("frontend")
     commandLine(npmExecutable, "ci", "--no-audit", "--no-fund")
@@ -126,4 +129,11 @@ tasks.register<JavaExec>("runRagEvaluationFixture") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.rag.RagEvaluationFixtureKt"
+}
+tasks.register<Exec>("checkPrivateLlmDeployment") {
+    group = "verification"
+    description = "Validate the systemd/Nginx private LLM deployment profile and verifier logic without a real model"
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    commandLine(pythonExecutable, "-m", "unittest", "discover", "-s", "deploy/private-llm/tests", "-p", "test_*.py", "-v")
+    inputs.files(fileTree("deploy/private-llm"))
 }

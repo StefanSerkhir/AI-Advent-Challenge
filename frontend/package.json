@@ -12,6 +12,7 @@
     "build": "npm run typecheck && vite build",
     "test:e2e": "playwright test",
     "record:local-llm-demo": "node scripts/record-local-llm-demo.mjs",
+    "record:private-llm-service-demo": "node scripts/record-private-llm-service-demo.mjs",
     "record:local-rag-demo": "node scripts/record-local-rag-demo.mjs",
     "record:local-llm-optimization-demo": "node scripts/record-local-llm-optimization-demo.mjs",
     "record:rag-memory-demo": "node scripts/record-rag-memory-demo.mjs",

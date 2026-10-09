@@ -1,0 +1,129 @@
+# Render with deploy/private-llm/render_nginx_config.py. The renderer accepts
+# only an RFC1918 or Tailscale/CGNAT listen address and absolute credential/TLS
+# paths, so a wildcard or public listener cannot be produced accidentally.
+
+limit_req_zone $binary_remote_addr zone=private_llm_api:10m rate=@PRIVATE_LLM_RATE@;
+
+upstream private_llm_ollama {
+    server 127.0.0.1:11434;
+    keepalive 16;
+}
+
+upstream private_llm_workbench {
+    server 127.0.0.1:8080;
+    keepalive 16;
+}
+
+server {
+    listen @PRIVATE_LLM_LISTEN@ ssl;
+    server_name @PRIVATE_LLM_SERVER_NAME@;
+
+    ssl_certificate @PRIVATE_LLM_TLS_CERTIFICATE@;
+    ssl_certificate_key @PRIVATE_LLM_TLS_CERTIFICATE_KEY@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:private_llm_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    auth_basic "Private LLM";
+    auth_basic_user_file @PRIVATE_LLM_HTPASSWD@;
+
+    client_max_body_size @PRIVATE_LLM_MAX_BODY_SIZE@;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Private-LLM-Rate-Limit "@PRIVATE_LLM_RATE@; burst=@PRIVATE_LLM_BURST@" always;
+    add_header X-Private-LLM-Request-Limit "@PRIVATE_LLM_MAX_BODY_SIZE@" always;
+
+    # OpenAI-compatible network API. Basic Auth is consumed here and never
+    # forwarded to Ollama. Buffering is disabled for streaming SSE chunks.
+    location = /v1/chat/completions {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/v1/chat/completions;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 10m;
+        proxy_send_timeout 10m;
+        gzip off;
+    }
+
+    # Authenticated, read-only diagnostics used by the verifier. Only exact
+    # allowlisted Ollama paths are exposed; the native API remains loopback-only.
+    location = /private/health {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/api/version;
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+    }
+
+    location = /private/ollama/version {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/api/version;
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+    }
+
+    location = /private/ollama/tags {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/api/tags;
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+    }
+
+    location = /private/ollama/show {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/api/show;
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+        proxy_buffering off;
+    }
+
+    location = /private/ollama/ps {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_ollama/api/ps;
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:11434;
+    }
+
+    # Ktor intentionally trusts only its loopback authority/origin. The gateway
+    # terminates TLS/auth and normalizes those headers while preserving the
+    # application's JSON + X-Workbench-Request CSRF requirement. Nginx emits no
+    # CORS headers, so a cross-origin browser cannot send that custom header.
+    location /api/ {
+        limit_req zone=private_llm_api burst=@PRIVATE_LLM_BURST@ nodelay;
+        limit_req_status 429;
+        proxy_pass http://private_llm_workbench;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:8080;
+        proxy_set_header Origin "";
+        proxy_set_header Sec-Fetch-Site "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 10m;
+        gzip off;
+    }
+
+    location / {
+        proxy_pass http://private_llm_workbench;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Authorization "";
+        proxy_set_header Host 127.0.0.1:8080;
+        proxy_set_header Origin "";
+        proxy_set_header Sec-Fetch-Site "";
+    }
+}

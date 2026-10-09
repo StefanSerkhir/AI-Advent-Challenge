@@ -44,6 +44,28 @@ ollama pull qwen3-embedding:0.6b
 [локальной LLM-демонстрации](docs/LOCAL_LLM_DEMO.md).
 Полностью локальный RAG, evaluation и отдельная видеозапись описаны в
 [локальной RAG-демонстрации](docs/LOCAL_RAG_DEMO.md).
+Защищённый доступ из приватной сети через systemd + Nginx, TLS, Basic Auth,
+server-side rate limit, OpenAI-compatible `/v1/chat/completions`, параллельный
+real-network verifier и запись отдельного видео описаны в
+[профиле приватного LLM-сервиса](docs/PRIVATE_LLM_SERVICE.md). Нативные порты
+Ollama и Workbench при этом остаются только на loopback.
+
+Логин для сетевого gateway выбирает администратор при развёртывании, а пароль
+вводится интерактивно командой `htpasswd`. На целевом Linux-сервере по умолчанию
+создаётся `/etc/llm-workbench/gateway.htpasswd`: в нём хранится имя пользователя
+и bcrypt-хеш, но не открытый пароль. Nginx читает путь из
+`PRIVATE_LLM_HTPASSWD`, проверяет Basic Auth до проксирования и удаляет заголовок
+`Authorization` перед передачей запроса в Workbench или Ollama. Полный процесс
+создания, проверки и смены учётных данных описан в
+[разделе об авторизации](docs/PRIVATE_LLM_SERVICE.md#учётные-данные-и-проверка-basic-auth).
+
+```bash
+./gradlew checkPrivateLlmDeployment
+# после развёртывания на приватном Linux-сервере:
+python3 deploy/private-llm/verify_private_llm.py
+npm --prefix frontend run record:private-llm-service-demo
+```
+
 Измеренная оптимизация Qwen3 именно для русскоязычных технических repository-RAG
 ответов запускается `./gradlew runLocalLlmOptimization`; staged search,
 финальный 11-case A/B, quality gate, Modelfile, resource snapshots и отдельное

@@ -13,6 +13,12 @@ LLM Workbench — локальное web-приложение для диало�
 
 Frontend не вызывает провайдеров напрямую. В проекте нет базы данных, учётных записей и отдельного Node.js backend. Node.js нужен для разработки и сборки frontend, но не для запуска готового distribution.
 
+Опциональный Linux deployment-профиль не меняет эту runtime-архитектуру. Nginx
+служит внешней TLS/auth/rate-limit границей на явно заданном приватном IP, а Ktor
+и Ollama по-прежнему слушают только `127.0.0.1`. Он проксирует web UI/Ktor API и
+отдельный OpenAI-compatible `/v1/chat/completions` прямо в фиксированный Ollama
+upstream; произвольный provider base URL в Workbench не появляется.
+
 ```mermaid
 flowchart LR
     UI[React UI] -->|REST commands| API[Ktor REST API]
@@ -44,6 +50,7 @@ flowchart LR
 | `src/main/kotlin/rag` | Десять RAG evaluation cases, versioned JSON/Markdown report и production evaluation CLI |
 | `src/main/kotlin/optimization` | Явно запускаемый real-local staged search Qwen3 и повторяемый финальный repository-RAG A/B с quality gate |
 | `ollama` | Версионированные Modelfile для локальных aliases; production default/endpoint не меняются |
+| `deploy/private-llm` | systemd/Nginx private-server profile, fail-closed renderer, real-network verifier и безмодельные unit checks |
 | `frontend/src/api` | Зеркало wire-контракта и fetch-клиент |
 | `frontend/src/state` | SSE-синхронизация, REST-команды и клиентская блокировка действий |
 | `frontend/src/components` | Настройки, память, результаты и Markdown presentation |
@@ -65,6 +72,45 @@ Production entry point — `src/main/kotlin/web/WebMain.kt` (`org.example.web.We
 `./gradlew runWeb` сначала собирает frontend: Gradle-задача `processResources` зависит от `frontendBuild`, а `frontend/dist` копируется в classpath `web`. `./gradlew :run` и `./llm` ведут к тому же web runtime.
 
 Для разработки UI backend запускается с `WEB_DEV_PORT=5173`, а Vite отдельно через `npm --prefix frontend run dev`. Vite проксирует `/api`; произвольный CORS не включён.
+
+### Опциональная приватная сетевая граница
+
+`deploy/private-llm` — deployment-only слой для домашнего Linux-сервера/VPS с
+приватной VPN. `ollama.service` получает drop-in с
+`OLLAMA_HOST=127.0.0.1:11434`; `llm-workbench.service` не может переопределить
+жёсткий bind `127.0.0.1:8080`. Renderer Nginx принимает только RFC1918 или
+Tailscale/CGNAT listener, абсолютные TLS/htpasswd paths и ограниченные rate/body
+значения. Пароль не входит в template/environment/report.
+
+Учётные данные сетевой границы не принадлежат Ollama или Workbench и не
+создаются приложением. Администратор целевого сервера выбирает username и через
+`htpasswd -B` записывает bcrypt-хеш пароля во внешний файл, по умолчанию
+`/etc/llm-workbench/gateway.htpasswd`. Renderer переносит абсолютный путь из
+`PRIVATE_LLM_HTPASSWD` в `auth_basic_user_file`; самого секрета в environment и
+сгенерированном Nginx site нет. Worker Nginx должен иметь право пройти к файлу и
+прочитать его, но остальным пользователям доступ не требуется.
+
+Nginx завершает TLS/Basic Auth, возвращает `429` при `4r/s, burst=8`, отключает
+request/response buffering и gzip для streaming, затем удаляет внешний
+Authorization. Для web API он подставляет точный loopback Host и удаляет внешний
+Origin/fetch-site; Ktor по-прежнему требует JSON и `X-Workbench-Request`, а Nginx
+не выдаёт CORS headers. Диагностический allowlist публикует только version/tags/
+show/ps, не общий Ollama `/api/*`.
+
+Клиент отправляет `username:password` в стандартном Basic Auth header внутри
+TLS-соединения. Nginx находит username во внешнем файле и сверяет пароль с
+хешем: отсутствие/ошибка дают `401`, успех разрешает проксирование. Base64 в
+Basic Auth не является шифрованием, поэтому TLS обязателен. Полученный
+`Authorization` очищается во всех опубликованных location и не достигает
+loopback upstream.
+
+`verify_private_llm.py` является отдельной real-network проверкой, а не частью
+обычного test suite. Он запрещает loopback/public base URL, проверяет 401,
+non-streaming/streaming, минимум четыре маркированных параллельных ответа,
+latency percentiles, реальный 429/recovery, model metadata, `/api/ps` runtime
+context, below/above boundary и Nginx 413. Безмодельный
+`checkPrivateLlmDeployment` проверяет rendering и чистую логику verifier.
+Подробный runbook: [PRIVATE_LLM_SERVICE.md](PRIVATE_LLM_SERVICE.md).
 
 `runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler и output-каталог в fixture также настоящие, но получают отдельные пути во временном каталоге теста.
 

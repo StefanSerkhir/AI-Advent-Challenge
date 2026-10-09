@@ -1,0 +1,25 @@
+[Unit]
+Description=LLM Workbench loopback web service
+After=network-online.target ollama.service
+Wants=network-online.target
+Requires=ollama.service
+
+[Service]
+Type=simple
+User=llm-workbench
+Group=llm-workbench
+WorkingDirectory=/var/lib/llm-workbench
+EnvironmentFile=/etc/llm-workbench/workbench.env
+ExecStart=/opt/llm-workbench/bin/AIAdventChallenge
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/llm-workbench
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
