@@ -39,7 +39,23 @@ class DocumentRetriever(
     private val nanoTime: () -> Long = System::nanoTime,
     private val embeddingClientFactory: (EmbeddingDescriptor) -> EmbeddingClient,
 ) {
-    suspend fun retrieve(question: String, limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT): DocumentRetrievalResult {
+    suspend fun retrieve(question: String, limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT): DocumentRetrievalResult =
+        retrieve(question, limit, sourceFilter = null)
+
+    /** Repository-help scope: the same validated index and cosine search, limited to user documentation. */
+    suspend fun retrieveDocumentation(
+        question: String,
+        limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT,
+    ): DocumentRetrievalResult = retrieve(question, limit) { source ->
+        source == "README.md" ||
+            (source.startsWith("docs/") && (source.endsWith(".md") || source.endsWith(".pdf")))
+    }
+
+    private suspend fun retrieve(
+        question: String,
+        limit: Int,
+        sourceFilter: ((String) -> Boolean)?,
+    ): DocumentRetrievalResult {
         require(question.isNotBlank()) { "Вопрос для RAG не может быть пустым" }
         require(limit > 0) { "Retrieval limit должен быть положительным" }
         val retrievalStarted = nanoTime()
@@ -99,11 +115,24 @@ class DocumentRetriever(
             )
         }
 
+        val searchableIndex = if (sourceFilter == null) {
+            index
+        } else {
+            index.copy(chunks = index.chunks.filter { sourceFilter(it.source) }).also { scoped ->
+                if (scoped.chunks.isEmpty()) {
+                    throw DocumentRetrievalException(
+                        "Локальный RAG-индекс не содержит README.md или docs/**/*.md|pdf. " +
+                            "Перестройте индекс командой: $DOCUMENT_INDEX_BUILD_COMMAND",
+                    )
+                }
+            }
+        }
+
         // search() owns the common cosine implementation and deterministic score/chunkId ordering.
         yield()
         val searchStarted = nanoTime()
         val hits = try {
-            search(index, queryVector, limit)
+            search(searchableIndex, queryVector, limit)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

@@ -17,21 +17,23 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.util.concurrent.TimeUnit
 
 internal const val MCP_DEMO_SERVER_NAME = "llm-workbench-mcp-orchestrator"
-internal const val MCP_DEMO_VERSION = "2.0.0"
+internal const val MCP_DEMO_VERSION = "2.1.0"
 internal const val DEFAULT_MCP_OUTPUT_DIRECTORY = ".llm-mcp-output"
 internal const val TRACKER_GET_ISSUE_TOOL = "tracker_get_issue"
 internal const val SEARCH_TOOL = "search"
 internal const val SUMMARIZE_TOOL = "summarize"
 internal const val SAVE_TO_FILE_TOOL = "save_to_file"
+const val GIT_CURRENT_BRANCH_TOOL = "git_current_branch"
 internal const val SCHEDULER_CREATE_TOOL = "scheduler_create"
 internal const val SCHEDULER_LIST_TOOL = "scheduler_list"
 internal const val SCHEDULER_CANCEL_TOOL = "scheduler_cancel"
 internal const val SCHEDULER_SUMMARY_TOOL = "scheduler_get_summary"
 internal val MCP_DEMO_TOOL_NAMES = setOf(
     "ping", "echo", TRACKER_GET_ISSUE_TOOL,
-    SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL,
+    SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL,
     SCHEDULER_CREATE_TOOL, SCHEDULER_LIST_TOOL, SCHEDULER_CANCEL_TOOL, SCHEDULER_SUMMARY_TOOL,
 )
 internal val MCP_TOOL_NAMES_BY_SERVER = mapOf(
@@ -40,7 +42,7 @@ internal val MCP_TOOL_NAMES_BY_SERVER = mapOf(
         SCHEDULER_CREATE_TOOL, SCHEDULER_LIST_TOOL, SCHEDULER_CANCEL_TOOL, SCHEDULER_SUMMARY_TOOL,
     ),
     KNOWLEDGE_SERVER_ID to setOf(SEARCH_TOOL, SUMMARIZE_TOOL),
-    WORKSPACE_SERVER_ID to setOf(SAVE_TO_FILE_TOOL),
+    WORKSPACE_SERVER_ID to setOf(SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL),
 )
 
 /**
@@ -56,6 +58,10 @@ public fun main(): Unit = runBlocking {
         ?.takeIf(String::isNotBlank)
         ?.let(Path::of)
         ?: Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY)
+    val repositoryRoot = System.getenv("LLM_MCP_REPOSITORY_ROOT")
+        ?.takeIf(String::isNotBlank)
+        ?.let(Path::of)
+        ?: Path.of("").toAbsolutePath().normalize()
     val scheduler = if (serverId == OPERATIONS_SERVER_ID) {
         val stateFile = System.getenv("LLM_SCHEDULER_STATE_FILE")
             ?.takeIf(String::isNotBlank)
@@ -66,7 +72,7 @@ public fun main(): Unit = runBlocking {
             LocalScheduledTaskExecutor(LocalDemoTrackerSource()),
         ).also { it.start() }
     } else null
-    val server = createDemoServer(serverId, scheduler, outputDirectory)
+    val server = createDemoServer(serverId, scheduler, outputDirectory, repositoryRoot)
     val transport = StdioServerTransport(
         input = System.`in`.asSource().buffered(),
         output = System.out.asSink().buffered(),
@@ -87,6 +93,8 @@ internal fun createDemoServer(
     serverId: String,
     scheduler: SchedulerService? = null,
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
+    repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
+    gitCommandRunner: GitCommandRunner = ProcessBuilderGitCommandRunner,
 ): Server = Server(
     serverInfo = Implementation(
         name = "$MCP_DEMO_SERVER_NAME-$serverId",
@@ -233,6 +241,21 @@ internal fun createDemoServer(
     }
 
     if (serverId == WORKSPACE_SERVER_ID) {
+        addTool(
+            name = GIT_CURRENT_BRANCH_TOOL,
+            description = "Returns the current branch or detached commit of the configured repository root. Read-only; accepts no arguments.",
+            inputSchema = ToolSchema(
+                schema = JSON_SCHEMA_DIALECT,
+                properties = buildJsonObject {},
+            ),
+        ) { request ->
+            safeToolCall {
+                val args = request.arguments ?: buildJsonObject {}
+                requireOnlyKeys(args, emptySet())
+                structuredResult(gitCurrentBranch(repositoryRoot, gitCommandRunner))
+            }
+        }
+
         addTool(
             name = SAVE_TO_FILE_TOOL,
             description = "Third pipeline step. Save the summary from summarize as UTF-8 under the configured output directory only.",
@@ -387,6 +410,73 @@ internal fun createDemoServer(
         }
     }
 }
+
+internal data class GitCommandResult(val exitCode: Int, val output: String)
+
+internal fun interface GitCommandRunner {
+    fun run(repositoryRoot: Path, arguments: List<String>): GitCommandResult
+}
+
+internal object ProcessBuilderGitCommandRunner : GitCommandRunner {
+    override fun run(repositoryRoot: Path, arguments: List<String>): GitCommandResult {
+        require(arguments.isNotEmpty() && arguments.all { it.isNotBlank() })
+        val process = ProcessBuilder(listOf("git") + arguments)
+            .directory(repositoryRoot.toFile())
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        if (!process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            throw IllegalStateException("Git command timed out.")
+        }
+        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+            reader.readText().take(MAX_GIT_OUTPUT_LENGTH).trim()
+        }
+        return GitCommandResult(process.exitValue(), output)
+    }
+}
+
+internal fun gitCurrentBranch(
+    repositoryRoot: Path,
+    runner: GitCommandRunner = ProcessBuilderGitCommandRunner,
+): JsonObject {
+    if (!Files.isDirectory(repositoryRoot, NOFOLLOW_LINKS)) return unavailableGitResult()
+    return try {
+        val branchResult = runner.run(repositoryRoot, listOf("symbolic-ref", "--quiet", "--short", "HEAD"))
+        if (branchResult.exitCode == 0) {
+            val branch = branchResult.output.takeIf(::isSafeBranchName) ?: return unavailableGitResult()
+            val commit = runner.run(repositoryRoot, listOf("rev-parse", "--short=12", "HEAD"))
+                .takeIf { it.exitCode == 0 && SHORT_COMMIT_REGEX.matches(it.output) }
+                ?.output
+            buildJsonObject {
+                put("available", true)
+                put("branch", branch)
+                put("detached", false)
+                commit?.let { put("shortCommit", it) }
+            }
+        } else {
+            val commit = runner.run(repositoryRoot, listOf("rev-parse", "--short=12", "HEAD"))
+            if (commit.exitCode != 0 || !SHORT_COMMIT_REGEX.matches(commit.output)) return unavailableGitResult()
+            buildJsonObject {
+                put("available", true)
+                put("branch", JsonNull)
+                put("detached", true)
+                put("shortCommit", commit.output)
+            }
+        }
+    } catch (_: Exception) {
+        unavailableGitResult()
+    }
+}
+
+private fun unavailableGitResult() = buildJsonObject {
+    put("available", false)
+    put("branch", JsonNull)
+    put("detached", false)
+}
+
+private fun isSafeBranchName(value: String): Boolean =
+    value.isNotBlank() && value.length <= MAX_BRANCH_NAME_LENGTH && value.none(Char::isISOControl)
 
 private fun demoIssue(includeComments: Boolean) = buildJsonObject {
     val issue = demoTrackerIssue()
@@ -675,6 +765,10 @@ private const val MAX_MATCH_TITLE_LENGTH = 200
 private const val MAX_MATCH_CONTENT_LENGTH = 2_000
 private const val MAX_OUTPUT_FILE_NAME_LENGTH = 128
 private const val MAX_SAVED_CONTENT_LENGTH = 20_000
+private const val MAX_BRANCH_NAME_LENGTH = 255
+private const val MAX_GIT_OUTPUT_LENGTH = 4_096
+private const val GIT_TIMEOUT_SECONDS = 5L
+private val SHORT_COMMIT_REGEX = Regex("^[0-9a-fA-F]{7,64}$")
 private val SAFE_FILE_NAME_REGEX = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 private val WORD_REGEX = Regex("[\\p{L}\\p{N}]+")
 private val SEARCH_STOP_WORDS = setOf("о", "и", "в", "на", "по", "для", "the", "a", "of", "to", "about")

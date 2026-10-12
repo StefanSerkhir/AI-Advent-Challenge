@@ -9,6 +9,83 @@ import kotlin.test.*
 
 class McpGatewayTest {
     @Test
+    fun `git current branch is read only strict safe and handles detached and non git roots`() = runBlocking {
+        val directory = Files.createTempDirectory("mcp-git-branch-test")
+        val repository = directory.resolve("repository")
+        Files.createDirectories(repository)
+        fun git(vararg arguments: String) {
+            val process = ProcessBuilder(listOf("git") + arguments)
+                .directory(repository.toFile())
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertEquals(0, process.waitFor(), output)
+        }
+        git("init", "-b", "feature/developer-help")
+        git("config", "user.name", "Fixture User")
+        git("config", "user.email", "fixture@example.invalid")
+        Files.writeString(repository.resolve("README.md"), "fixture-secret-must-not-leak")
+        git("add", "README.md")
+        git("commit", "-m", "fixture")
+        val gateway = LocalMcpGateway(
+            directory.resolve("scheduler.json"),
+            directory.resolve("output"),
+            repositoryRoot = repository,
+        )
+        try {
+            val tool = gateway.listTools().single { it.name == GIT_CURRENT_BRANCH_TOOL }
+            assertEquals(WORKSPACE_SERVER_ID, tool.serverId)
+            assertTrue(tool.inputSchema["properties"]!!.jsonObject.isEmpty())
+
+            val branch = gateway.callTool(GIT_CURRENT_BRANCH_TOOL, buildJsonObject {})
+            assertFalse(branch.isError)
+            val branchJson = Json.parseToJsonElement(branch.content).jsonObject
+            assertEquals(true, branchJson["available"]?.jsonPrimitive?.boolean)
+            assertEquals("feature/developer-help", branchJson["branch"]?.jsonPrimitive?.content)
+            assertEquals(false, branchJson["detached"]?.jsonPrimitive?.boolean)
+            assertTrue(branchJson["shortCommit"]?.jsonPrimitive?.content.orEmpty().matches(Regex("[0-9a-f]{12}")))
+            assertFalse(branch.content.contains(repository.toAbsolutePath().toString()))
+            assertFalse(branch.content.contains("fixture-secret-must-not-leak"))
+
+            val unknown = gateway.callTool(GIT_CURRENT_BRANCH_TOOL, buildJsonObject { put("path", "/tmp") })
+            assertTrue(unknown.isError)
+            assertContains(unknown.content, "неизвестные поля")
+            assertFalse(unknown.content.contains("/tmp"))
+
+            git("checkout", "--detach", "HEAD")
+            val detached = Json.parseToJsonElement(
+                gateway.callTool(GIT_CURRENT_BRANCH_TOOL, buildJsonObject {}).content,
+            ).jsonObject
+            assertEquals(true, detached["available"]?.jsonPrimitive?.boolean)
+            assertEquals(true, detached["detached"]?.jsonPrimitive?.boolean)
+            assertEquals(JsonNull, detached["branch"])
+            assertTrue(detached["shortCommit"]?.jsonPrimitive?.content.orEmpty().matches(Regex("[0-9a-f]{12}")))
+        } finally {
+            gateway.close()
+        }
+
+        val plainDirectory = directory.resolve("plain")
+        Files.createDirectories(plainDirectory)
+        val plainGateway = LocalMcpGateway(
+            directory.resolve("plain-scheduler.json"),
+            directory.resolve("plain-output"),
+            repositoryRoot = plainDirectory,
+        )
+        try {
+            val unavailable = Json.parseToJsonElement(
+                plainGateway.callTool(GIT_CURRENT_BRANCH_TOOL, buildJsonObject {}).content,
+            ).jsonObject
+            assertEquals(false, unavailable["available"]?.jsonPrimitive?.boolean)
+            assertEquals(false, unavailable["detached"]?.jsonPrimitive?.boolean)
+            assertEquals(JsonNull, unavailable["branch"])
+            assertFalse(unavailable.toString().contains(plainDirectory.toAbsolutePath().toString()))
+        } finally {
+            plainGateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `registry aggregates catalogs from three independent stdio processes`() = runBlocking {
         val directory = Files.createTempDirectory("mcp-registry-test")
         val processes = mutableListOf<Process>()

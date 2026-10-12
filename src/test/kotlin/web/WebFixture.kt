@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.example.agent.*
 import org.example.app.AppSettings
+import org.example.app.DEVELOPER_HELP_SYSTEM_PROMPT
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.indexing.*
@@ -25,6 +26,11 @@ import java.time.Instant
 fun main() {
     val port = System.getenv("WEB_PORT")?.toInt() ?: 18080
     val directory = Files.createTempDirectory("workbench-browser-test")
+    check(ProcessBuilder("git", "init", "-b", "fixture-main")
+        .directory(directory.toFile())
+        .redirectErrorStream(true)
+        .start()
+        .waitFor() == 0) { "Failed to initialize fixture Git repository" }
     val ragIndex = runBlocking { createRagFixtureIndex(directory) }
     val store = LocalConfigStore(directory.resolve(".env"), emptyMap())
     val controller = WorkbenchController(AppSettings(LlmKind.OPENAI),
@@ -37,6 +43,7 @@ fun main() {
         mcpGateway = LocalMcpGateway(
             directory.resolve(".llm-scheduler-state.json"),
             directory.resolve(".llm-mcp-output"),
+            repositoryRoot = directory,
         ),
         documentRetrieverProvider = {
             DocumentRetriever(JsonDocumentIndexStore(ragIndex)) { descriptor ->
@@ -60,6 +67,9 @@ fun main() {
                             } else if ("Текущий вопрос:" in text) {
                                 delegate.embed(listOf(RAG_FIXTURE_RELEASE_TEXT)).single()
                             } else if ("Как запустить production web-приложение?" in text) {
+                                delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
+                            } else if ("Как устроен проект и какая сейчас Git-ветка?" in text ||
+                                "Объясни архитектуру проекта, как запустить web-интерфейс" in text) {
                                 delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
                             } else {
                                 delegate.embed(listOf(text)).single()
@@ -224,6 +234,15 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                     prompt,
                     "Production web-приложение запускается командой `./gradlew runWeb` [S1].",
                 )
+            DEVELOPER_HELP_SYSTEM_PROMPT in assistantProfile && "REPOSITORY DOCUMENT EVIDENCE" in prompt -> {
+                val branch = Regex("\\\"branch\\\":\\\"([^\\\"]+)\\\"")
+                    .find(prompt)?.groupValues?.get(1) ?: "не определена"
+                groundedAssistantRagFixtureAnswer(
+                    prompt,
+                    "Проект использует Kotlin/Ktor backend и React frontend; production web запускается командой `./gradlew runWeb` [S1]. " +
+                        "Текущая Git-ветка: `$branch`.",
+                )
+            }
             "retrieval-augmented generation" in assistantProfile && "RETRIEVED DOCUMENT EVIDENCE" in prompt ->
                 groundedAssistantRagFixtureAnswer(
                     prompt,

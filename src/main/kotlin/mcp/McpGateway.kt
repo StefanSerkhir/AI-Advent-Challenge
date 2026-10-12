@@ -66,9 +66,14 @@ class LocalMcpGateway(
     schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
     registrations: List<McpServerRegistration>? = null,
+    repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
     private val schedulerServerId: String = OPERATIONS_SERVER_ID,
 ) : McpGateway {
-    private val registrations = (registrations ?: defaultMcpServerRegistrations(schedulerStateFile, outputDirectory))
+    private val registrations = (registrations ?: defaultMcpServerRegistrations(
+        schedulerStateFile,
+        outputDirectory,
+        repositoryRoot,
+    ))
         .also { configured ->
             require(configured.isNotEmpty()) { "At least one MCP server registration is required." }
             val duplicateIds = configured.groupBy(McpServerRegistration::serverId).filterValues { it.size > 1 }.keys
@@ -252,10 +257,11 @@ private class McpSession(private val registration: McpServerRegistration) {
 internal fun defaultMcpServerRegistrations(
     schedulerStateFile: Path,
     outputDirectory: Path,
+    repositoryRoot: Path,
 ): List<McpServerRegistration> = listOf(
-    localMcpServerRegistration(OPERATIONS_SERVER_ID, schedulerStateFile, outputDirectory),
-    localMcpServerRegistration(KNOWLEDGE_SERVER_ID, schedulerStateFile, outputDirectory),
-    localMcpServerRegistration(WORKSPACE_SERVER_ID, schedulerStateFile, outputDirectory),
+    localMcpServerRegistration(OPERATIONS_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
+    localMcpServerRegistration(KNOWLEDGE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
+    localMcpServerRegistration(WORKSPACE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
 )
 
 internal fun localMcpServerRegistration(
@@ -263,8 +269,22 @@ internal fun localMcpServerRegistration(
     schedulerStateFile: Path,
     outputDirectory: Path,
     onProcessStarted: (Process) -> Unit = {},
+): McpServerRegistration = localMcpServerRegistration(
+    serverId,
+    schedulerStateFile,
+    outputDirectory,
+    Path.of("").toAbsolutePath().normalize(),
+    onProcessStarted,
+)
+
+internal fun localMcpServerRegistration(
+    serverId: String,
+    schedulerStateFile: Path,
+    outputDirectory: Path,
+    repositoryRoot: Path,
+    onProcessStarted: (Process) -> Unit = {},
 ): McpServerRegistration = McpServerRegistration(serverId) {
-    startServerProcess(serverId, schedulerStateFile, outputDirectory).also(onProcessStarted)
+    startServerProcess(serverId, schedulerStateFile, outputDirectory, repositoryRoot).also(onProcessStarted)
 }
 
 private val MCP_TIMEOUT = 10.seconds
@@ -274,6 +294,7 @@ internal fun startServerProcess(
     serverId: String,
     schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
+    repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
 ): Process {
     require(SAFE_SERVER_ID.matches(serverId)) { "Invalid MCP server id." }
     val executable = Path.of(
@@ -293,6 +314,7 @@ internal fun startServerProcess(
         }
         if (serverId == WORKSPACE_SERVER_ID) {
             builder.environment()["LLM_MCP_OUTPUT_DIR"] = outputDirectory.toAbsolutePath().toString()
+            builder.environment()["LLM_MCP_REPOSITORY_ROOT"] = repositoryRoot.toAbsolutePath().normalize().toString()
         }
     }.start()
 }

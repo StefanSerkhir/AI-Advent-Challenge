@@ -43,7 +43,7 @@ flowchart LR
 | `src/main/kotlin/config` | Чтение и атомарное сохранение локального `.env` |
 | `src/main/kotlin/tokens` | Оценка токенов, профили окон/цен, подготовка контекста, overflow и агрегаты |
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
-| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `WorkbenchController` и UI-neutral state |
+| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
@@ -157,7 +157,7 @@ ID и инъецируемые process factories. Для `operations`, `knowledg
 шлюз создаёт отдельные JVM-процессы `McpDemoServerKt`, MCP clients, stdio transports,
 mutex и caches каталога. Каждый процесс объявляет только свой набор:
 `operations` — `ping`, `echo`, Tracker и scheduler; `knowledge` — `search` и
-`summarize`; `workspace` — `save_to_file`. Только `operations` создаёт
+`summarize`; `workspace` — `git_current_branch` и `save_to_file`. Только `operations` создаёт
 `SchedulerService`. Stdout каждого процесса зарезервирован для JSON-RPC.
 
 Шлюз получает настоящий `tools/list` каждой сессии, добавляет каждому `McpTool`
@@ -176,7 +176,7 @@ CLI выполняет handshake, проверяет объединённый к
 прежние Tracker и scheduler lifecycle-вызовы. Demo использует один временный root
 для scheduler store и output-каталога, закрывает client/transport/process и удаляет
 root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
-или LLM и не требуют ключей. Версия набора MCP demo servers — `2.0.0`.
+или LLM и не требуют ключей. Версия набора MCP demo servers — `2.1.0`.
 
 `search` работает только с встроенным каталогом стабильных `id`, `title` и
 `content`. `summarize` детерминированно ограничивает число обработанных записей и
@@ -186,6 +186,15 @@ root. Mock Tracker и pipeline tools не читают `.env`, не исполь
 `..`/разделители/управляющие символы и существующую symlink-цель, пишет temporary
 file и применяет atomic replace с fallback. Результат содержит только относительное
 имя, UTF-8 byte count и `sourceIds`, но не абсолютный путь.
+
+`git_current_branch` принимает только пустой объект. Server запускает через
+`ProcessBuilder` фиксированные команды `git symbolic-ref --quiet --short HEAD` и
+`git rev-parse --short=12 HEAD` с `directory` равным корню, переданному родительским
+`LocalMcpGateway` в `LLM_MCP_REPOSITORY_ROOT`. Результат ограничен по размеру и
+содержит только `available`, `branch`, `detached` и необязательный короткий
+`shortCommit`: без absolute path, remote URL, environment, содержимого файлов и
+секретов. Detached HEAD и каталог вне Git возвращаются безопасно; неизвестные
+аргументы отвергаются до запуска процесса.
 
 ### Индексация документов
 
@@ -443,6 +452,19 @@ OpenAI-compatible transport добавляет Bearer header только при
 - request-local фабрикой `DocumentRetriever` для RAG;
 - монотонными номерами exchange/revision и streaming snapshots;
 - read-only monitor снимков фоновых задач из MCP scheduler.
+
+До обычной развилки `UNRESTRICTED` контроллер строго распознаёт только `/help` и
+`/help <вопрос>`. Пустая команда возвращает локальную памятку без provider client.
+Команда с вопросом передаётся в `DeveloperHelpRunner`: он использует тот же
+`DocumentRetriever`, relevance filter и citation validator, что RAG, но фильтрует
+corpus до `README.md` и `docs/**/*.md|pdf`. Затем через объединённый каталог
+`tools/list` он находит owner `git_current_branch` и делает один настоящий
+`tools/call`; workspace JSON остаётся отдельным недоверенным блоком и не считается
+источником. Финальный output имеет `pipeline=developer_help`, обычные `mcpCalls`
+и backend-verified evidence. Ветка request-local: она не пишет history,
+`SHORT_TERM`, `WORKING`, `LONG_TERM`, профиль, инварианты или FSM. Ошибка Git
+локализуется в MCP-диагностике и не мешает ответу по документам; ошибка retrieval,
+generation, validation или cancellation также не создаёт частичного commit.
 
 Все команды и worker transitions синхронизированы на контроллере. Одновременно разрешена одна операция. Настройки и мутации состояния во время неё отклоняются. `WorkbenchState` — серверный источник истины; React получает первоначальный снимок через REST, а последующие полные снимки через SSE.
 
@@ -747,6 +769,11 @@ counts/threshold, source IDs, verified quotes и evidence status. WORKING под
 как память текущей задачи и предоставляет явные типы ввода «Уточнение»,
 «Ограничение» и «Термин» поверх существующего memory CRUD.
 
+В composer режима `unrestricted` постоянно видна короткая подсказка о `/help`.
+Ответ ассистента разработчика отображается обычной карточкой: RAG-блок подписан
+«Документация репозитория», а ниже используются существующие MCP/evidence/sources
+компоненты без отдельного клиентского состояния.
+
 Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: порядковый
 номер, `serverId / toolName`, безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
 том же полном SSE snapshot; отдельного endpoint и клиентского источника истины нет.
@@ -808,7 +835,10 @@ API-ключ сохраняется только в локальном `.env`; A
 - `McpGatewayTest` проверяет три настоящих stdio-процесса, объединение каталогов,
   origin/routing, fail-closed коллизии, reconnect одной сессии, настоящий
   `tools/list`/`tools/call`, строгую валидацию pipeline, точный файл,
-  traversal/absolute/symlink защиту и обратную совместимость Tracker/scheduler/ping/echo;
+  traversal/absolute/symlink защиту, Git branch/detached/non-repository случаи и
+  обратную совместимость Tracker/scheduler/ping/echo;
+- `DeveloperHelpRunnerTest` проверяет строгий parser, overview без LLM, doc-only
+  retrieval, discovered MCP owner, evidence, ошибки и cancellation без commit;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 - тесты `indexing` проверяют deterministic corpus/exclusions/threshold, Unicode и
@@ -836,7 +866,9 @@ API-ключ сохраняется только в локальном `.env`; A
 Browser tests проверяют восемь режимов, три RAG-карточки/settings/rewrite/filter/partial result, memory layers, streaming, refresh, две вкладки,
 offline/reconnect, идемпотентный retry, отмену, Markdown, узкий экран и точный
 порядок `knowledge/search` → `knowledge/summarize` → `workspace/save_to_file`
-в существующей MCP-диагностике.
+в существующей MCP-диагностике. Отдельный сценарий `/help` проверяет подсказку,
+реальные fixture retrieval/MCP, branch, источники и отсутствие записи в историю
+или `SHORT_TERM`.
 Fixture использует временные persistence/output paths и фиктивные ключи; внешние
 платные API не вызываются. Для pipeline используется точный prompt «Найди локальные
 сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в

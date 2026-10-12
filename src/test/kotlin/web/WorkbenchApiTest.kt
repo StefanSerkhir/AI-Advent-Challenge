@@ -50,6 +50,98 @@ class WorkbenchApiTest {
         documentRetrieverProvider = documentRetrieverProvider, persistSettings = persist)
 
     @Test
+    fun `developer help uses regular operation dto with documentation evidence and git mcp diagnostics`() = runBlocking {
+        val directory = Files.createTempDirectory("developer-help-api")
+        val indexFile = createRagFixtureIndex(directory)
+        var llmCalls = 0
+        var gitCalls = 0
+        val gateway = object : McpGateway {
+            override suspend fun listTools() = listOf(McpTool(
+                GIT_CURRENT_BRANCH_TOOL,
+                "branch",
+                buildJsonObject {},
+                WORKSPACE_SERVER_ID,
+            ))
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject): McpToolResult {
+                gitCalls++
+                assertEquals(GIT_CURRENT_BRANCH_TOOL, name)
+                assertTrue(arguments.isEmpty())
+                return McpToolResult(false, "{\"available\":true,\"branch\":\"feature/api-help\",\"detached\":false}")
+            }
+            override suspend fun close() = Unit
+        }
+        val c = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            mcpGateway = gateway,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                }
+            },
+        ) { model, messages, _ ->
+            llmCalls++
+            val system = messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
+            CompletionResult(
+                if (org.example.app.DEVELOPER_HELP_SYSTEM_PROMPT in system) {
+                    groundedAssistantRagFixtureAnswer(
+                        messages.last().content,
+                        "Устройство проекта подтверждено документацией [S1]. Текущая Git-ветка: `feature/api-help`.",
+                    )
+                } else {
+                    "Обычный ответ агента"
+                },
+                "stop",
+                TokenUsage(30, 10, 40),
+                model,
+            )
+        }
+        try {
+            val api = WorkbenchApi(c)
+            val initial = c.state.value.toDto()
+            api.settings(SettingsCommand(initial.settingsVersion, initial.settings.copy(ragMinSimilarity = -1.0)))
+            api.start(command(c.state.value.settingsVersion, "/help Как устроен проект и какая сейчас Git-ветка?"))
+            c.awaitCurrentRequest()
+
+            val helpState = c.state.value.toDto()
+            val help = helpState.exchanges.single()
+            assertEquals("completed", help.status)
+            val output = help.outputs.single()
+            assertEquals("АССИСТЕНТ РАЗРАБОТЧИКА", output.title)
+            assertContains(output.content.orEmpty(), "feature/api-help")
+            assertEquals("developer_help", output.ragDiagnostics?.pipeline)
+            assertEquals("verified", output.ragDiagnostics?.evidence?.status)
+            assertTrue(output.ragDiagnostics?.sources.orEmpty().all {
+                it.source == "README.md" || it.source.startsWith("docs/")
+            })
+            val mcp = output.mcpCalls.single()
+            assertEquals(WORKSPACE_SERVER_ID, mcp.serverId)
+            assertEquals(GIT_CURRENT_BRANCH_TOOL, mcp.toolName)
+            assertEquals("success", mcp.status)
+            assertContains(mcp.result, "\"branch\":\"feature/api-help\"")
+            assertFalse(mcp.result.contains(directory.toAbsolutePath().toString()))
+            assertEquals(1, gitCalls)
+            assertEquals(HistoryDto(0, 0), helpState.history)
+            assertTrue(helpState.assistantMemory.layers.first { it.layer == "SHORT_TERM" }.entries.isEmpty())
+            assertFalse(api.snapshot(helpState).contains("content:"))
+
+            api.start(command(c.state.value.settingsVersion, "/help"))
+            c.awaitCurrentRequest()
+            assertContains(c.state.value.toDto().exchanges.last().outputs.single().content.orEmpty(), "Примеры")
+            assertEquals(1, llmCalls, "справка без вопроса не вызывает LLM")
+            assertEquals(1, gitCalls, "справка без вопроса не вызывает MCP")
+
+            api.start(command(c.state.value.settingsVersion, "/helpful"))
+            c.awaitCurrentRequest()
+            val ordinary = c.state.value.toDto()
+            assertEquals("Обычный ответ агента", ordinary.exchanges.last().outputs.single().content)
+            assertEquals(1, ordinary.history.unrestricted)
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `Ollama runs without a key and never receives MCP tools`() = runBlocking {
         var catalogReads = 0
         val observedOptions = mutableListOf<CompletionOptions>()

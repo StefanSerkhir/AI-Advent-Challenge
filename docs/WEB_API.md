@@ -18,7 +18,7 @@ loopback `http://127.0.0.1:11434/v1/chat/completions`.
 arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
 без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
-Для output RAG-ветки или assistant RAG-чата `ragDiagnostics` имеет явную форму
+Для output RAG-ветки, assistant RAG-чата или `/help <вопрос>` `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
 strategy, embeddingProvider, embeddingModel, manifestHash,
@@ -31,7 +31,7 @@ abstained, abstentionReason, evidence }`,
 Статус равен `not_checked`, `verified` или `not_applicable`. Короткие quotes —
 единственные фрагменты chunk text по wire: backend проверил их точное вхождение
 после нормализации пробелов и сам присоединил metadata из retrieval result.
-`pipeline` равен `raw`, `enhanced` или `assistant_contextual`; `rewrite` содержит
+`pipeline` равен `raw`, `enhanced`, `assistant_contextual` или `developer_help`; `rewrite` содержит
 только elapsed, usage и стоимость служебного вызова.
 Пары `embeddingProvider/embeddingModel` и `generationProvider/generationModel`
 позволяют проверить полностью локальную цепочку `ollama/qwen3-embedding:0.6b` →
@@ -181,6 +181,32 @@ error, отмена, ошибка или незавершённый цикл н�
 агрегирует все LLM-шаги. DeepSeek и остальные режимы не получают MCP tools и
 сохраняют прежний контракт ответа. Ollama также не получает tools и работает без
 ключа через OpenAI-compatible streaming endpoint на loopback.
+
+В том же `unrestricted` точные команды `/help` и `/help <вопрос>` идут через
+обычный идемпотентный `POST /api/operations`; нового response mode или endpoint
+нет. `/help` возвращает локальную памятку без LLM и MCP. Вопросная форма выполняет
+retrieval только по `README.md` и `docs/**/*.md|pdf`, для OpenAI находит
+`git_current_branch` в текущем `tools/list` и делает один `tools/call` владельцу.
+Git JSON передаётся модели как отдельные недоверенные workspace data, а не как
+документальный source. Output использует существующие поля: один `mcpCalls[]`
+с фактическим `serverId/toolName/status`, `ragDiagnostics.pipeline=developer_help`,
+проверенные `sources/evidence` и обычные metrics. Для DeepSeek/Ollama MCP-массив
+остаётся пустым, поскольку tools им не доступны.
+
+Команда request-local и не меняет history, memory layers, профиль, инварианты или
+FSM даже после успешного ответа. Ошибка/недоступность Git остаётся локальной
+MCP-диагностикой, если документации достаточно; retrieval/generation/citation
+ошибка и cancellation не создают частичного commit. Отсутствующий или
+несовместимый индекс не запускает generation и возвращает безопасное сообщение с
+`./gradlew buildLocalDocumentIndex`. Parser регистрозависим: `/helpful`, `/Help`
+и `/help` не в начале prompt обрабатываются обычным агентом.
+
+MCP `workspace/git_current_branch` принимает строго `{}`. Успешный result содержит
+только `{ available, branch, detached, shortCommit? }`; branch/shortCommit ограничены и не
+содержат путь репозитория, remote, environment или содержимое файлов. Для
+detached HEAD `branch=null`, для non-Git root `available=false`; неизвестные поля
+возвращают MCP tool error. Этот контракт виден только через уже существующую
+MCP-диагностику и не добавляет REST route.
 
 При `unrestricted + MEMORY_LAYERS + assistantRagEnabled=true` каждый
 `POST /api/operations` сначала выполняет retrieval из `structured.json`.

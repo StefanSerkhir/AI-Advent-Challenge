@@ -169,7 +169,7 @@ export interface RagEvidenceSource {
 }
 export interface RagDiagnostics {
   applied: boolean;
-  pipeline: "raw" | "enhanced" | "assistant_contextual";
+  pipeline: "raw" | "enhanced" | "assistant_contextual" | "developer_help";
   queryRewritten: boolean;
   retrievalQuery: string | null;
   candidateLimit: number;

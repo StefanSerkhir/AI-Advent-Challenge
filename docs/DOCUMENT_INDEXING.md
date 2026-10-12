@@ -151,6 +151,13 @@ threshold нет: его нужно калибровать для конкрет
 candidate/threshold/top-K filter. Chunks остаются request-local и входят в
 generation как недоверенный блок перед единственным текущим prompt.
 
+Команда Простого агента `/help <вопрос>` переиспользует этот же retriever, index
+descriptor, embedding client, cosine search и общий relevance filter. Для неё
+фильтр corpus применяется до ranking и допускает только `README.md` и
+`docs/**/*.md|pdf`; production Kotlin и frontend chunks остаются в общем индексе,
+но в developer-help retrieval не участвуют. Поэтому отдельного индекса, cache или
+embedding pipeline для ассистента разработчика нет.
+
 Полный текст каждого chunk используется только при построении request-local RAG
 prompt и локальной postflight-проверке. Модель возвращает ответ с `[Sx]` и
 дословные цитаты; backend требует цитату для каждого использованного source,

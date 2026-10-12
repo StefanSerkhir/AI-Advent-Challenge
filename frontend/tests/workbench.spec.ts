@@ -420,6 +420,44 @@ test("simple agent calls tracker through MCP and shows diagnostics", async ({pag
   expect(call.result).toContain("nextAction");
 });
 
+test("developer help shows repository evidence and current git branch through MCP", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByTestId("developer-help-hint")).toContainText("/help");
+
+  await send(page, "/help");
+  await done(page);
+  await expect(page.getByTestId("exchange").last()).toContainText("Ассистент разработчика");
+  await expect(page.getByTestId("exchange").last()).toContainText("/help Как устроен проект");
+
+  await send(page, "/help Объясни архитектуру проекта, как запустить web-интерфейс и на какой Git-ветке я сейчас нахожусь?");
+  await done(page);
+  const exchange = page.getByTestId("exchange").last();
+  const card = exchange.getByTestId("response-card");
+  await expect(card).toContainText("Kotlin/Ktor backend");
+  await expect(card).toContainText("React frontend");
+  await expect(card).toContainText("fixture-main");
+  await expect(card.getByTestId("rag-evidence")).toContainText("проверено");
+  await expect(card.getByTestId("rag-evidence")).toContainText(/README\.md|docs\/ARCHITECTURE\.md/);
+  await expect(card.getByTestId("rag-sources")).toContainText("Документация репозитория");
+  const mcp = card.getByTestId("mcp-diagnostics");
+  await expect(mcp).toContainText("workspace / git_current_branch");
+  await expect(mcp).toContainText("успех");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const output = state.exchanges.at(-1)!.outputs[0];
+  expect(output.ragDiagnostics?.pipeline).toBe("developer_help");
+  expect(output.ragDiagnostics?.evidence.status).toBe("verified");
+  expect(output.mcpCalls).toHaveLength(1);
+  expect(output.mcpCalls[0]).toMatchObject({
+    serverId: "workspace",
+    toolName: "git_current_branch",
+    status: "success",
+  });
+  expect(output.mcpCalls[0].result).not.toContain("workbench-browser-test");
+  expect(state.history.unrestricted).toBe(0);
+  expect(state.assistantMemory.layers.find((layer) => layer.layer === "SHORT_TERM")?.count).toBe(0);
+});
+
 test("simple agent composes search summarize and save_to_file through MCP", async ({page}) => {
   await setMode(page, "unrestricted");
   await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");

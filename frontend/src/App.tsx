@@ -397,6 +397,9 @@ export default function App() {
             </div>
           </div>
           <p className="composer-footnote">
+            {s.settings.mode === "unrestricted" && <span data-testid="developer-help-hint">
+              <code>/help</code> — вопросы по документации репозитория и текущей Git-ветке. {" "}
+            </span>}
             Ответы могут содержать ошибки. Проверяйте важную информацию.
           </p>
         </div>

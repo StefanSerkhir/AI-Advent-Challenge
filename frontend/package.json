@@ -16,6 +16,7 @@
     "record:local-rag-demo": "node scripts/record-local-rag-demo.mjs",
     "record:local-llm-optimization-demo": "node scripts/record-local-llm-optimization-demo.mjs",
     "record:rag-memory-demo": "node scripts/record-rag-memory-demo.mjs",
+    "record:developer-assistant-demo": "node scripts/record-developer-assistant-demo.mjs",
     "verify:rag-memory-real": "node scripts/verify-rag-memory-real.mjs"
   },
   "dependencies": {
