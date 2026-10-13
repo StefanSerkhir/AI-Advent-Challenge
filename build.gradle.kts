@@ -103,6 +103,12 @@ tasks.register<JavaExec>("runRagEvaluation") {
     classpath = sourceSets.main.get().runtimeClasspath
     mainClass = "org.example.rag.RagEvaluationCliKt"
 }
+tasks.register<JavaExec>("runAiCodeReview") {
+    group = "application"
+    description = "Review a pull request with the trusted base checkout, repository RAG and GPT-5.6"
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass = "org.example.review.AiCodeReviewCliKt"
+}
 tasks.register<JavaExec>("runLocalLlmOptimization") {
     group = "verification"
     description = "Run the real-local Qwen3 RAG parameter search and final repeated A/B evaluation"
@@ -129,6 +135,13 @@ tasks.register<JavaExec>("runRagEvaluationFixture") {
     dependsOn(tasks.testClasses)
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass = "org.example.rag.RagEvaluationFixtureKt"
+}
+tasks.register<JavaExec>("runAiCodeReviewFixture") {
+    group = "verification"
+    description = "Run the complete AI code review pipeline with a synthetic Git repository and deterministic fakes"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "org.example.review.AiCodeReviewFixtureKt"
 }
 tasks.register<Exec>("checkPrivateLlmDeployment") {
     group = "verification"

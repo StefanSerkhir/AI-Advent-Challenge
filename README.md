@@ -207,6 +207,41 @@ npm --prefix frontend run record:developer-assistant-demo
 Подробный контракт, ограничения и сценарий ролика описаны в
 [инструкции ассистента разработчика](docs/DEVELOPER_ASSISTANT_DEMO.md).
 
+## Автоматическое AI-ревью pull request
+
+`.github/workflows/ai-code-review.yml` запускает отдельный production CLI
+`org.example.review` для недрафтовых PR при `opened`, `reopened`, `synchronize`
+и `ready_for_review`. Job получает metadata из `GITHUB_EVENT_PATH`, полный список
+changed files и unified diff из Git, строит structure-aware индекс доверенного
+base checkout, отдельно ищет документацию и production-код через существующий
+`DocumentRetriever`, затем вызывает `gpt-5.6-sol` с `reasoning_effort=medium` и
+strict JSON Schema. Проверенный результат создаёт или обновляет ровно один PR
+comment с marker `<!-- ai-code-review:v1 -->`; Markdown и JSON сохраняются как
+CI artifact, в том числе если публикация не удалась.
+
+Workflow требует repository secret `OPENAI_API_KEY`; необязательная repository
+variable `AI_REVIEW_MODEL` принимает `gpt-5.6-luna`, `gpt-5.6-terra` или
+`gpt-5.6-sol`. Используется стандартный `GITHUB_TOKEN` с permissions
+`contents: read` и `pull-requests: write`. `pull_request_target` намеренно не
+используется: checkout фиксируется на точном base SHA, Gradle и reviewer
+запускаются только оттуда, а head commit читается исключительно как Git-данные.
+Fork PR и draft PR завершаются без OpenAI-вызова и без попытки публикации.
+
+Полный offline fixture и детерминированная запись не требуют ключей или GitHub:
+
+```bash
+./gradlew runAiCodeReviewFixture
+npm --prefix frontend run record:ai-code-review-demo
+```
+
+Fixture создаёт временный Git-репозиторий, использует fake embeddings, fake LLM
+и fake publisher и формирует `build/ai-code-review-fixture/review.md`,
+`review.json` и `demo.html`. Видео записывается в
+`video/ai-code-review-demo.webm` с разрешением 1440×900; существующий файл
+защищён флагом `AI_CODE_REVIEW_DEMO_OVERWRITE=1`. Production CLI, параметры,
+security model, RAG, ограничения стоимости/размера и troubleshooting описаны в
+[документации AI code review](docs/AI_CODE_REVIEW.md).
+
 ## Фоновые задачи и расписания
 
 В режиме OpenAI → **«Простой агент»** расписания создаются разговором, без
@@ -904,6 +939,9 @@ pause/reload/resume машины состояния задачи, демо,
   cosine retrieval, evaluation и отдельный CLI;
 - `src/main/kotlin/rag/` — десять RAG evaluation cases, versioned JSON/Markdown
   report и явно запускаемый production evaluation CLI.
+- `src/main/kotlin/review/` — изолированный PR review CLI: Git metadata/diff,
+  раздельный repository RAG, GPT-5.6 structured output, postflight, Markdown и
+  GitHub comment upsert;
 - `src/main/kotlin/optimization/` — real-local staged tuning Qwen3 для repository
   RAG, повторяемый финальный A/B, quality gate и атомарный JSON/Markdown report;
 - `ollama/` — версионированные Modelfile для воспроизводимых локальных aliases.

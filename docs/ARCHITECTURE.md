@@ -48,6 +48,7 @@ flowchart LR
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
 | `src/main/kotlin/rag` | Десять RAG evaluation cases, versioned JSON/Markdown report и production evaluation CLI |
+| `src/main/kotlin/review` | Отдельный trusted-base PR review CLI: Git diff, repository RAG, GPT-5.6 structured output, локальная валидация, artifacts и GitHub comment upsert |
 | `src/main/kotlin/optimization` | Явно запускаемый real-local staged search Qwen3 и повторяемый финальный repository-RAG A/B с quality gate |
 | `ollama` | Версионированные Modelfile для локальных aliases; production default/endpoint не меняются |
 | `deploy/private-llm` | systemd/Nginx private-server profile, fail-closed renderer, real-network verifier и безмодельные unit checks |
@@ -331,6 +332,65 @@ Alias `llm-workbench-qwen3-14b-rag` создаётся из
 меняет только `num_ctx`. Он нужен для измерения context allocation и не входит в
 production model catalog: штатной моделью остаётся `qwen3:14b`, endpoint остаётся
 фиксированным loopback, Authorization не добавляется.
+
+### Автоматическое AI-ревью pull request
+
+`org.example.review` — отдельная production-подсистема и CLI; она не входит в
+`WorkbenchController`, не создаёт response mode, web endpoint, UI или persistent
+state Workbench. `runAiCodeReview` принимает root, полные base/head SHA, PR number,
+output, GPT-5.6 model, diff limit и dry-run. Git запускается только через
+`ProcessBuilder` со статической командой и отдельными аргументами. SHA и
+относительные пути валидируются до чтения; внешние diff drivers и textconv
+отключены.
+
+```mermaid
+flowchart LR
+    Event[GitHub PR event] --> Metadata[Validated PR metadata]
+    Base[Exact base checkout] --> Git[Changed files + full unified diff]
+    Head[Head commit as Git objects only] --> Git
+    Base --> Index[Existing DocumentIndexPipeline]
+    Index --> Docs[DocumentRetriever: README/docs]
+    Index --> Code[DocumentRetriever: production Kotlin/TS]
+    Metadata --> Query[Bounded retrieval query]
+    Git --> Query
+    Docs --> Prompt[Stable reviewer instructions + untrusted data]
+    Code --> Prompt
+    Git --> Prompt
+    Prompt --> GPT[GPT-5.6 strict JSON Schema]
+    GPT --> Validate[File/changed-line/source/quote/secret validation]
+    Validate --> Artifacts[review.md + review.json]
+    Artifacts --> Upsert[One marker GitHub comment]
+```
+
+`GitPullRequestDiffCollector` получает name-status и отдельный unified patch для
+каждого changed path, различает added/modified/deleted/renamed/copied/type-changed
+и binary, а parser помечает changed lines только по `+` внутри hunk. Полный diff
+остаётся локальным; `ReviewDiffLimiter` включает только целые file patches до
+120000 символов, а каждый binary/oversized/no-text path явно переносит в
+`skippedFiles`, поэтому coverage становится partial без молчаливой потери файла.
+
+Review RAG строится тем же `DocumentIndexPipeline` и одним `structured.json` из
+base checkout. `DocumentRetriever.retrieveDocumentation` и
+`retrieveProductionCode` выполняют два scoped cosine search; результаты получают
+request-local IDs `D1…` и `C1…`, дедуплицируются и ограничиваются общим character
+budget. Vectors и полный chunk text не сериализуются в review artifacts/comment.
+
+Stable system prompt предшествует title/body/file inventory/diff/RAG и объявляет
+их недоверенными. Non-streaming OpenAI-вызов использует `reasoning_effort=medium`,
+bounded max completion tokens и strict JSON Schema. Postflight требует точное
+локальное coverage, последовательные finding IDs, известные enum/path/source,
+changed line, evidence для архитектурных замечаний и exact quote в request-local
+chunk. При invalid output допускается ровно одна repair-попытка; повторная ошибка
+заканчивается fail-closed до публикации. Artifacts записываются атомарно до
+GitHub upsert, поэтому они доступны при сбое публикации.
+
+Workflow использует только `pull_request`, минимальные permissions и стандартный
+`GITHUB_TOKEN`. Он пропускает draft/fork/отсутствующий secret до checkout и
+платного вызова, checkout делает на точный base SHA, а `fetch-depth: 0` добавляет
+same-repository head только в object database. Ни Gradle, ни npm, ни hook, ни
+скрипт из head не запускаются. `pull_request_target` не используется. Actions
+закреплены полными commit SHA, concurrency отменяет устаревший run того же PR.
+Точный runbook и threat model находятся в [AI_CODE_REVIEW.md](AI_CODE_REVIEW.md).
 
 Опциональный assistant RAG использует тот же `DocumentRetriever`, стабильный
 filter и evidence validator, но остаётся внутри существующей ветки
@@ -854,6 +914,10 @@ API-ключ сохраняется только в локальном `.env`; A
   task/WORKING/SHORT_TERM и выключенный слой, sources/exact quotes/abstention,
   неизвестные citations и отсутствие commit при retrieval/generation/postflight/
   persistence error и cancellation;
+- `AiCodeReviewTest` проверяет CLI, временный Git PR, все типы changed files,
+  changed-line mapping, diff limit, prompt injection, scoped doc/code retrieval,
+  strict output/postflight, Markdown, comment upsert, redaction, fork gate и
+  полный synthetic PR → RAG → fake LLM → Markdown/JSON fixture;
 
 Основная команда: `./gradlew test`.
 

@@ -51,6 +51,15 @@ class DocumentRetriever(
             (source.startsWith("docs/") && (source.endsWith(".md") || source.endsWith(".pdf")))
     }
 
+    /** Code-review scope: production Kotlin and frontend TypeScript/TSX from the same validated index. */
+    suspend fun retrieveProductionCode(
+        question: String,
+        limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT,
+    ): DocumentRetrievalResult = retrieve(question, limit) { source ->
+        (source.startsWith("src/main/kotlin/") && source.endsWith(".kt")) ||
+            (source.startsWith("frontend/src/") && (source.endsWith(".ts") || source.endsWith(".tsx")))
+    }
+
     private suspend fun retrieve(
         question: String,
         limit: Int,

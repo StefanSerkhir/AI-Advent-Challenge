@@ -1,0 +1,117 @@
+name: AI code review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check trusted-run eligibility
+        id: eligibility
+        env:
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: |
+          if [[ "$IS_FORK" == "true" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Fork pull requests do not receive secrets or a write token; no OpenAI call was attempted." >> "$GITHUB_OUTPUT"
+          elif [[ "$HAS_OPENAI_KEY" != "true" ]]; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            echo "reason=OPENAI_API_KEY is unavailable; no OpenAI call was attempted." >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            echo "reason=Trusted same-repository pull request." >> "$GITHUB_OUTPUT"
+          fi
+
+      # actions/checkout v4.2.2
+      - name: Checkout exact trusted base commit
+        if: steps.eligibility.outputs.eligible == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify base checkout and head Git object
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$PR_BASE_SHA"
+          git cat-file -e "$PR_HEAD_SHA^{commit}"
+
+      # actions/setup-java v4.7.1
+      - name: Set up JDK 21
+        if: steps.eligibility.outputs.eligible == 'true'
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Run repository-aware GPT-5.6 review
+        id: ai_review
+        if: steps.eligibility.outputs.eligible == 'true'
+        continue-on-error: true
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'gpt-5.6-sol' }}
+        run: >-
+          ./gradlew runAiCodeReview
+          --args="--root . --base-sha $PR_BASE_SHA --head-sha $PR_HEAD_SHA --pr-number $PR_NUMBER
+          --event-file $GITHUB_EVENT_PATH --output build/ai-code-review --model $REVIEW_MODEL"
+
+      # actions/upload-artifact v4.6.2
+      - name: Preserve review artifacts
+        if: always() && steps.eligibility.outputs.eligible == 'true' && hashFiles('build/ai-code-review/review.md', 'build/ai-code-review/review.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ai-code-review-pr-${{ github.event.pull_request.number }}
+          path: |
+            build/ai-code-review/review.md
+            build/ai-code-review/review.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        env:
+          ELIGIBLE: ${{ steps.eligibility.outputs.eligible }}
+          ELIGIBILITY_REASON: ${{ steps.eligibility.outputs.reason }}
+          REVIEW_OUTCOME: ${{ steps.ai_review.outcome }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          {
+            echo "## AI code review"
+            echo
+            echo "- Commit: \`$PR_HEAD_SHA\`"
+            echo "- Eligibility: \`$ELIGIBLE\` — $ELIGIBILITY_REASON"
+            if [[ "$ELIGIBLE" == "true" ]]; then
+              echo "- Review step: \`${REVIEW_OUTCOME:-not-run}\`"
+              echo "- Markdown and JSON artifacts are uploaded whenever they were created, including publication failures."
+            else
+              echo "- Paid OpenAI calls: \`0\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail after preserving diagnostics
+        if: steps.eligibility.outputs.eligible == 'true' && steps.ai_review.outcome == 'failure'
+        run: exit 1
