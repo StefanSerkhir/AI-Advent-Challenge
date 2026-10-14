@@ -86,10 +86,10 @@ class McpGatewayTest {
     }
 
     @Test
-    fun `registry aggregates catalogs from three independent stdio processes`() = runBlocking {
+    fun `registry aggregates catalogs from four independent stdio processes`() = runBlocking {
         val directory = Files.createTempDirectory("mcp-registry-test")
         val processes = mutableListOf<Process>()
-        val registrations = listOf(OPERATIONS_SERVER_ID, KNOWLEDGE_SERVER_ID, WORKSPACE_SERVER_ID).map { serverId ->
+        val registrations = listOf(OPERATIONS_SERVER_ID, KNOWLEDGE_SERVER_ID, SUPPORT_SERVER_ID, WORKSPACE_SERVER_ID).map { serverId ->
             localMcpServerRegistration(
                 serverId,
                 directory.resolve("scheduler.json"),
@@ -105,7 +105,7 @@ class McpGatewayTest {
         try {
             gateway.start()
             val tools = gateway.listTools()
-            assertEquals(3, processes.map(Process::pid).distinct().size)
+            assertEquals(4, processes.map(Process::pid).distinct().size)
             assertTrue(processes.all(Process::isAlive))
             assertEquals(MCP_DEMO_TOOL_NAMES, tools.mapTo(mutableSetOf(), McpTool::name))
             assertEquals(MCP_TOOL_NAMES_BY_SERVER, tools.groupBy(McpTool::serverId)
@@ -129,6 +129,30 @@ class McpGatewayTest {
             assertEquals(KNOWLEDGE_SERVER_ID, tools.getValue(SUMMARIZE_TOOL).serverId)
             assertEquals(WORKSPACE_SERVER_ID, tools.getValue(SAVE_TO_FILE_TOOL).serverId)
             assertEquals(OPERATIONS_SERVER_ID, tools.getValue(TRACKER_GET_ISSUE_TOOL).serverId)
+            assertEquals(SUPPORT_SERVER_ID, tools.getValue(SUPPORT_GET_TICKET_CONTEXT_TOOL).serverId)
+
+            val support = gateway.callTool(SUPPORT_GET_TICKET_CONTEXT_TOOL, buildJsonObject {
+                put("ticketId", "TCK-1001")
+            })
+            assertFalse(support.isError)
+            val supportJson = Json.parseToJsonElement(support.content).jsonObject
+            assertEquals("TCK-1001", supportJson["ticket"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+            assertEquals("USR-1001", supportJson["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+            assertEquals("ACTIVE", supportJson["user"]?.jsonObject?.get("accountStatus")?.jsonPrimitive?.content)
+            assertEquals(true, supportJson["user"]?.jsonObject?.get("mfaEnabled")?.jsonPrimitive?.boolean)
+            assertContains(support.content, "AUTH_CLOCK_SKEW")
+            assertFalse(support.content.contains(directory.toAbsolutePath().toString()))
+
+            val missingTicket = gateway.callTool(SUPPORT_GET_TICKET_CONTEXT_TOOL, buildJsonObject {
+                put("ticketId", "TCK-9999")
+            })
+            assertTrue(missingTicket.isError)
+            assertContains(missingTicket.content, "не найден")
+            val invalidTicket = gateway.callTool(SUPPORT_GET_TICKET_CONTEXT_TOOL, buildJsonObject {
+                put("ticketId", "TCK-0")
+            })
+            assertTrue(invalidTicket.isError)
+            assertContains(invalidTicket.content, "неверный формат")
 
             val searchSchema = requireNotNull(tools[SEARCH_TOOL]).inputSchema
             assertEquals("https://json-schema.org/draft/2020-12/schema", searchSchema["${'$'}schema"]?.jsonPrimitive?.content)

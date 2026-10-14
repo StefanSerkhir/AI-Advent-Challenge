@@ -12,12 +12,12 @@ Fixture расположен только в test source set. Он исполь�
 
 Контрольный fixture-прогон текущего репозитория:
 
-- документов: `81`;
-- символов: `869586`;
-- слов: `79291`;
-- приблизительных страниц: `483.10`;
-- fixed chunks: `922`;
-- structured chunks: `1578`.
+- документов: `103`;
+- символов: `1125204`;
+- слов: `104157`;
+- приблизительных страниц: `625.11`;
+- fixed chunks: `1195`;
+- structured chunks: `1938`.
 
 Страница оценивается по явной стабильной формуле `characterCount / 1800`. Минимально допустимый corpus равен 20 таким страницам; меньший объём завершает запуск ошибкой до embeddings и создания output-каталога.
 
@@ -157,6 +157,16 @@ descriptor, embedding client, cosine search и общий relevance filter. Дл
 `docs/**/*.md|pdf`; production Kotlin и frontend chunks остаются в общем индексе,
 но в developer-help retrieval не участвуют. Поэтому отдельного индекса, cache или
 embedding pipeline для ассистента разработчика нет.
+
+Команда `/support <ticketId> <вопрос>` использует отдельную scoped-операцию того
+же `DocumentRetriever`: до cosine ranking допускаются только
+`docs/support/**/*.md|pdf`. README, общая документация, production Kotlin и
+frontend chunks не участвуют даже как кандидаты. Query ограниченно собирается из
+текущего вопроса и уже allowlist-проверенных диагностических полей MCP-тикета;
+после retrieval применяются общие candidate limit, similarity threshold и result
+limit. Нулевой результат — нормальный abstention без generation. Ticket context
+остаётся отдельным недоверенным блоком и не считается документным `[Sx]`-
+источником.
 
 Полный текст каждого chunk используется только при построении request-local RAG
 prompt и локальной postflight-проверке. Модель возвращает ответ с `[Sx]` и

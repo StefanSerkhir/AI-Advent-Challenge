@@ -20,13 +20,14 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.concurrent.TimeUnit
 
 internal const val MCP_DEMO_SERVER_NAME = "llm-workbench-mcp-orchestrator"
-internal const val MCP_DEMO_VERSION = "2.1.0"
+internal const val MCP_DEMO_VERSION = "2.2.0"
 internal const val DEFAULT_MCP_OUTPUT_DIRECTORY = ".llm-mcp-output"
 internal const val TRACKER_GET_ISSUE_TOOL = "tracker_get_issue"
 internal const val SEARCH_TOOL = "search"
 internal const val SUMMARIZE_TOOL = "summarize"
 internal const val SAVE_TO_FILE_TOOL = "save_to_file"
 const val GIT_CURRENT_BRANCH_TOOL = "git_current_branch"
+const val SUPPORT_GET_TICKET_CONTEXT_TOOL = "support_get_ticket_context"
 internal const val SCHEDULER_CREATE_TOOL = "scheduler_create"
 internal const val SCHEDULER_LIST_TOOL = "scheduler_list"
 internal const val SCHEDULER_CANCEL_TOOL = "scheduler_cancel"
@@ -34,6 +35,7 @@ internal const val SCHEDULER_SUMMARY_TOOL = "scheduler_get_summary"
 internal val MCP_DEMO_TOOL_NAMES = setOf(
     "ping", "echo", TRACKER_GET_ISSUE_TOOL,
     SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL,
+    SUPPORT_GET_TICKET_CONTEXT_TOOL,
     SCHEDULER_CREATE_TOOL, SCHEDULER_LIST_TOOL, SCHEDULER_CANCEL_TOOL, SCHEDULER_SUMMARY_TOOL,
 )
 internal val MCP_TOOL_NAMES_BY_SERVER = mapOf(
@@ -42,6 +44,7 @@ internal val MCP_TOOL_NAMES_BY_SERVER = mapOf(
         SCHEDULER_CREATE_TOOL, SCHEDULER_LIST_TOOL, SCHEDULER_CANCEL_TOOL, SCHEDULER_SUMMARY_TOOL,
     ),
     KNOWLEDGE_SERVER_ID to setOf(SEARCH_TOOL, SUMMARIZE_TOOL),
+    SUPPORT_SERVER_ID to setOf(SUPPORT_GET_TICKET_CONTEXT_TOOL),
     WORKSPACE_SERVER_ID to setOf(SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL),
 )
 
@@ -62,6 +65,13 @@ public fun main(): Unit = runBlocking {
         ?.takeIf(String::isNotBlank)
         ?.let(Path::of)
         ?: Path.of("").toAbsolutePath().normalize()
+    val supportData = if (serverId == SUPPORT_SERVER_ID) {
+        System.getenv("LLM_SUPPORT_DATA_DIR")
+            ?.takeIf(String::isNotBlank)
+            ?.let(Path::of)
+            ?.let(SupportDataRepository::fromDirectory)
+            ?: SupportDataRepository.fromResources()
+    } else null
     val scheduler = if (serverId == OPERATIONS_SERVER_ID) {
         val stateFile = System.getenv("LLM_SCHEDULER_STATE_FILE")
             ?.takeIf(String::isNotBlank)
@@ -72,7 +82,7 @@ public fun main(): Unit = runBlocking {
             LocalScheduledTaskExecutor(LocalDemoTrackerSource()),
         ).also { it.start() }
     } else null
-    val server = createDemoServer(serverId, scheduler, outputDirectory, repositoryRoot)
+    val server = createDemoServer(serverId, scheduler, outputDirectory, repositoryRoot, supportData = supportData)
     val transport = StdioServerTransport(
         input = System.`in`.asSource().buffered(),
         output = System.out.asSink().buffered(),
@@ -95,6 +105,7 @@ internal fun createDemoServer(
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
     gitCommandRunner: GitCommandRunner = ProcessBuilderGitCommandRunner,
+    supportData: SupportDataRepository? = null,
 ): Server = Server(
     serverInfo = Implementation(
         name = "$MCP_DEMO_SERVER_NAME-$serverId",
@@ -106,6 +117,37 @@ internal fun createDemoServer(
         ),
     ),
 ) {
+    if (serverId == SUPPORT_SERVER_ID) {
+        val repository = supportData ?: SupportDataRepository.fromResources()
+        addTool(
+            name = SUPPORT_GET_TICKET_CONTEXT_TOOL,
+            description = "Returns one validated support ticket and the allowlisted fields of its related synthetic user. Read-only.",
+            inputSchema = ToolSchema(
+                schema = JSON_SCHEMA_DIALECT,
+                properties = buildJsonObject {
+                    stringSchema(
+                        "ticketId",
+                        "Required support ticket identifier, for example TCK-1001.",
+                        minLength = 5,
+                        maxLength = 64,
+                        pattern = SUPPORT_TICKET_ID_REGEX.pattern,
+                    )
+                },
+                required = listOf("ticketId"),
+            ),
+        ) { request ->
+            safeToolCall {
+                val args = request.arguments ?: buildJsonObject {}
+                requireOnlyKeys(args, setOf("ticketId"))
+                val ticketId = args.requiredUnmodifiedString("ticketId", 64)
+                require(SUPPORT_TICKET_ID_REGEX.matches(ticketId)) { "ticketId имеет неверный формат." }
+                val context = repository.getTicketContext(ticketId)
+                    ?: throw IllegalArgumentException("Тикет поддержки не найден.")
+                structuredResult(context.toSafeJson())
+            }
+        }
+    }
+
     if (serverId == OPERATIONS_SERVER_ID) {
         addTool(
             name = "ping",

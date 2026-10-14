@@ -458,6 +458,47 @@ test("developer help shows repository evidence and current git branch through MC
   expect(state.assistantMemory.layers.find((layer) => layer.layer === "SHORT_TERM")?.count).toBe(0);
 });
 
+test("support assistant grounds a ticket answer in MCP context and support documentation", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByTestId("support-assistant-hint")).toContainText(
+    "/support TCK-1001 Почему не работает авторизация?",
+  );
+
+  await send(page, "/support");
+  await done(page);
+  await expect(page.getByTestId("exchange").last()).toContainText("Ассистент поддержки");
+
+  await send(page, "/support TCK-1001 Почему не работает авторизация?");
+  await done(page);
+  const exchange = page.getByTestId("exchange").last();
+  const card = exchange.getByTestId("response-card");
+  await expect(card).toContainText("АССИСТЕНТ ПОДДЕРЖКИ");
+  await expect(card).toContainText("TCK-1001");
+  await expect(card).toContainText("AUTH_CLOCK_SKEW");
+  await expect(card).toContainText("742");
+  await expect(card).toContainText("MFA включён");
+  await expect(card.getByTestId("mcp-diagnostics")).toContainText(
+    "support / support_get_ticket_context",
+  );
+  await expect(card.getByTestId("rag-evidence")).toContainText("проверено");
+  await expect(card.getByTestId("rag-evidence")).toContainText("docs/support/");
+  await expect(card.getByTestId("rag-sources")).toContainText("Документация поддержки");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const output = state.exchanges.at(-1)!.outputs[0];
+  expect(output.ragDiagnostics?.pipeline).toBe("support_assistant");
+  expect(output.ragDiagnostics?.evidence.status).toBe("verified");
+  expect(output.mcpCalls).toHaveLength(1);
+  expect(output.mcpCalls[0]).toMatchObject({
+    serverId: "support",
+    toolName: "support_get_ticket_context",
+    status: "success",
+  });
+  expect(output.ragDiagnostics?.sources.every((source) => source.source.startsWith("docs/support/"))).toBe(true);
+  expect(state.history.unrestricted).toBe(0);
+  expect(state.assistantMemory.layers.find((layer) => layer.layer === "SHORT_TERM")?.count).toBe(0);
+});
+
 test("simple agent composes search summarize and save_to_file through MCP", async ({page}) => {
   await setMode(page, "unrestricted");
   await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");

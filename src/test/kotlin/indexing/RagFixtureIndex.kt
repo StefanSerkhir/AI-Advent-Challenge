@@ -16,6 +16,10 @@ const val RAG_FIXTURE_BACKUP_TEXT =
 const val RAG_FIXTURE_INDEXING_TEXT =
     "Structure-aware индекс сохраняет source, title, section и chunk_id; embedding descriptor фиксирует provider, model и dimensions. " +
         "Vectors и полный chunk text не попадают в REST/SSE. Threshold применяется после candidate retrieval, а неизвестная citation или неточная quote отклоняется evidence postflight."
+const val RAG_FIXTURE_SUPPORT_TEXT =
+    "Код AUTH_CLOCK_SKEW означает существенное расхождение системного времени устройства с доверенным временем сервиса. " +
+        "Включите автоматические дату, время и часовой пояс, синхронизируйте устройство, перезапустите клиент и выполните новый вход с новым MFA-кодом. " +
+        "Если ошибка сохраняется после синхронизации, эскалируйте тикет с кодом ошибки, версией клиента и временем безопасного диагностического события."
 
 suspend fun createRagFixtureIndex(root: Path): Path {
     val definitions = listOf(
@@ -83,6 +87,16 @@ suspend fun createRagFixtureIndex(root: Path): Path {
             "docs/fixture/DOCUMENT_INDEXING.md",
             "Structure-aware index and evidence",
             RAG_FIXTURE_INDEXING_TEXT,
+        ),
+        Triple(
+            "docs/support/FAQ.md",
+            "Ошибка AUTH_CLOCK_SKEW",
+            RAG_FIXTURE_SUPPORT_TEXT,
+        ),
+        Triple(
+            "docs/support/AUTHORIZATION.md",
+            "Проверка времени устройства",
+            "Существенное расхождение системного времени нарушает срок действия MFA-кода и временных подписей авторизации. После исправления времени используйте новый MFA-код.",
         ),
     )
     val fake = DeterministicFakeEmbeddingClient()

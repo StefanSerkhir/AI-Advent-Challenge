@@ -43,7 +43,7 @@ flowchart LR
 | `src/main/kotlin/config` | Чтение и атомарное сохранение локального `.env` |
 | `src/main/kotlin/tokens` | Оценка токенов, профили окон/цен, подготовка контекста, overflow и агрегаты |
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
-| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `WorkbenchController` и UI-neutral state |
+| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `/support`-ассистент поддержки, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
@@ -154,11 +154,11 @@ Base64 credentials, prompt и ответ видимы сетевому набл�
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же registry-backed
 `LocalMcpGateway`, что и web runtime. Явные регистрации имеют безопасные стабильные
-ID и инъецируемые process factories. Для `operations`, `knowledge` и `workspace`
+ID и инъецируемые process factories. Для `operations`, `knowledge`, `support` и `workspace`
 шлюз создаёт отдельные JVM-процессы `McpDemoServerKt`, MCP clients, stdio transports,
 mutex и caches каталога. Каждый процесс объявляет только свой набор:
 `operations` — `ping`, `echo`, Tracker и scheduler; `knowledge` — `search` и
-`summarize`; `workspace` — `git_current_branch` и `save_to_file`. Только `operations` создаёт
+`summarize`; `support` — `support_get_ticket_context`; `workspace` — `git_current_branch` и `save_to_file`. Только `operations` создаёт
 `SchedulerService`. Stdout каждого процесса зарезервирован для JSON-RPC.
 
 Шлюз получает настоящий `tools/list` каждой сессии, добавляет каждому `McpTool`
@@ -177,7 +177,9 @@ CLI выполняет handshake, проверяет объединённый к
 прежние Tracker и scheduler lifecycle-вызовы. Demo использует один временный root
 для scheduler store и output-каталога, закрывает client/transport/process и удаляет
 root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
-или LLM и не требуют ключей. Версия набора MCP demo servers — `2.1.0`.
+или LLM и не требуют ключей. Support server строго загружает два JSON-ресурса
+формата v1, валидирует все записи/связи до использования и отдаёт только
+allowlist-поля тикета и пользователя. Версия набора MCP demo servers — `2.2.0`.
 
 `search` работает только с встроенным каталогом стабильных `id`, `title` и
 `content`. `summarize` детерминированно ограничивает число обработанных записей и
@@ -526,6 +528,20 @@ corpus до `README.md` и `docs/**/*.md|pdf`. Затем через объед�
 локализуется в MCP-диагностике и не мешает ответу по документам; ошибка retrieval,
 generation, validation или cancellation также не создаёт частичного commit.
 
+В той же точке контроллер независимо распознаёт только `/support` и
+`/support <ticketId> <вопрос>`. Пустая команда возвращает локальную памятку.
+Вопросная форма для OpenAI запускает `SupportAssistantRunner`: он находит
+`support_get_ticket_context` в объединённом `tools/list`, выполняет ровно один
+`tools/call`, повторно allowlist-валидирует bounded JSON, строит ограниченный query
+из вопроса и безопасных диагностических полей, а затем вызывает
+`DocumentRetriever.retrieveSupportDocumentation`. Поиск выполняется только среди
+`docs/support/**/*.md|pdf`, после чего применяются общие candidate/threshold/top-K
+и evidence postflight. Ticket JSON находится в отдельном недоверенном блоке и не
+может быть источником `[Sx]`. Ноль релевантных chunks и неизвестный тикет дают
+нормальный abstention без generation. DeepSeek/Ollama завершаются локальным
+сообщением до LLM/MCP; прямого чтения JSON из controller нет. Ветка не пишет
+history, memory layers, профиль, инварианты или task FSM.
+
 Все команды и worker transitions синхронизированы на контроллере. Одновременно разрешена одна операция. Настройки и мутации состояния во время неё отклоняются. `WorkbenchState` — серверный источник истины; React получает первоначальный снимок через REST, а последующие полные снимки через SSE.
 
 При `UNRESTRICTED + MEMORY_LAYERS` контроллер направляет запрос прямо в `AssistantAgent`. Любой другой вариант `UNRESTRICTED` идёт через `PromptRunner` → `LlmAgent` → `ContextManager`. Эта развилка — главная граница, предотвращающая смешивание memory layers со старыми хранилищами.
@@ -829,7 +845,8 @@ counts/threshold, source IDs, verified quotes и evidence status. WORKING под
 как память текущей задачи и предоставляет явные типы ввода «Уточнение»,
 «Ограничение» и «Термин» поверх существующего memory CRUD.
 
-В composer режима `unrestricted` постоянно видна короткая подсказка о `/help`.
+В composer режима `unrestricted` постоянно видны короткие подсказки о `/help` и
+`/support TCK-1001 Почему не работает авторизация?`.
 Ответ ассистента разработчика отображается обычной карточкой: RAG-блок подписан
 «Документация репозитория», а ниже используются существующие MCP/evidence/sources
 компоненты без отдельного клиентского состояния.
@@ -899,6 +916,9 @@ API-ключ сохраняется только в локальном `.env`; A
   обратную совместимость Tracker/scheduler/ping/echo;
 - `DeveloperHelpRunnerTest` проверяет строгий parser, overview без LLM, doc-only
   retrieval, discovered MCP owner, evidence, ошибки и cancellation без commit;
+- `SupportAssistantRunnerTest` проверяет точный parser, один discovered MCP call,
+  support-only retrieval, ticket prompt injection, evidence, abstention и ошибки
+  MCP/retrieval/generation/postflight без скрытого commit;
 - `WorkbenchApiTest` проверяет маршруты, DTO, конфликты, безопасность и состояния;
 - тесты `tokens` фиксируют estimation, budgets, overflow и pricing math.
 - тесты `indexing` проверяют deterministic corpus/exclusions/threshold, Unicode и
@@ -932,7 +952,9 @@ offline/reconnect, идемпотентный retry, отмену, Markdown, у�
 порядок `knowledge/search` → `knowledge/summarize` → `workspace/save_to_file`
 в существующей MCP-диагностике. Отдельный сценарий `/help` проверяет подсказку,
 реальные fixture retrieval/MCP, branch, источники и отсутствие записи в историю
-или `SHORT_TERM`.
+или `SHORT_TERM`. Сценарий `/support` дополнительно проверяет TCK-1001, provenance
+`support/support_get_ticket_context`, verified quotes, support-only sources и ту
+же изоляцию history/memory.
 Fixture использует временные persistence/output paths и фиктивные ключи; внешние
 платные API не вызываются. Для pipeline используется точный prompt «Найди локальные
 сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в

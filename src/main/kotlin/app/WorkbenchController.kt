@@ -554,6 +554,11 @@ class WorkbenchController(
         } else {
             null
         }
+        val supportAssistantCommand = if (settings.responseMode == ResponseMode.UNRESTRICTED) {
+            parseSupportAssistantCommand(normalizedPrompt)
+        } else {
+            null
+        }
         if (settings.responseMode == ResponseMode.UNRESTRICTED &&
             settings.contextStrategy == ContextStrategy.MEMORY_LAYERS &&
             taskStateManager.state()?.paused == true) {
@@ -569,9 +574,12 @@ class WorkbenchController(
             settings.llmKind
         }
         val apiKey = apiKeys[requestKind]
+        val supportUsesClient = supportAssistantCommand is SupportAssistantCommand.Question &&
+            requestKind == LlmKind.OPENAI
         if (requestKind.requiresApiKey && apiKey == null &&
             settings.responseMode != ResponseMode.TOKENS_CONTEXT &&
-            developerHelpCommand !is DeveloperHelpCommand.Overview) {
+            (supportAssistantCommand?.let { supportUsesClient }
+                ?: (developerHelpCommand !is DeveloperHelpCommand.Overview))) {
             publish {
                 it.copy(
                     notice = UiNotice(
@@ -588,6 +596,8 @@ class WorkbenchController(
             ResponseMode.COMPARE -> 2
             ResponseMode.CONTROLLED -> 1
             ResponseMode.UNRESTRICTED -> when {
+                supportAssistantCommand is SupportAssistantCommand.Question && requestKind == LlmKind.OPENAI -> 3
+                supportAssistantCommand != null -> 1
                 developerHelpCommand is DeveloperHelpCommand.Question -> 3
                 developerHelpCommand is DeveloperHelpCommand.Overview -> 1
                 settings.contextStrategy == ContextStrategy.MEMORY_LAYERS && settings.assistantRagEnabled -> 2
@@ -631,12 +641,77 @@ class WorkbenchController(
             try {
                 ensureActive()
                 if (settings.responseMode !in setOf(ResponseMode.MODEL_COMPARISON, ResponseMode.TOKENS_CONTEXT) &&
-                    developerHelpCommand !is DeveloperHelpCommand.Overview) {
+                    developerHelpCommand !is DeveloperHelpCommand.Overview &&
+                    !(supportAssistantCommand != null && !supportUsesClient)) {
                     requestClient.set(clientFactory(requestKind, apiKey, settings.model))
                 }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
-                        if (settings.responseMode == ResponseMode.UNRESTRICTED && developerHelpCommand != null) {
+                        if (settings.responseMode == ResponseMode.UNRESTRICTED && supportAssistantCommand != null) {
+                            var preparedMetrics: TurnTokenMetrics? = null
+                            val support = SupportAssistantRunner(
+                                clientProvider = {
+                                    requestClient.get() ?: error("Клиент запроса не инициализирован")
+                                },
+                                retrieverProvider = {
+                                    documentRetrieverProvider?.invoke(apiKeys.toMap())
+                                        ?: error(
+                                            "RAG retrieval не настроен. Постройте локальный индекс командой: " +
+                                                org.example.indexing.DOCUMENT_INDEX_BUILD_COMMAND,
+                                        )
+                                },
+                                mcpGateway = mcpGateway,
+                                containsSensitiveText = { text ->
+                                    apiKeys.values.any { key -> key.isNotEmpty() && key in text }
+                                },
+                                errorMessage = { userFacingError(it, apiKeys.values) },
+                                onProgress = ::reportProgress,
+                                onDelta = { content, metrics ->
+                                    preparedMetrics = metrics
+                                    publishStreamingOutput(ExperimentOutputDelta(
+                                        "support-assistant",
+                                        "АССИСТЕНТ ПОДДЕРЖКИ",
+                                        content,
+                                        tokenMetrics = preparedMetrics,
+                                    ).asOutput())
+                                },
+                            ).run(
+                                command = supportAssistantCommand,
+                                originalPrompt = normalizedPrompt,
+                                model = settings.model,
+                                maxTokens = settings.maxTokens,
+                                overflowPolicy = settings.contextOverflowPolicy,
+                                ragCandidateLimit = settings.ragCandidateLimit,
+                                ragResultLimit = settings.ragResultLimit,
+                                ragMinSimilarity = settings.ragMinSimilarity,
+                                generationProvider = settings.llmKind.name.lowercase(),
+                                providerSupported = settings.llmKind == LlmKind.OPENAI,
+                            )
+                            addOutput(ExperimentOutput(
+                                id = "support-assistant",
+                                title = "АССИСТЕНТ ПОДДЕРЖКИ",
+                                completion = support.completion,
+                                error = support.error,
+                                elapsedMillis = support.elapsedMillis,
+                                estimatedCostUsd = support.tokenMetrics?.turnCostUsd?.toDouble(),
+                                tokenMetrics = support.tokenMetrics,
+                                mcpCalls = support.mcpCalls,
+                                ragDiagnostics = support.ragDiagnostics,
+                            ))
+                            val summary = support.completion ?: CompletionResult(
+                                support.error ?: "Ассистент поддержки не сформировал ответ.",
+                                "error",
+                                usage = null,
+                                model = settings.model,
+                            )
+                            RequestResult.Responses(listOf(LabeledResponse(
+                                variant = ResponseVariant.UNRESTRICTED,
+                                completion = summary,
+                                heading = "АССИСТЕНТ ПОДДЕРЖКИ",
+                                tokenMetrics = support.tokenMetrics,
+                                mcpCalls = support.mcpCalls,
+                            )))
+                        } else if (settings.responseMode == ResponseMode.UNRESTRICTED && developerHelpCommand != null) {
                             var preparedMetrics: TurnTokenMetrics? = null
                             val help = DeveloperHelpRunner(
                                 clientProvider = {

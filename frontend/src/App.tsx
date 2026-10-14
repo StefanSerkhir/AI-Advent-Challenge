@@ -399,6 +399,9 @@ export default function App() {
           <p className="composer-footnote">
             {s.settings.mode === "unrestricted" && <span data-testid="developer-help-hint">
               <code>/help</code> — вопросы по документации репозитория и текущей Git-ветке. {" "}
+              <span data-testid="support-assistant-hint">
+                <code>/support TCK-1001 Почему не работает авторизация?</code> — помощь по тикету. {" "}
+              </span>
             </span>}
             Ответы могут содержать ошибки. Проверяйте важную информацию.
           </p>

@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "tickets": [
+    {
+      "id": "TCK-1001",
+      "userId": "USR-1001",
+      "status": "OPEN",
+      "category": "AUTHORIZATION",
+      "subject": "Не удаётся войти после подтверждения MFA",
+      "description": "Клиент отклоняет вход после корректного второго фактора.",
+      "errorCode": "AUTH_CLOCK_SKEW",
+      "channel": "WEB",
+      "productVersion": "3.8.1",
+      "createdAt": "2026-10-12T09:15:00Z",
+      "recentEvents": [
+        {
+          "type": "AUTH_DIAGNOSTIC",
+          "occurredAt": "2026-10-12T09:18:24Z",
+          "details": "Обнаружено расхождение системного времени устройства на 742 секунды."
+        }
+      ]
+    }
+  ]
+}

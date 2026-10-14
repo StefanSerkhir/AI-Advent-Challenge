@@ -51,6 +51,19 @@ class DocumentRetriever(
             (source.startsWith("docs/") && (source.endsWith(".md") || source.endsWith(".pdf")))
     }
 
+    /** Support-assistant scope: only product support Markdown/PDF, never repository code or general docs. */
+    suspend fun retrieveSupportDocumentation(
+        question: String,
+        limit: Int = DEFAULT_RAG_RETRIEVAL_LIMIT,
+    ): DocumentRetrievalResult = retrieve(
+        question,
+        limit,
+        emptyScope = "docs/support/**/*.md|pdf",
+        sourceFilter = { source ->
+            source.startsWith("docs/support/") && (source.endsWith(".md") || source.endsWith(".pdf"))
+        },
+    )
+
     /** Code-review scope: production Kotlin and frontend TypeScript/TSX from the same validated index. */
     suspend fun retrieveProductionCode(
         question: String,
@@ -63,6 +76,7 @@ class DocumentRetriever(
     private suspend fun retrieve(
         question: String,
         limit: Int,
+        emptyScope: String = "README.md или docs/**/*.md|pdf",
         sourceFilter: ((String) -> Boolean)?,
     ): DocumentRetrievalResult {
         require(question.isNotBlank()) { "Вопрос для RAG не может быть пустым" }
@@ -130,7 +144,7 @@ class DocumentRetriever(
             index.copy(chunks = index.chunks.filter { sourceFilter(it.source) }).also { scoped ->
                 if (scoped.chunks.isEmpty()) {
                     throw DocumentRetrievalException(
-                        "Локальный RAG-индекс не содержит README.md или docs/**/*.md|pdf. " +
+                        "Локальный RAG-индекс не содержит $emptyScope. " +
                             "Перестройте индекс командой: $DOCUMENT_INDEX_BUILD_COMMAND",
                     )
                 }

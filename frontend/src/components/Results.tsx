@@ -237,6 +237,8 @@ function ResponseCard({ output }: { output: Output }) {
               ? "Контекстный RAG-чат"
               : output.ragDiagnostics.pipeline === "developer_help"
                 ? "Документация репозитория"
+              : output.ragDiagnostics.pipeline === "support_assistant"
+                ? "Документация поддержки"
               : "Обычный pipeline"}</strong>
           <Badge size="xs" variant="light" color={output.ragDiagnostics.applied ? "teal" : "gray"}>
             {output.ragDiagnostics.candidateCount} → {output.ragDiagnostics.filteredCount}

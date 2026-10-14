@@ -100,12 +100,13 @@ npm --prefix frontend run record:private-llm-service-demo
 ## Локальный пример MCP
 
 В проекте есть воспроизводимая локальная orchestration Model Context Protocol,
-которая не требует API-ключей или внешних сервисов. Registry содержит три
+которая не требует API-ключей или внешних сервисов. Registry содержит четыре
 стабильные регистрации, и для каждой официальный Kotlin MCP SDK создаёт отдельные
 client, stdio transport, JVM-процесс, mutex и cache `tools/list`:
 
 - `operations`: `ping`, `echo`, `tracker_get_issue`, `scheduler_*`;
 - `knowledge`: `search`, `summarize`;
+- `support`: `support_get_ticket_context`;
 - `workspace`: `git_current_branch`, `save_to_file`.
 
 Lifecycle-aware `LocalMcpGateway` объединяет реальные каталоги в детерминированном
@@ -119,7 +120,9 @@ Lifecycle-aware `LocalMcpGateway` объединяет реальные ката
 записывает UTF-8 в специально настроенный output-каталог. Ни один из этих четырёх
 инструментов не вызывает сеть
 или LLM. Tracker по-прежнему читает задачу `DEMO-101` из локального источника.
-Версия набора MCP demo servers — `2.1.0`.
+`support_get_ticket_context` строго валидирует `TCK-[1-9][0-9]*`, читает
+версионированные синтетические JSON-ресурсы пользователей/тикетов и возвращает
+только allowlist-поля связанной пары. Версия набора MCP demo servers — `2.2.0`.
 
 Gradle Wrapper автоматически загрузит зависимости, соберёт код и запустит пример:
 
@@ -127,7 +130,7 @@ Gradle Wrapper автоматически загрузит зависимост�
 ./gradlew runMcpDemo
 ```
 
-Успешный запуск содержит строки `MCP connection established`, provenance одиннадцати
+Успешный запуск содержит строки `MCP connection established`, provenance двенадцати
 инструментов и выполняет настоящие межсерверные `tools/call`: результат
 `knowledge/search` становится входом `knowledge/summarize`, его `summary` и
 `sourceIds` передаются в `workspace/save_to_file`, после
@@ -206,6 +209,38 @@ npm --prefix frontend run record:developer-assistant-demo
 
 Подробный контракт, ограничения и сценарий ролика описаны в
 [инструкции ассистента разработчика](docs/DEVELOPER_ASSISTANT_DEMO.md).
+
+## Ассистент поддержки
+
+Тот же режим **«Простой агент»** (`unrestricted`) распознаёт точные команды
+`/support` и `/support <ticketId> <вопрос>`. Первая показывает локальную памятку.
+Вопросная форма доступна только с OpenAI и выполняет изолированный
+`SupportAssistantRunner`: ровно один настоящий MCP-вызов
+`support / support_get_ticket_context`, затем retrieval только по
+`docs/support/**/*.md|pdf`, общий similarity filter, generation и локальную
+проверку citations/дословных цитат. История, три слоя памяти, профиль, инварианты
+и FSM задачи не изменяются.
+
+Основной сценарий:
+
+> /support TCK-1001 Почему не работает авторизация?
+
+Синтетический тикет содержит `AUTH_CLOCK_SKEW`, активный аккаунт, включённый MFA,
+версию клиента и безопасное событие о расхождении времени. MCP-данные считаются
+недоверенными и не получают метки `[Sx]`; эти метки относятся только к support-
+документам. При неизвестном тикете или отсутствии релевантной документации
+pipeline завершается безопасным отказом без generation. DeepSeek и Ollama
+получают локальное объяснение без запуска модели и без прямого чтения JSON.
+
+Безопасная fixture-демонстрация и запись видео не используют сеть или платный API:
+
+```bash
+./gradlew runWebFixture -PwebPort=18080
+npm --prefix frontend run record:support-assistant-demo
+```
+
+Подробный сценарий, архитектура и границы описаны в
+[документации ассистента поддержки](docs/SUPPORT_ASSISTANT_DEMO.md).
 
 ## Автоматическое AI-ревью pull request
 
@@ -319,7 +354,9 @@ WEB_PORT=8090 ./gradlew runWeb
    каталог MCP и при необходимости вызывает Tracker или локальную композицию
    `search` → `summarize` → `save_to_file` через stdio. Здесь же точные команды
    `/help` и `/help <вопрос>` дают памятку либо документированный ответ о репозитории
-   с проверенными источниками и текущей Git-веткой из MCP. Стратегия «Слои памяти» подключает
+   с проверенными источниками и текущей Git-веткой из MCP. Точные `/support` и
+   `/support <ticketId> <вопрос>` добавляют request-local поддержку по тикету через
+   один MCP-вызов и RAG только по `docs/support/`. Стратегия «Слои памяти» подключает
    одновременно краткосрочную, рабочую и долговременную память, а отдельная
    машина состояния фиксирует цель и ход текущей задачи. Отдельные инварианты
    задают обязательные архитектурные, технические, стековые и бизнес-правила,
@@ -481,9 +518,9 @@ source, title, section, ordinal, offsets и content hash документа.
 ./gradlew runDocumentIndexFixture
 ```
 
-Контрольный прогон текущего corpus содержит `81` документ, `869586` символов и
-`79291` слово — около `483.10` страницы по формуле `characterCount / 1800`. Он
-создаёт `922` fixed и `1578` structured chunks. Fake-метрики проверяют
+Контрольный прогон текущего corpus содержит `103` документа, `1125204` символов и
+`104157` слов — около `625.11` страницы по формуле `characterCount / 1800`. Он
+создаёт `1195` fixed и `1938` structured chunks. Fake-метрики проверяют
 воспроизводимость ranking/evaluation, но не являются оценкой качества OpenAI.
 
 Production CLI поддерживает OpenAI и полностью локальные Ollama embeddings.

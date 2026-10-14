@@ -10,6 +10,7 @@ import kotlinx.serialization.json.*
 import org.example.agent.*
 import org.example.app.AppSettings
 import org.example.app.DEVELOPER_HELP_SYSTEM_PROMPT
+import org.example.app.SUPPORT_ASSISTANT_SYSTEM_PROMPT
 import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.indexing.*
@@ -68,6 +69,8 @@ fun main() {
                                 delegate.embed(listOf(RAG_FIXTURE_RELEASE_TEXT)).single()
                             } else if ("Как запустить production web-приложение?" in text) {
                                 delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
+                            } else if ("AUTH_CLOCK_SKEW" in text || "авторизац" in text.lowercase()) {
+                                delegate.embed(listOf(RAG_FIXTURE_SUPPORT_TEXT)).single()
                             } else if ("Как устроен проект и какая сейчас Git-ветка?" in text ||
                                 "Объясни архитектуру проекта, как запустить web-интерфейс" in text) {
                                 delegate.embed(listOf(RAG_FIXTURE_RUN_WEB_TEXT)).single()
@@ -243,6 +246,19 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                         "Текущая Git-ветка: `$branch`.",
                 )
             }
+            SUPPORT_ASSISTANT_SYSTEM_PROMPT in assistantProfile && "SUPPORT TICKET MCP DATA" in prompt ->
+                groundedAssistantRagFixtureAnswer(
+                    prompt,
+                    """Для тикета TCK-1001 наиболее вероятна причина, подтверждённая кодом AUTH_CLOCK_SKEW: системное время устройства расходится с доверенным временем сервиса [S1].
+
+Что видно в тикете
+Тикет TCK-1001 открыт для USR-1001; аккаунт ACTIVE, MFA включён, версия клиента 3.8.1. Последнее событие сообщает о расхождении времени на 742 секунды.
+
+Что сделать
+1. Включить автоматические дату, время и часовой пояс и синхронизировать устройство [S1].
+2. Перезапустить клиент и выполнить новый вход с новым MFA-кодом [S1].
+3. Если ошибка сохранится, эскалировать тикет с кодом ошибки, версией клиента и временем события [S1].""",
+                )
             "retrieval-augmented generation" in assistantProfile && "RETRIEVED DOCUMENT EVIDENCE" in prompt ->
                 groundedAssistantRagFixtureAnswer(
                     prompt,

@@ -17,6 +17,7 @@
     "record:local-llm-optimization-demo": "node scripts/record-local-llm-optimization-demo.mjs",
     "record:rag-memory-demo": "node scripts/record-rag-memory-demo.mjs",
     "record:developer-assistant-demo": "node scripts/record-developer-assistant-demo.mjs",
+    "record:support-assistant-demo": "node scripts/record-support-assistant-demo.mjs",
     "record:ai-code-review-demo": "node scripts/record-ai-code-review-demo.mjs",
     "verify:rag-memory-real": "node scripts/verify-rag-memory-real.mjs"
   },

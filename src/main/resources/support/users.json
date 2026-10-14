@@ -1,0 +1,13 @@
+{
+  "formatVersion": 1,
+  "users": [
+    {
+      "id": "USR-1001",
+      "plan": "PRO",
+      "locale": "ru-RU",
+      "region": "RU",
+      "accountStatus": "ACTIVE",
+      "mfaEnabled": true
+    }
+  ]
+}

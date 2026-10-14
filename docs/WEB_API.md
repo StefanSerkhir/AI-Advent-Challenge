@@ -18,7 +18,7 @@ loopback `http://127.0.0.1:11434/v1/chat/completions`.
 arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
 без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
-Для output RAG-ветки, assistant RAG-чата или `/help <вопрос>` `ragDiagnostics` имеет явную форму
+Для output RAG-ветки, assistant RAG-чата, `/help <вопрос>` или `/support <ticketId> <вопрос>` `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
 strategy, embeddingProvider, embeddingModel, manifestHash,
@@ -31,7 +31,8 @@ abstained, abstentionReason, evidence }`,
 Статус равен `not_checked`, `verified` или `not_applicable`. Короткие quotes —
 единственные фрагменты chunk text по wire: backend проверил их точное вхождение
 после нормализации пробелов и сам присоединил metadata из retrieval result.
-`pipeline` равен `raw`, `enhanced`, `assistant_contextual` или `developer_help`; `rewrite` содержит
+`pipeline` равен `raw`, `enhanced`, `assistant_contextual`, `developer_help` или
+`support_assistant`; `rewrite` содержит
 только elapsed, usage и стоимость служебного вызова.
 Пары `embeddingProvider/embeddingModel` и `generationProvider/generationModel`
 позволяют проверить полностью локальную цепочку `ollama/qwen3-embedding:0.6b` →
@@ -200,6 +201,20 @@ MCP-диагностикой, если документации достаточ
 несовместимый индекс не запускает generation и возвращает безопасное сообщение с
 `./gradlew buildLocalDocumentIndex`. Parser регистрозависим: `/helpful`, `/Help`
 и `/help` не в начале prompt обрабатываются обычным агентом.
+
+Точные `/support` и `/support <ticketId> <вопрос>` используют тот же
+`POST /api/operations`, `StateDto` и SSE. Памятка локальна. Вопросная форма
+доступна только для OpenAI: controller не читает support JSON и вызывает ровно
+один discovered MCP tool `support_get_ticket_context`, после чего retrieval
+ограничен `docs/support/**/*.md|pdf`. Успешный output имеет заголовок
+`АССИСТЕНТ ПОДДЕРЖКИ`, один `mcpCalls[]`,
+`ragDiagnostics.pipeline=support_assistant` и verified evidence. Ticket context
+не является `[Sx]`-источником. Неизвестный/некорректный тикет и ноль релевантных
+chunks завершаются abstention без generation. Ошибка MCP/retrieval/postflight,
+отмена или незавершённый stream не меняют history, memory, профиль, инварианты
+или FSM. Для DeepSeek/Ollama ответ формируется локально без LLM/MCP и без прямого
+чтения JSON. Parser регистрозависим: `/supportive`, `/Support` и `/support` не в
+начале prompt остаются обычными сообщениями.
 
 MCP `workspace/git_current_branch` принимает строго `{}`. Успешный result содержит
 только `{ available, branch, detached, shortCommit? }`; branch/shortCommit ограничены и не

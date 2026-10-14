@@ -99,6 +99,18 @@ private suspend fun runMcpDemoClient(): Int {
         }
         println("tools/call $WORKSPACE_SERVER_ID/$SAVE_TO_FILE_TOOL created pipeline-summary.md with exact summary content")
 
+        stage = "reading support ticket context"
+        val support = gateway.callTool(SUPPORT_GET_TICKET_CONTEXT_TOOL, buildJsonObject {
+            put("ticketId", "TCK-1001")
+        })
+        check(!support.isError) { "support_get_ticket_context returned an error: ${support.content}" }
+        val supportJson = Json.parseToJsonElement(support.content).jsonObject
+        check(supportJson["ticket"]?.jsonObject?.get("id")?.jsonPrimitive?.content == "TCK-1001" &&
+            supportJson["user"]?.jsonObject?.get("id")?.jsonPrimitive?.content == "USR-1001") {
+            "support_get_ticket_context returned unexpected data"
+        }
+        println("tools/call $SUPPORT_SERVER_ID/$SUPPORT_GET_TICKET_CONTEXT_TOOL returned validated TCK-1001 context")
+
         stage = "calling tracker_get_issue"
         val issue = gateway.callTool(TRACKER_GET_ISSUE_TOOL, buildJsonObject {
             put("issueId", "DEMO-101")
@@ -132,7 +144,7 @@ private suspend fun runMcpDemoClient(): Int {
         }
         println("tools/call scheduler_get_summary returned: ${summary.content}")
         gateway.callTool(SCHEDULER_CANCEL_TOOL, buildJsonObject { put("scheduleId", scheduleId) })
-        println("MCP tool discovery, search → summarize → save_to_file pipeline, Tracker call and scheduler lifecycle verified successfully.")
+        println("MCP tool discovery, support context, search → summarize → save_to_file pipeline, Tracker call and scheduler lifecycle verified successfully.")
         0
     } catch (error: Exception) {
         System.err.println("MCP demo failed while $stage: ${error.message ?: error::class.simpleName}")

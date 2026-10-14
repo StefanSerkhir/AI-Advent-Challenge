@@ -50,6 +50,132 @@ class WorkbenchApiTest {
         documentRetrieverProvider = documentRetrieverProvider, persistSettings = persist)
 
     @Test
+    fun `support command publishes support rag and mcp dto without changing history or memory`() = runBlocking {
+        val directory = Files.createTempDirectory("support-api")
+        val indexFile = createRagFixtureIndex(directory)
+        var mcpCalls = 0
+        var llmCalls = 0
+        val context = requireNotNull(SupportDataRepository.fromResources().getTicketContext("TCK-1001"))
+        val gateway = object : McpGateway {
+            override suspend fun listTools() = listOf(McpTool(
+                SUPPORT_GET_TICKET_CONTEXT_TOOL, "support", buildJsonObject {}, SUPPORT_SERVER_ID,
+            ))
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject): McpToolResult {
+                mcpCalls++
+                assertEquals(SUPPORT_GET_TICKET_CONTEXT_TOOL, name)
+                return McpToolResult(false, context.toSafeJson().toString())
+            }
+            override suspend fun close() = Unit
+        }
+        val c = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            mcpGateway = gateway,
+            documentRetrieverProvider = {
+                DocumentRetriever(JsonDocumentIndexStore(indexFile)) { descriptor ->
+                    DeterministicFakeEmbeddingClient(descriptor.dimensions, descriptor.model)
+                }
+            },
+        ) { model, messages, _ ->
+            llmCalls++
+            assertContains(messages.first().content, org.example.app.SUPPORT_ASSISTANT_SYSTEM_PROMPT)
+            assertContains(messages.last().content, "AUTH_CLOCK_SKEW")
+            CompletionResult(
+                groundedAssistantRagFixtureAnswer(
+                    messages.last().content,
+                    """Причина тикета TCK-1001 связана с расхождением системного времени [S1].
+
+Что видно в тикете
+Аккаунт ACTIVE, MFA включён, версия 3.8.1, последнее событие сообщает о 742 секундах.
+
+Что сделать
+1. Синхронизировать время [S1].
+2. Выполнить новый вход с новым MFA-кодом [S1].
+3. При повторе ошибки эскалировать тикет [S1].""",
+                ),
+                "stop", TokenUsage(40, 20, 60), model,
+            )
+        }
+        try {
+            val api = WorkbenchApi(c)
+            val initial = c.state.value.toDto()
+            val beforeSupport = api.settings(SettingsCommand(
+                initial.settingsVersion,
+                initial.settings.copy(ragMinSimilarity = -1.0),
+            ))
+            api.start(command(c.state.value.settingsVersion, "/support TCK-1001 Почему не работает авторизация?"))
+            c.awaitCurrentRequest()
+
+            val state = c.state.value.toDto()
+            val output = state.exchanges.single().outputs.single()
+            assertEquals("completed", state.exchanges.single().status)
+            assertEquals("АССИСТЕНТ ПОДДЕРЖКИ", output.title)
+            assertEquals("support_assistant", output.ragDiagnostics?.pipeline)
+            assertEquals("verified", output.ragDiagnostics?.evidence?.status)
+            assertTrue(output.ragDiagnostics?.sources.orEmpty().all { it.source.startsWith("docs/support/") })
+            assertEquals(1, output.mcpCalls.size)
+            assertEquals(SUPPORT_SERVER_ID, output.mcpCalls.single().serverId)
+            assertEquals(SUPPORT_GET_TICKET_CONTEXT_TOOL, output.mcpCalls.single().toolName)
+            assertEquals("success", output.mcpCalls.single().status)
+            assertContains(output.content.orEmpty(), "742")
+            assertEquals(0, state.history.unrestricted)
+            assertEquals(beforeSupport.assistantMemory, state.assistantMemory)
+            assertEquals(beforeSupport.assistantProfile, state.assistantProfile)
+            assertEquals(beforeSupport.assistantInvariants, state.assistantInvariants)
+            assertEquals(beforeSupport.taskState, state.taskState)
+            assertEquals(1, mcpCalls)
+            assertEquals(1, llmCalls)
+            assertFalse(api.snapshot(state).contains(RAG_FIXTURE_SUPPORT_TEXT))
+
+            api.start(command(c.state.value.settingsVersion, "/support"))
+            c.awaitCurrentRequest()
+            assertContains(c.state.value.toDto().exchanges.last().outputs.single().content.orEmpty(), "Ассистент поддержки")
+            assertEquals(1, mcpCalls)
+            assertEquals(1, llmCalls)
+        } finally {
+            c.shutdown()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `support command rejects DeepSeek and Ollama locally without model or mcp`() = runBlocking {
+        var llmCalls = 0
+        var mcpCalls = 0
+        val gateway = object : McpGateway {
+            override suspend fun listTools(): List<McpTool> { mcpCalls++; return emptyList() }
+            override suspend fun callTool(name: String, arguments: kotlinx.serialization.json.JsonObject): McpToolResult {
+                mcpCalls++
+                error("not reached")
+            }
+            override suspend fun close() = Unit
+        }
+        val c = controller(
+            mode = ResponseMode.UNRESTRICTED,
+            keys = emptyMap(),
+            mcpGateway = gateway,
+        ) { _, _, _ -> llmCalls++; error("not reached") }
+        try {
+            val api = WorkbenchApi(c)
+            var state = c.state.value.toDto()
+            for ((provider, model) in listOf("OLLAMA" to "qwen3:14b", "DEEPSEEK" to "deepseek-v4-flash")) {
+                state = api.settings(SettingsCommand(
+                    state.settingsVersion,
+                    state.settings.copy(provider = provider, model = model),
+                ))
+                api.start(command(state.settingsVersion, "/support TCK-1001 Почему не работает авторизация?"))
+                c.awaitCurrentRequest()
+                state = c.state.value.toDto()
+                assertContains(state.exchanges.last().outputs.single().content.orEmpty(), "только с провайдером OpenAI")
+                assertTrue(state.exchanges.last().outputs.single().mcpCalls.isEmpty())
+            }
+            assertEquals(0, llmCalls)
+            assertEquals(0, mcpCalls)
+        } finally {
+            c.shutdown()
+        }
+    }
+
+    @Test
     fun `developer help uses regular operation dto with documentation evidence and git mcp diagnostics`() = runBlocking {
         val directory = Files.createTempDirectory("developer-help-api")
         val indexFile = createRagFixtureIndex(directory)

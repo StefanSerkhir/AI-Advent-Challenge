@@ -23,6 +23,7 @@ import kotlin.time.Duration.Companion.seconds
 internal const val OPERATIONS_SERVER_ID = "operations"
 internal const val KNOWLEDGE_SERVER_ID = "knowledge"
 internal const val WORKSPACE_SERVER_ID = "workspace"
+const val SUPPORT_SERVER_ID = "support"
 
 data class McpTool(
     val name: String,
@@ -67,12 +68,14 @@ class LocalMcpGateway(
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
     registrations: List<McpServerRegistration>? = null,
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
+    supportDataDirectory: Path? = null,
     private val schedulerServerId: String = OPERATIONS_SERVER_ID,
 ) : McpGateway {
     private val registrations = (registrations ?: defaultMcpServerRegistrations(
         schedulerStateFile,
         outputDirectory,
         repositoryRoot,
+        supportDataDirectory,
     ))
         .also { configured ->
             require(configured.isNotEmpty()) { "At least one MCP server registration is required." }
@@ -258,9 +261,11 @@ internal fun defaultMcpServerRegistrations(
     schedulerStateFile: Path,
     outputDirectory: Path,
     repositoryRoot: Path,
+    supportDataDirectory: Path? = null,
 ): List<McpServerRegistration> = listOf(
     localMcpServerRegistration(OPERATIONS_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
     localMcpServerRegistration(KNOWLEDGE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
+    localMcpServerRegistration(SUPPORT_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot, supportDataDirectory = supportDataDirectory),
     localMcpServerRegistration(WORKSPACE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
 )
 
@@ -283,8 +288,9 @@ internal fun localMcpServerRegistration(
     outputDirectory: Path,
     repositoryRoot: Path,
     onProcessStarted: (Process) -> Unit = {},
+    supportDataDirectory: Path? = null,
 ): McpServerRegistration = McpServerRegistration(serverId) {
-    startServerProcess(serverId, schedulerStateFile, outputDirectory, repositoryRoot).also(onProcessStarted)
+    startServerProcess(serverId, schedulerStateFile, outputDirectory, repositoryRoot, supportDataDirectory).also(onProcessStarted)
 }
 
 private val MCP_TIMEOUT = 10.seconds
@@ -295,6 +301,7 @@ internal fun startServerProcess(
     schedulerStateFile: Path = Path.of(DEFAULT_SCHEDULER_STATE_FILE_NAME),
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
+    supportDataDirectory: Path? = null,
 ): Process {
     require(SAFE_SERVER_ID.matches(serverId)) { "Invalid MCP server id." }
     val executable = Path.of(
@@ -315,6 +322,9 @@ internal fun startServerProcess(
         if (serverId == WORKSPACE_SERVER_ID) {
             builder.environment()["LLM_MCP_OUTPUT_DIR"] = outputDirectory.toAbsolutePath().toString()
             builder.environment()["LLM_MCP_REPOSITORY_ROOT"] = repositoryRoot.toAbsolutePath().normalize().toString()
+        }
+        if (serverId == SUPPORT_SERVER_ID && supportDataDirectory != null) {
+            builder.environment()["LLM_SUPPORT_DATA_DIR"] = supportDataDirectory.toAbsolutePath().normalize().toString()
         }
     }.start()
 }
