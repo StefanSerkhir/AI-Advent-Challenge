@@ -3,13 +3,12 @@ package org.example.agent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.*
 import org.example.llm.*
-import org.example.mcp.McpGateway
-import org.example.mcp.McpToolResult
+import org.example.mcp.*
 import org.example.tokens.TokenCostCalculator
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 enum class McpCallStatus { SUCCESS, ERROR }
 
@@ -115,15 +114,15 @@ suspend fun executeWithMcpTools(
                 if (containsSensitiveText(toolResult.content)) {
                     throw LlmApiException("MCP-вызов отклонён: результат содержит защищённое значение.")
                 }
-                val safeResult = diagnosticText(toolResult.content)
                 diagnostics += McpCallDiagnostic(
                     serverId = requireNotNull(catalogByName[call.name]).serverId,
                     toolName = call.name,
-                    arguments = diagnosticText(encodedArguments),
+                    arguments = diagnosticArguments(call.name, parsed),
                     status = if (toolResult.isError) McpCallStatus.ERROR else McpCallStatus.SUCCESS,
-                    result = safeResult,
+                    result = diagnosticResult(call.name, toolResult),
                 )
-                transientMessages += toolResultMessage(call, toolResult.copy(content = safeResult))
+                // The model receives the full bounded result request-locally. Diagnostics are a separate safe projection.
+                transientMessages += toolResultMessage(call, toolResult)
             }
         }
     } catch (error: CancellationException) {
@@ -152,6 +151,70 @@ private fun parseArguments(raw: String): JsonObject? = runCatching {
 private fun diagnosticText(value: String): String = value
     .filter { it == '\n' || it == '\t' || !it.isISOControl() }
     .take(MAX_DIAGNOSTIC_LENGTH)
+
+private fun diagnosticArguments(toolName: String, arguments: JsonObject): String = when (toolName) {
+    PROJECT_SEARCH_TOOL -> buildJsonObject {
+        arguments["query"]?.let { put("query", it) }
+    }.toString()
+    PROJECT_READ_FILES_TOOL -> buildJsonObject {
+        arguments["paths"]?.let { put("paths", it) }
+    }.toString()
+    PROJECT_WRITE_FILE_TOOL -> buildJsonObject {
+        arguments["path"]?.let { put("path", it) }
+        arguments["mode"]?.let { put("mode", it) }
+        arguments["createOnly"]?.let { put("createOnly", it) }
+        arguments["expectedSha256"]?.let { put("expectedSha256", it) }
+        (arguments["content"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.let { content ->
+            val bytes = content.toByteArray(StandardCharsets.UTF_8)
+            put("contentByteCount", bytes.size)
+            put("contentSha256", sha256ForDiagnostic(bytes))
+        }
+    }.toString()
+    else -> diagnosticText(arguments.toString())
+}
+
+private fun diagnosticResult(toolName: String, result: McpToolResult): String {
+    if (toolName !in PROJECT_FILE_TOOLS || result.isError) return diagnosticText(result.content)
+    val parsed = runCatching { toolJson.parseToJsonElement(result.content).jsonObject }.getOrNull()
+        ?: return "{\"summary\":\"unavailable\"}"
+    val safe = when (toolName) {
+        PROJECT_SEARCH_TOOL -> buildJsonObject {
+            copyFields(parsed, this, "query", "candidateFiles", "scannedFiles", "matchedFiles", "totalMatches", "returnedMatches", "truncated")
+            putJsonArray("matches") {
+                parsed["matches"]?.jsonArray?.forEach { match ->
+                    val item = match.jsonObject
+                    add(buildJsonObject { copyFields(item, this, "path", "line") })
+                }
+            }
+        }
+        PROJECT_READ_FILES_TOOL -> buildJsonObject {
+            copyFields(parsed, this, "fileCount", "totalBytes")
+            putJsonArray("files") {
+                parsed["files"]?.jsonArray?.forEach { file ->
+                    val item = file.jsonObject
+                    add(buildJsonObject { copyFields(item, this, "path", "byteCount", "sha256") })
+                }
+            }
+        }
+        PROJECT_WRITE_FILE_TOOL -> buildJsonObject {
+            copyFields(
+                parsed, this, "path", "mode", "applied", "created", "wouldCreate", "noOp",
+                "previousSha256", "newSha256", "byteCount", "diffTruncated",
+            )
+        }
+        else -> buildJsonObject {}
+    }
+    return diagnosticText(safe.toString())
+}
+
+private fun copyFields(source: JsonObject, target: JsonObjectBuilder, vararg names: String) {
+    names.forEach { name -> source[name]?.let { target.put(name, it) } }
+}
+
+private fun sha256ForDiagnostic(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+    .digest(bytes).joinToString("") { "%02x".format(it) }
+
+private val PROJECT_FILE_TOOLS = setOf(PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL)
 
 private fun safeName(value: String): String = value.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(128)
 

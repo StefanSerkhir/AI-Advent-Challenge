@@ -185,6 +185,96 @@ class LlmAgentTest {
     }
 
     @Test
+    fun `repository file results stay full request local while diagnostics redact content and diff`() = runBlocking {
+        val directory = Files.createTempDirectory("llm-agent-project-files-test")
+        Files.createDirectories(directory.resolve("src/main/kotlin/fixture"))
+        Files.createDirectories(directory.resolve("frontend/src/api"))
+        Files.createDirectories(directory.resolve("docs"))
+        Files.writeString(directory.resolve("src/main/kotlin/fixture/FixtureProjectApi.kt"),
+            "object FixtureProjectApi { const val ROUTE = \"/api/fixture-project\" }\n")
+        Files.writeString(directory.resolve("frontend/src/api/fixtureProjectApi.ts"),
+            "export const FixtureProjectApi = { method: \"GET\" };\n")
+        val documentation = directory.resolve("docs/fixture-project-api.md")
+        Files.writeString(documentation, "# FixtureProjectApi\nSTALE_MARKER uses POST.\n")
+        val gateway = LocalMcpGateway(
+            directory.resolve("scheduler.json"), directory.resolve("output"), repositoryRoot = directory,
+        )
+        val replacement = "# FixtureProjectApi\nCURRENT_MARKER uses GET.\n"
+        var step = 0
+        val client = object : LlmClient {
+            override suspend fun complete(messages: List<LlmMessage>, options: CompletionOptions): CompletionResult = when (step++) {
+                0 -> CompletionResult("", "tool_calls", TokenUsage(1, 1, 2), "test-model", listOf(
+                    LlmToolCall("project-search", PROJECT_SEARCH_TOOL, "{\"query\":\"FixtureProjectApi\"}"),
+                ))
+                1 -> {
+                    val result = Json.parseToJsonElement(messages.last().content.substringAfter('\n')).jsonObject
+                    assertTrue(result.getValue("matches").jsonArray.any {
+                        "object FixtureProjectApi" in it.jsonObject.getValue("snippet").jsonPrimitive.content
+                    })
+                    val paths = result.getValue("matches").jsonArray
+                        .map { it.jsonObject.getValue("path").jsonPrimitive.content }.distinct()
+                    CompletionResult("", "tool_calls", TokenUsage(1, 1, 2), "test-model", listOf(
+                        LlmToolCall("project-read", PROJECT_READ_FILES_TOOL, buildJsonObject {
+                            putJsonArray("paths") { paths.forEach(::add) }
+                        }.toString()),
+                    ))
+                }
+                2 -> {
+                    val result = Json.parseToJsonElement(messages.last().content.substringAfter('\n')).jsonObject
+                    val doc = result.getValue("files").jsonArray.map(JsonElement::jsonObject).single {
+                        it.getValue("path").jsonPrimitive.content == "docs/fixture-project-api.md"
+                    }
+                    assertContains(doc.getValue("content").jsonPrimitive.content, "STALE_MARKER")
+                    CompletionResult("", "tool_calls", TokenUsage(1, 1, 2), "test-model", listOf(
+                        LlmToolCall("project-write", PROJECT_WRITE_FILE_TOOL, buildJsonObject {
+                            put("path", "docs/fixture-project-api.md")
+                            put("content", replacement)
+                            put("mode", "apply")
+                            put("createOnly", false)
+                            put("expectedSha256", doc.getValue("sha256"))
+                        }.toString()),
+                    ))
+                }
+                3 -> {
+                    val result = Json.parseToJsonElement(messages.last().content.substringAfter('\n')).jsonObject
+                    assertTrue(result.getValue("applied").jsonPrimitive.boolean)
+                    assertContains(result.getValue("diff").jsonPrimitive.content, "STALE_MARKER")
+                    assertContains(result.getValue("diff").jsonPrimitive.content, "CURRENT_MARKER")
+                    CompletionResult("Документация обновлена; diff проверен.", "stop", TokenUsage(1, 1, 2), "test-model")
+                }
+                else -> error("Unexpected step")
+            }
+        }
+        val agent = LlmAgent(mcpGateway = gateway, clientProvider = { client })
+        try {
+            val response = agent.respond(AgentRequest(
+                "Проверь документацию FixtureProjectApi и обнови её при необходимости",
+                model = "test-model",
+                mcpEnabled = true,
+            ))
+
+            assertEquals(listOf(PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL),
+                response.mcpCalls.map(McpCallDiagnostic::toolName))
+            assertEquals(replacement, Files.readString(documentation))
+            response.mcpCalls.forEach { diagnostic ->
+                assertFalse(diagnostic.arguments.contains("STALE_MARKER"))
+                assertFalse(diagnostic.arguments.contains("CURRENT_MARKER"))
+                assertFalse(diagnostic.result.contains("STALE_MARKER"))
+                assertFalse(diagnostic.result.contains("CURRENT_MARKER"))
+                assertFalse(diagnostic.result.contains("object FixtureProjectApi"))
+                assertFalse(diagnostic.result.contains("\"content\""))
+                assertFalse(diagnostic.result.contains("\"diff\""))
+            }
+            assertContains(response.mcpCalls[1].result, "sha256")
+            assertContains(response.mcpCalls[2].arguments, "contentByteCount")
+            assertContains(response.mcpCalls[2].result, "applied")
+        } finally {
+            gateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `MCP tool error is diagnosed and final response is not persisted`() = runBlocking {
         val directory = Files.createTempDirectory("llm-agent-mcp-test")
         val gateway = LocalMcpGateway(directory.resolve("scheduler.json"), directory.resolve("output"))

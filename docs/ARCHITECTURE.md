@@ -45,7 +45,7 @@ flowchart LR
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
 | `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `/support`-ассистент поддержки, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
-| `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call` и CLI-проверка |
+| `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call`, repository file policy/операции и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
 | `src/main/kotlin/rag` | Десять RAG evaluation cases, versioned JSON/Markdown report и production evaluation CLI |
 | `src/main/kotlin/review` | Отдельный trusted-base PR review CLI: Git diff, repository RAG, GPT-5.6 structured output, локальная валидация, artifacts и GitHub comment upsert |
@@ -150,7 +150,7 @@ Base64 credentials, prompt и ответ видимы сетевому набл�
 для краткого лабораторного использования в доверенной домашней сети. Runbook:
 [LAN_HTTP_CHAT.md](LAN_HTTP_CHAT.md).
 
-`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler и output-каталог в fixture также настоящие, но получают отдельные пути во временном каталоге теста.
+`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler, output-каталог и repository file tools в fixture также настоящие, но получают отдельные пути во временном каталоге теста. Fixture создаёт связанные Kotlin, TypeScript и Markdown файлы `FixtureProjectApi` для двух goal-level сценариев анализа и обновления документации.
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же registry-backed
 `LocalMcpGateway`, что и web runtime. Явные регистрации имеют безопасные стабильные
@@ -158,7 +158,9 @@ ID и инъецируемые process factories. Для `operations`, `knowledg
 шлюз создаёт отдельные JVM-процессы `McpDemoServerKt`, MCP clients, stdio transports,
 mutex и caches каталога. Каждый процесс объявляет только свой набор:
 `operations` — `ping`, `echo`, Tracker и scheduler; `knowledge` — `search` и
-`summarize`; `support` — `support_get_ticket_context`; `workspace` — `git_current_branch` и `save_to_file`. Только `operations` создаёт
+`summarize`; `support` — `support_get_ticket_context`; `workspace` —
+`git_current_branch`, `save_to_file`, `project_search`, `project_read_files` и
+`project_write_file`. Только `operations` создаёт
 `SchedulerService`. Stdout каждого процесса зарезервирован для JSON-RPC.
 
 Шлюз получает настоящий `tools/list` каждой сессии, добавляет каждому `McpTool`
@@ -179,7 +181,7 @@ CLI выполняет handshake, проверяет объединённый к
 root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
 или LLM и не требуют ключей. Support server строго загружает два JSON-ресурса
 формата v1, валидирует все записи/связи до использования и отдаёт только
-allowlist-поля тикета и пользователя. Версия набора MCP demo servers — `2.2.0`.
+allowlist-поля тикета и пользователя. Версия набора MCP demo servers — `2.3.0`.
 
 `search` работает только с встроенным каталогом стабильных `id`, `title` и
 `content`. `summarize` детерминированно ограничивает число обработанных записей и
@@ -198,6 +200,26 @@ file и применяет atomic replace с fallback. Результат сод
 `shortCommit`: без absolute path, remote URL, environment, содержимого файлов и
 секретов. Detached HEAD и каталог вне Git возвращаются безопасно; неизвестные
 аргументы отвергаются до запуска процесса.
+
+`RepositoryFileWorkspace` — отдельная production-граница, чтобы file policy не
+разрасталась внутри `McpDemoServer.kt`. Единственный root приходит из уже
+существующего `LLM_MCP_REPOSITORY_ROOT`. Policy принимает только относительные
+POSIX-пути и обычные UTF-8 text files из extension allowlist; normalize/real-path
+проверки и обход каждого компонента запрещают absolute path, `..`, traversal,
+symlink-файл и symlink-каталог. Из corpus исключены `.git`, `.env*`, `.idea`,
+`.gradle`, `build`, `dist`, `node_modules`, `video`, `.llm-*`, секретные/runtime и
+бинарные файлы. Write policy дополнительно блокирует `AGENTS.md`, `.github` и
+build/package configuration surfaces.
+
+`project_search` делает bounded literal scan с детерминированной сортировкой,
+relative path/line/snippet и явными candidate/scanned/matched/returned counts и
+`truncated`. `project_read_files` за один вызов читает 1–5 файлов, сортирует пути
+и возвращает полный bounded content, byte count и SHA-256. `project_write_file`
+получает complete replacement content, `preview|apply`, `createOnly` и для
+существующего файла обязательный `expectedSha256`; stale hash и неожиданное
+существование отклоняются. После полной валидации apply пишет temporary sibling и
+делает atomic move с fallback. Результат содержит flags, old/new hashes, byte
+count и bounded unified diff; равное содержимое — детерминированный no-op.
 
 ### Индексация документов
 
@@ -599,6 +621,22 @@ Tool error отображается в diagnostics и передаётся мо�
 В ветке `MEMORY_LAYERS` invariant structured output и task-state postflight
 применяются к финальному ответу после MCP-цикла.
 
+Для repository-задачи альтернативная каноническая цепочка —
+`project_search → project_read_files → project_write_file`: последний шаг
+отсутствует при анализе и используется только по явной просьбе изменить/создать.
+Описания discovered tools требуют сначала исследовать repository, batch-прочитать
+2–3 значимых файла, учитывать `truncated` и перечислить просмотренные/изменённые
+relative paths в финальном ответе. Лимит executor не меняется: не более трёх
+`tools/call`, поэтому отдельного дополнительного verify-call после записи нет.
+
+`executeWithMcpTools` держит две разные формы результата. Полный bounded JSON
+передаётся модели в недоверенном request-local `tool` message и нужен для анализа,
+SHA-256 и diff. `McpCallDiagnostic`, `StateDto`, SSE и UI получают отдельную safe
+projection: query/path/counts/line/bytes/hashes/mode/status/truncation без file
+content, write content, snippet и полного diff. Диагностическое усечение никогда
+не заменяет данные в tool message. Как и прежде, промежуточные messages не
+сохраняются; успешная история/SHORT_TERM содержит только user/final assistant.
+
 ### Обычный агент и история
 
 `PromptRunner` владеет двумя `LlmAgent`: для `unrestricted` и `controlled`. Compare использует оба, одиночные режимы — соответствующий вариант. `ConversationHistoryStore` сохраняет обычную завершённую историю и token metrics в `.llm-history.json`.
@@ -909,11 +947,16 @@ API-ключ сохраняется только в локальном `.env`; A
 - `SchedulerServiceTest` проверяет once/interval, idempotency, строгую валидацию,
   cancel, due/parallel execution, success/error reschedule, restart/overdue,
   отсутствие catch-up storm, versioned atomic JSON, history cap и Tracker aggregation;
-- `McpGatewayTest` проверяет три настоящих stdio-процесса, объединение каталогов,
+- `McpGatewayTest` проверяет четыре настоящих stdio-процесса, объединение каталогов,
   origin/routing, fail-closed коллизии, reconnect одной сессии, настоящий
   `tools/list`/`tools/call`, строгую валидацию pipeline, точный файл,
   traversal/absolute/symlink защиту, Git branch/detached/non-repository случаи и
-  обратную совместимость Tracker/scheduler/ping/echo;
+  repository search/batch read/SHA-write и обратную совместимость
+  Tracker/scheduler/ping/echo;
+- `RepositoryFileWorkspaceTest` проверяет стабильный multi-file search, batch
+  read/SHA-256, preview/create/apply/no-op/stale hash, atomic persistence,
+  absolute/traversal/unknown-size limits, forbidden/secret/runtime paths и
+  symlink-файл/компонент;
 - `DeveloperHelpRunnerTest` проверяет строгий parser, overview без LLM, doc-only
   retrieval, discovered MCP owner, evidence, ошибки и cancellation без commit;
 - `SupportAssistantRunnerTest` проверяет точный parser, один discovered MCP call,
@@ -955,6 +998,10 @@ offline/reconnect, идемпотентный retry, отмену, Markdown, у�
 или `SHORT_TERM`. Сценарий `/support` дополнительно проверяет TCK-1001, provenance
 `support/support_get_ticket_context`, verified quotes, support-only sources и ту
 же изоляцию history/memory.
+Goal-level сценарии `FixtureProjectApi` дополнительно проверяют два настоящих
+stdio-вызова без записи и три вызова с atomic apply, три прочитанных файла, diff,
+реальное обновление Markdown и отсутствие raw content/write content/diff в
+REST/SSE `mcpCalls`.
 Fixture использует временные persistence/output paths и фиктивные ключи; внешние
 платные API не вызываются. Для pipeline используется точный prompt «Найди локальные
 сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в

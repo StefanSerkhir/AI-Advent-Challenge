@@ -118,6 +118,85 @@ class McpGatewayTest {
     }
 
     @Test
+    fun `workspace catalog owns repository file tools and real stdio calls persist with hashes`() = runBlocking {
+        val directory = Files.createTempDirectory("mcp-project-files-test")
+        val repository = directory.resolve("repository")
+        Files.createDirectories(repository.resolve("src/main/kotlin/demo"))
+        Files.createDirectories(repository.resolve("frontend/src/api"))
+        Files.createDirectories(repository.resolve("docs"))
+        Files.writeString(repository.resolve("src/main/kotlin/demo/FixtureProjectApi.kt"), "class FixtureProjectApi\n")
+        Files.writeString(repository.resolve("frontend/src/api/fixture.ts"), "export const FixtureProjectApi = true\n")
+        val documentation = repository.resolve("docs/fixture-project-api.md")
+        Files.writeString(documentation, "# FixtureProjectApi\nOutdated.\n")
+        val gateway = LocalMcpGateway(
+            directory.resolve("scheduler.json"),
+            directory.resolve("output"),
+            repositoryRoot = repository,
+        )
+        try {
+            val tools = gateway.listTools().associateBy(McpTool::name)
+            listOf(PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL).forEach { name ->
+                assertEquals(WORKSPACE_SERVER_ID, tools.getValue(name).serverId)
+            }
+            assertContains(tools.getValue(PROJECT_SEARCH_TOOL).description, "instead of answering from memory")
+            assertContains(tools.getValue(PROJECT_READ_FILES_TOOL).description, "2-3 relevant files")
+            assertContains(tools.getValue(PROJECT_WRITE_FILE_TOOL).description, "explicitly asks")
+
+            val search = gateway.callTool(PROJECT_SEARCH_TOOL, buildJsonObject { put("query", "FixtureProjectApi") })
+            assertFalse(search.isError)
+            val searchJson = Json.parseToJsonElement(search.content).jsonObject
+            assertEquals(3, searchJson.getValue("matchedFiles").jsonPrimitive.int)
+            val paths = searchJson.getValue("matches").jsonArray
+                .map { it.jsonObject.getValue("path").jsonPrimitive.content }.distinct()
+            assertEquals(3, paths.size)
+
+            val read = gateway.callTool(PROJECT_READ_FILES_TOOL, buildJsonObject {
+                putJsonArray("paths") { paths.forEach(::add) }
+            })
+            assertFalse(read.isError)
+            val readJson = Json.parseToJsonElement(read.content).jsonObject
+            val doc = readJson.getValue("files").jsonArray.map(JsonElement::jsonObject)
+                .single { it.getValue("path").jsonPrimitive.content == "docs/fixture-project-api.md" }
+            val hash = doc.getValue("sha256").jsonPrimitive.content
+            assertContains(doc.getValue("content").jsonPrimitive.content, "Outdated")
+
+            val changed = "# FixtureProjectApi\nCurrent: Kotlin to TypeScript.\n"
+            val write = gateway.callTool(PROJECT_WRITE_FILE_TOOL, buildJsonObject {
+                put("path", "docs/fixture-project-api.md")
+                put("content", changed)
+                put("mode", "apply")
+                put("createOnly", false)
+                put("expectedSha256", hash)
+            })
+            assertFalse(write.isError)
+            val writeJson = Json.parseToJsonElement(write.content).jsonObject
+            assertEquals(true, writeJson.getValue("applied").jsonPrimitive.boolean)
+            assertContains(writeJson.getValue("diff").jsonPrimitive.content, "+Current: Kotlin to TypeScript.")
+            assertEquals(changed, Files.readString(documentation))
+
+            val stale = gateway.callTool(PROJECT_WRITE_FILE_TOOL, buildJsonObject {
+                put("path", "docs/fixture-project-api.md")
+                put("content", "stale")
+                put("mode", "apply")
+                put("createOnly", false)
+                put("expectedSha256", hash)
+            })
+            assertTrue(stale.isError)
+            assertContains(stale.content, "устарел")
+            val unknown = gateway.callTool(PROJECT_READ_FILES_TOOL, buildJsonObject {
+                putJsonArray("paths") { add("docs/fixture-project-api.md") }
+                put("absoluteRoot", repository.toString())
+            })
+            assertTrue(unknown.isError)
+            assertContains(unknown.content, "неизвестные поля")
+            assertFalse(unknown.content.contains(repository.toString()))
+        } finally {
+            gateway.close()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `real stdio server exposes strict pipeline schemas and passes actual data through all three tools`() = runBlocking {
         val directory = Files.createTempDirectory("mcp-gateway-test")
         val outputDirectory = directory.resolve("output")

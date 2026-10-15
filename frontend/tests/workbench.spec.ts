@@ -533,6 +533,58 @@ test("simple agent composes search summarize and save_to_file through MCP", asyn
   expect(calls[2].result).toContain("mcp-composition-001");
 });
 
+test("project file assistant analyzes three files and safely updates documentation", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByLabel("Провайдер")).toHaveValue("OPENAI");
+
+  await send(page, "Найди все места использования API FixtureProjectApi в проекте, прочитай связанные файлы и объясни путь вызова от Kotlin до TypeScript. Ничего не изменяй.");
+  await done(page);
+  const analysis = page.getByTestId("exchange").last();
+  await expect(analysis).toContainText("Путь вызова");
+  await expect(analysis).toContainText("src/main/kotlin/fixture/FixtureProjectApi.kt");
+  await expect(analysis).toContainText("frontend/src/api/fixtureProjectApi.ts");
+  await expect(analysis).toContainText("docs/fixture-project-api.md");
+  await expect(analysis).toContainText("Ничего не изменено");
+  await expect(analysis.getByTestId("mcp-diagnostics")).toContainText("1. workspace / project_search");
+  await expect(analysis.getByTestId("mcp-diagnostics")).toContainText("2. workspace / project_read_files");
+
+  let state = await (await page.request.get("/api/state")).json() as State;
+  const analysisCalls = state.exchanges.at(-1)!.outputs[0].mcpCalls;
+  expect(analysisCalls.map((call) => call.toolName)).toEqual(["project_search", "project_read_files"]);
+  expect(analysisCalls.map((call) => call.serverId)).toEqual(["workspace", "workspace"]);
+  expect(analysisCalls.some((call) => call.toolName === "project_write_file")).toBe(false);
+  expect(analysisCalls[0].result).not.toContain("snippet");
+  expect(analysisCalls[1].result).not.toContain("content");
+  expect(analysisCalls[1].result).toContain("sha256");
+
+  await send(page, "Проверь, соответствует ли документация FixtureProjectApi фактической реализации. Если она устарела, обнови её и покажи diff.");
+  await done(page);
+  const update = page.getByTestId("exchange").last();
+  await expect(update).toContainText("Документация сверена");
+  await expect(update).toContainText("Изменённый файл: docs/fixture-project-api.md");
+  await expect(update).toContainText("Применено: true");
+  await expect(update).toContainText("-`FixtureProjectApi` accepts `POST");
+  await expect(update).toContainText("+`FixtureProjectApi` exposes `GET");
+  const diagnostics = update.getByTestId("mcp-diagnostics");
+  await expect(diagnostics).toContainText("1. workspace / project_search");
+  await expect(diagnostics).toContainText("2. workspace / project_read_files");
+  await expect(diagnostics).toContainText("3. workspace / project_write_file");
+
+  state = await (await page.request.get("/api/state")).json() as State;
+  const updateCalls = state.exchanges.at(-1)!.outputs[0].mcpCalls;
+  expect(updateCalls.map((call) => call.toolName)).toEqual([
+    "project_search",
+    "project_read_files",
+    "project_write_file",
+  ]);
+  expect(updateCalls.every((call) => call.status === "success")).toBe(true);
+  expect(updateCalls[1].result).not.toContain("Outdated");
+  expect(updateCalls[2].arguments).not.toContain("GET /api/fixture-project");
+  expect(updateCalls[2].result).not.toContain('"diff":');
+  expect(updateCalls[2].result).toContain('"applied":true');
+  expect(updateCalls).toHaveLength(3);
+});
+
 test("simple agent creates a persisted background task and SSE updates the panel", async ({page}) => {
   await setMode(page, "unrestricted");
   await send(page, "Напомни через 10 минут проверить DEMO-101");

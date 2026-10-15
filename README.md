@@ -107,7 +107,8 @@ client, stdio transport, JVM-процесс, mutex и cache `tools/list`:
 - `operations`: `ping`, `echo`, `tracker_get_issue`, `scheduler_*`;
 - `knowledge`: `search`, `summarize`;
 - `support`: `support_get_ticket_context`;
-- `workspace`: `git_current_branch`, `save_to_file`.
+- `workspace`: `git_current_branch`, `save_to_file`, `project_search`,
+  `project_read_files`, `project_write_file`.
 
 Lifecycle-aware `LocalMcpGateway` объединяет реальные каталоги в детерминированном
 порядке и строит таблицу `tool name → discovered owner server`. Каждый
@@ -122,7 +123,10 @@ Lifecycle-aware `LocalMcpGateway` объединяет реальные ката
 или LLM. Tracker по-прежнему читает задачу `DEMO-101` из локального источника.
 `support_get_ticket_context` строго валидирует `TCK-[1-9][0-9]*`, читает
 версионированные синтетические JSON-ресурсы пользователей/тикетов и возвращает
-только allowlist-поля связанной пары. Версия набора MCP demo servers — `2.2.0`.
+только allowlist-поля связанной пары. Repository tools читают только разрешённые
+UTF-8 файлы под `LLM_MCP_REPOSITORY_ROOT`, не следуют по symlink и изменяют файл
+только через SHA-256 optimistic concurrency и атомарную замену. Версия набора MCP
+demo servers — `2.3.0`.
 
 Gradle Wrapper автоматически загрузит зависимости, соберёт код и запустит пример:
 
@@ -130,7 +134,7 @@ Gradle Wrapper автоматически загрузит зависимост�
 ./gradlew runMcpDemo
 ```
 
-Успешный запуск содержит строки `MCP connection established`, provenance двенадцати
+Успешный запуск содержит строки `MCP connection established`, provenance пятнадцати
 инструментов и выполняет настоящие межсерверные `tools/call`: результат
 `knowledge/search` становится входом `knowledge/summarize`, его `summary` и
 `sourceIds` передаются в `workspace/save_to_file`, после
@@ -176,6 +180,54 @@ Fixture LLM детерминированно выполнит три после�
 статусами и признаками передачи `matches`/`sourceIds`. Fixture пишет
 только во временный output-каталог и удаляет его при остановке. Старый fixture
 prompt для `DEMO-101` также продолжает работать.
+
+## Ассистент файлов проекта
+
+OpenAI в существующем режиме **«Простой агент»** (`unrestricted`) принимает цель
+уровня проекта без ручного списка файлов. Модель начинает с discovered
+`workspace/project_search`, затем одним `project_read_files` читает до пяти
+релевантных файлов, а `project_write_file` вызывает только при явной просьбе
+создать или обновить файл. Общий лимит остаётся прежним — максимум три
+`tools/call`; Ollama, DeepSeek, остальные response modes и ветка assistant RAG
+эти tools не получают.
+
+`project_search` выполняет literal search со стабильным порядком, относительными
+POSIX-путями, номерами строк, короткими snippets и явными counts/`truncated`.
+`project_read_files` возвращает bounded UTF-8 content, byte count и SHA-256 для
+1–5 файлов. `project_write_file` поддерживает `preview`/`apply`: существующий файл
+требует `expectedSha256`, новый — `createOnly=true`; одинаковое содержимое даёт
+no-op, а apply пишет temporary file и выполняет atomic replace с fallback.
+
+Разрешены обычные текстовые исходники и документация. Исключены `.git`, `.env*`,
+`.idea`, `.gradle`, `build`, `dist`, `node_modules`, `video`, `.llm-*`, runtime
+state, секретные/бинарные файлы и symlink-компоненты. Запись дополнительно
+запрещена в `AGENTS.md`, workflow и build/package configuration. Полное
+содержимое и bounded diff доступны модели только как недоверенные request-local
+tool data. В `mcpCalls`/SSE остаются только query, относительные пути, counts,
+byte counts, hashes, mode/status и truncation без raw content и полного diff.
+
+Воспроизводимые fixture prompts:
+
+> Найди все места использования API FixtureProjectApi в проекте, прочитай связанные файлы и объясни путь вызова от Kotlin до TypeScript. Ничего не изменяй.
+
+> Проверь, соответствует ли документация FixtureProjectApi фактической реализации. Если она устарела, обнови её и покажи diff.
+
+Первый сценарий читает три связанных Kotlin/TypeScript/Markdown-файла без записи.
+Второй выполняет `search → batch read → write apply`, использует SHA-256 прочитанной
+версии, действительно обновляет Markdown во временном fixture repository и
+возвращает проверяемый diff. Безопасные проверки и запись 1440×900 WebM:
+
+```bash
+./gradlew runWebFixture -PwebPort=18080
+npm --prefix frontend run test:e2e -- --grep "project file assistant"
+npm --prefix frontend run record:project-file-assistant-demo
+```
+
+Скрипт записи сам проверяет loopback-порт через `lsof`, запускает только
+`runWebFixture`, не перезаписывает видео без
+`PROJECT_FILE_ASSISTANT_DEMO_OVERWRITE=1` и проверяет размер, duration,
+разрешение и video stream. Подробный контракт и сценарий:
+[PROJECT_FILE_ASSISTANT_DEMO.md](docs/PROJECT_FILE_ASSISTANT_DEMO.md).
 
 ## Ассистент разработчика
 
@@ -351,8 +403,10 @@ WEB_PORT=8090 ./gradlew runWeb
 3. **Простой агент** — отдельная сущность `LlmAgent` принимает запрос, формирует
    сообщения, при включённой настройке учитывает историю, вызывает выбранную LLM
    через API и возвращает ответ в интерфейс. С OpenAI агент также видит локальный
-   каталог MCP и при необходимости вызывает Tracker или локальную композицию
-   `search` → `summarize` → `save_to_file` через stdio. Здесь же точные команды
+   каталог MCP и при необходимости вызывает Tracker, локальную композицию
+   `search` → `summarize` → `save_to_file` или repository-scoped цепочку
+   `project_search` → `project_read_files` → `project_write_file` через stdio.
+   Здесь же точные команды
    `/help` и `/help <вопрос>` дают памятку либо документированный ответ о репозитории
    с проверенными источниками и текущей Git-веткой из MCP. Точные `/support` и
    `/support <ticketId> <вопрос>` добавляют request-local поддержку по тикету через
@@ -952,7 +1006,8 @@ Playwright самостоятельно запускает `runWebFixture` на 
 все восемь режимов, RAG-карточки/provenance/partial failure, contextual RAG-чат,
 follow-up query/task/WORKING/SHORT_TERM, sources/exact quotes/abstention, слои памяти,
 CRUD/диагностика/конфликт инвариантов,
-pause/reload/resume машины состояния задачи, демо,
+pause/reload/resume машины состояния задачи, два goal-level сценария файлового
+ассистента и отсутствие raw content/diff в MCP-диагностике, демо,
 горячие клавиши, история, перезагрузка во время запроса,
 две вкладки, offline/reconnect, потерянный ответ POST, повтор после отмены,
 ошибки отдельных моделей, Markdown/код/формулы и узкое окно. Этот клиент

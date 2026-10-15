@@ -15,10 +15,7 @@ import org.example.app.WorkbenchController
 import org.example.config.LocalConfigStore
 import org.example.indexing.*
 import org.example.llm.*
-import org.example.mcp.LocalMcpGateway
-import org.example.mcp.SAVE_TO_FILE_TOOL
-import org.example.mcp.SEARCH_TOOL
-import org.example.mcp.SUMMARIZE_TOOL
+import org.example.mcp.*
 import java.io.IOException
 import java.nio.file.Files
 import java.time.Instant
@@ -32,6 +29,7 @@ fun main() {
         .redirectErrorStream(true)
         .start()
         .waitFor() == 0) { "Failed to initialize fixture Git repository" }
+    createProjectFileAssistantFixture(directory)
     val ragIndex = runBlocking { createRagFixtureIndex(directory) }
     val store = LocalConfigStore(directory.resolve(".env"), emptyMap())
     val controller = WorkbenchController(AppSettings(LlmKind.OPENAI),
@@ -135,6 +133,52 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
         if ("[[partial]]" in prompt && model == "gpt-5.6-terra") throw LlmApiException("Модель временно недоступна")
         val pipelineResults = messages.filter { it.role == LlmRole.TOOL && it.name in PIPELINE_TOOL_NAMES }
             .associateBy { requireNotNull(it.name) }
+        val projectResults = messages.filter { it.role == LlmRole.TOOL && it.name in PROJECT_FILE_TOOL_NAMES }
+            .associateBy { requireNotNull(it.name) }
+        if (prompt in PROJECT_FILE_FIXTURE_PROMPTS && options.tools.any { it.name == PROJECT_SEARCH_TOOL } &&
+            PROJECT_SEARCH_TOOL !in projectResults) {
+            return fixtureToolCall(
+                id = "fixture-project-search",
+                name = PROJECT_SEARCH_TOOL,
+                arguments = buildJsonObject { put("query", "FixtureProjectApi") },
+            )
+        }
+        if (prompt in PROJECT_FILE_FIXTURE_PROMPTS && PROJECT_SEARCH_TOOL in projectResults &&
+            PROJECT_READ_FILES_TOOL !in projectResults) {
+            val searchResult = parseFixtureToolResult(requireNotNull(projectResults[PROJECT_SEARCH_TOOL]))
+            val paths = searchResult.getValue("matches").jsonArray
+                .map { it.jsonObject.getValue("path").jsonPrimitive.content }
+                .distinct()
+                .take(3)
+            check(paths.size == 3) { "Fixture project search did not discover three related files" }
+            return fixtureToolCall(
+                id = "fixture-project-read",
+                name = PROJECT_READ_FILES_TOOL,
+                arguments = buildJsonObject { putJsonArray("paths") { paths.forEach(::add) } },
+            )
+        }
+        if (prompt == PROJECT_FILE_UPDATE_PROMPT && PROJECT_READ_FILES_TOOL in projectResults &&
+            PROJECT_WRITE_FILE_TOOL !in projectResults) {
+            val readResult = parseFixtureToolResult(requireNotNull(projectResults[PROJECT_READ_FILES_TOOL]))
+            val files = readResult.getValue("files").jsonArray.map(JsonElement::jsonObject)
+            check(files.any { it.getValue("content").jsonPrimitive.content.contains("get(FixtureProjectApi.ROUTE)") })
+            check(files.any { it.getValue("content").jsonPrimitive.content.contains("method: \"GET\"") })
+            val documentation = files.single {
+                it.getValue("path").jsonPrimitive.content == FIXTURE_PROJECT_DOCUMENTATION_PATH
+            }
+            check(documentation.getValue("content").jsonPrimitive.content.contains("POST"))
+            return fixtureToolCall(
+                id = "fixture-project-write",
+                name = PROJECT_WRITE_FILE_TOOL,
+                arguments = buildJsonObject {
+                    put("path", FIXTURE_PROJECT_DOCUMENTATION_PATH)
+                    put("content", FIXTURE_PROJECT_DOCUMENTATION_CURRENT)
+                    put("mode", "apply")
+                    put("createOnly", false)
+                    put("expectedSha256", documentation.getValue("sha256"))
+                },
+            )
+        }
         if (prompt == PIPELINE_FIXTURE_PROMPT && options.tools.any { it.name == SEARCH_TOOL } && SEARCH_TOOL !in pipelineResults) {
             return fixtureToolCall(
                 id = "fixture-pipeline-search",
@@ -269,6 +313,38 @@ private class FixtureLlmClient(private val model: String) : LlmClient {
                 val fileName = saved["fileName"]?.jsonPrimitive?.content.orEmpty()
                 "Локальные сведения о композиции MCP-инструментов найдены, кратко суммированы и сохранены в `$fileName`."
             }
+            prompt == PROJECT_FILE_ANALYSIS_PROMPT && PROJECT_READ_FILES_TOOL in projectResults -> {
+                val read = parseFixtureToolResult(requireNotNull(projectResults[PROJECT_READ_FILES_TOOL]))
+                val paths = read.getValue("files").jsonArray
+                    .map { it.jsonObject.getValue("path").jsonPrimitive.content }
+                check(paths.size == 3)
+                """Найдены все 4 вхождения FixtureProjectApi; поиск не был усечён.
+
+Путь вызова: `${paths.single { it.endsWith("FixtureProjectApi.kt") }}` задаёт Kotlin-константу `/api/fixture-project` и GET route. `${paths.single { it.endsWith("fixtureProjectApi.ts") }}` экспортирует TypeScript-клиент, который делает GET по тому же пути. `${paths.single { it.endsWith("fixture-project-api.md") }}` описывает контракт, но сейчас ошибочно указывает POST.
+
+Просмотрены файлы:
+${paths.joinToString("\n") { "- `$it`" }}
+
+Ничего не изменено."""
+            }
+            prompt == PROJECT_FILE_UPDATE_PROMPT && PROJECT_WRITE_FILE_TOOL in projectResults -> {
+                val write = parseFixtureToolResult(requireNotNull(projectResults[PROJECT_WRITE_FILE_TOOL]))
+                val path = write.getValue("path").jsonPrimitive.content
+                val applied = write.getValue("applied").jsonPrimitive.boolean
+                val diff = write.getValue("diff").jsonPrimitive.content
+                """Документация сверена с Kotlin и TypeScript реализацией и ${if (applied) "обновлена" else "не потребовала повторной записи"}.
+
+Просмотрены файлы:
+- `src/main/kotlin/fixture/FixtureProjectApi.kt`
+- `frontend/src/api/fixtureProjectApi.ts`
+- `$FIXTURE_PROJECT_DOCUMENTATION_PATH`
+
+Изменённый файл: `$path`. Применено: $applied.
+
+```diff
+$diff
+```"""
+            }
             toolResult?.name == "scheduler_create" && "schedules" in toolResult.content ->
                 "Фоновая задача создана и сохранена локально. Статус и следующее выполнение уже доступны в панели «Фоновые задачи»."
             toolResult?.name == "tracker_get_issue" && "DEMO-101" in toolResult.content ->
@@ -367,3 +443,47 @@ private fun parseFixtureToolResult(message: LlmMessage): JsonObject =
 private const val PIPELINE_FIXTURE_PROMPT =
     "Найди локальные сведения о композиции MCP-инструментов, кратко суммируй их и сохрани в pipeline-summary.md"
 private val PIPELINE_TOOL_NAMES = setOf(SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL)
+
+private const val PROJECT_FILE_ANALYSIS_PROMPT =
+    "Найди все места использования API FixtureProjectApi в проекте, прочитай связанные файлы и объясни путь вызова от Kotlin до TypeScript. Ничего не изменяй."
+private const val PROJECT_FILE_UPDATE_PROMPT =
+    "Проверь, соответствует ли документация FixtureProjectApi фактической реализации. Если она устарела, обнови её и покажи diff."
+private val PROJECT_FILE_FIXTURE_PROMPTS = setOf(PROJECT_FILE_ANALYSIS_PROMPT, PROJECT_FILE_UPDATE_PROMPT)
+private val PROJECT_FILE_TOOL_NAMES = setOf(PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL)
+private const val FIXTURE_PROJECT_DOCUMENTATION_PATH = "docs/fixture-project-api.md"
+private const val FIXTURE_PROJECT_DOCUMENTATION_CURRENT = """# FixtureProjectApi
+
+`FixtureProjectApi` exposes `GET /api/fixture-project` from the Kotlin route.
+The TypeScript client sends a GET request to the same path and returns the JSON summary.
+"""
+
+private fun createProjectFileAssistantFixture(directory: java.nio.file.Path) {
+    val kotlin = directory.resolve("src/main/kotlin/fixture/FixtureProjectApi.kt")
+    val typescript = directory.resolve("frontend/src/api/fixtureProjectApi.ts")
+    val documentation = directory.resolve(FIXTURE_PROJECT_DOCUMENTATION_PATH)
+    listOf(kotlin, typescript, documentation).forEach { Files.createDirectories(it.parent) }
+    Files.writeString(kotlin, """package fixture
+
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
+
+object FixtureProjectApi {
+    const val ROUTE = "/api/fixture-project"
+}
+
+fun Route.fixtureProjectRoutes() {
+    get(FixtureProjectApi.ROUTE) { call.respondText("fixture summary") }
+}
+""")
+    Files.writeString(typescript, """export const FixtureProjectApi = {
+  path: "/api/fixture-project",
+  method: "GET",
+  load: () => fetch("/api/fixture-project").then((response) => response.text()),
+};
+""")
+    Files.writeString(documentation, """# FixtureProjectApi
+
+`FixtureProjectApi` accepts `POST /api/fixture-project` and returns a fixture summary.
+""")
+}

@@ -15,8 +15,13 @@ loopback `http://127.0.0.1:11434/v1/chat/completions`.
 `{ serverId, toolName, arguments, status, result }`. `serverId` — безопасный
 стабильный ID фактического server-owner из объединённого `tools/list`; позиция в
 массиве — фактический порядок вызова. `status` равен `success` или `error`, а
-arguments/result уже ограничены и очищены для диагностики. Массив пуст для ответа
-без MCP. Поле входит в обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
+arguments/result уже ограничены и очищены для диагностики. Для
+`project_search`, `project_read_files`, `project_write_file` это отдельная safe
+projection: query/relative paths/counts/line/bytes/hashes/mode/status/truncation,
+но без snippets, прочитанного или записываемого content и полного diff. Полный
+bounded tool result доступен только модели в request-local недоверенном сообщении
+и не заменяется diagnostic-строкой. Массив пуст для ответа без MCP. Поле входит в
+обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
 Для output RAG-ветки, assistant RAG-чата, `/help <вопрос>` или `/support <ticketId> <вопрос>` `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
@@ -222,6 +227,27 @@ MCP `workspace/git_current_branch` принимает строго `{}`. Усп�
 detached HEAD `branch=null`, для non-Git root `available=false`; неизвестные поля
 возвращают MCP tool error. Этот контракт виден только через уже существующую
 MCP-диагностику и не добавляет REST route.
+
+Три repository file tools того же discovered owner `workspace` также не добавляют
+REST/DTO:
+
+- `project_search({query})` — непустой literal query до 200 символов; результат
+  содержит relative POSIX `path`, `line`, bounded `snippet`, counts и `truncated`;
+- `project_read_files({paths})` — 1–5 уникальных relative paths; для каждого
+  возвращает bounded UTF-8 `content`, `byteCount`, `sha256`, плюс общий byte count;
+- `project_write_file({path,content,mode,createOnly,expectedSha256?})` —
+  `preview|apply`, create-only для нового файла, обязательный SHA-256 прочитанной
+  версии для существующего; результат содержит `applied/created/wouldCreate/noOp`,
+  previous/new hashes, byte count и bounded unified diff.
+
+Инструменты доступны только OpenAI в `unrestricted`, проходят общий лимит трёх
+`tools/call`, не передаются Ollama/DeepSeek/другим modes или assistant RAG.
+Allowed text policy исключает absolute/traversal/symlink, `.git`, `.env*`, build,
+IDE/cache/dependency/video/runtime/`.llm-*`, secret и binary paths; запись также
+запрещена в agent instructions, workflows и build/package configuration.
+Stale hash, неизвестные поля и нарушение policy возвращают безопасный MCP tool
+error без absolute root, environment или file content. Apply использует temporary
+file + atomic replace с fallback, а preview никогда не меняет диск.
 
 При `unrestricted + MEMORY_LAYERS + assistantRagEnabled=true` каждый
 `POST /api/operations` сначала выполняет retrieval из `structured.json`.
