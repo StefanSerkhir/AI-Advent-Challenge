@@ -107,7 +107,7 @@ client, stdio transport, JVM-процесс, mutex и cache `tools/list`:
 - `operations`: `ping`, `echo`, `tracker_get_issue`, `scheduler_*`;
 - `knowledge`: `search`, `summarize`;
 - `support`: `support_get_ticket_context`;
-- `workspace`: `git_current_branch`, `save_to_file`, `project_search`,
+- `workspace`: `git_current_branch`, `git_activity_report`, `save_to_file`, `project_search`,
   `project_read_files`, `project_write_file`.
 
 Lifecycle-aware `LocalMcpGateway` объединяет реальные каталоги в детерминированном
@@ -117,8 +117,9 @@ Lifecycle-aware `LocalMcpGateway` объединяет реальные ката
 сбой инвалидирует только сессию владельца и позволяет переподключить её. `search` читает
 только небольшой детерминированный каталог, `summarize` локально формирует резюме
 с `sourceIds`, `git_current_branch` безопасно читает только имя текущей Git-ветки
-и короткий commit из настроенного корня репозитория, а `save_to_file` атомарно
-записывает UTF-8 в специально настроенный output-каталог. Ни один из этих четырёх
+и короткий commit, `git_activity_report` — bounded metadata коммитов, файлов и
+working tree из настроенного корня репозитория, а `save_to_file` атомарно
+записывает UTF-8 в специально настроенный output-каталог. Ни один из этих пяти
 инструментов не вызывает сеть
 или LLM. Tracker по-прежнему читает задачу `DEMO-101` из локального источника.
 `support_get_ticket_context` строго валидирует `TCK-[1-9][0-9]*`, читает
@@ -126,7 +127,7 @@ Lifecycle-aware `LocalMcpGateway` объединяет реальные ката
 только allowlist-поля связанной пары. Repository tools читают только разрешённые
 UTF-8 файлы под `LLM_MCP_REPOSITORY_ROOT`, не следуют по symlink и изменяют файл
 только через SHA-256 optimistic concurrency и атомарную замену. Версия набора MCP
-demo servers — `2.3.0`.
+demo servers — `2.4.0`.
 
 Gradle Wrapper автоматически загрузит зависимости, соберёт код и запустит пример:
 
@@ -134,7 +135,7 @@ Gradle Wrapper автоматически загрузит зависимост�
 ./gradlew runMcpDemo
 ```
 
-Успешный запуск содержит строки `MCP connection established`, provenance пятнадцати
+Успешный запуск содержит строки `MCP connection established`, provenance шестнадцати
 инструментов и выполняет настоящие межсерверные `tools/call`: результат
 `knowledge/search` становится входом `knowledge/summarize`, его `summary` и
 `sourceIds` передаются в `workspace/save_to_file`, после
@@ -261,6 +262,29 @@ npm --prefix frontend run record:developer-assistant-demo
 
 Подробный контракт, ограничения и сценарий ролика описаны в
 [инструкции ассистента разработчика](docs/DEVELOPER_ASSISTANT_DEMO.md).
+
+## AI-сводка разработки
+
+В режиме **«Простой агент»** доступна request-local команда `/digest` (24 часа)
+или `/digest <hours>` с диапазоном 1–168. Backend выполняет ровно один discovered
+MCP-вызов `workspace / git_activity_report`, показывает отдельно проверяемые
+Git-факты и передаёт bounded report OpenAI как недоверенные данные. AI формирует
+русскоязычную сводку, а postflight принимает её только с известными `[C...]` и
+`[F...]` citations и точной секцией источников. Raw file content и patch не
+собираются; history, memory layers, профиль, инварианты и task FSM не меняются.
+
+`/digest help` и некорректная команда обрабатываются локально без ключа, MCP и
+LLM. Само AI-выполнение OpenAI-only; Ollama и DeepSeek MCP tools не получают.
+Безопасная fixture-демонстрация использует временный настоящий Git-репозиторий,
+настоящий MCP stdio server и deterministic fake LLM:
+
+```bash
+./gradlew runWebFixture -PwebPort=18080
+npm --prefix frontend run record:project-digest-demo
+```
+
+Архитектура, security model и сценарий видео описаны в
+[PROJECT_DIGEST_DEMO.md](docs/PROJECT_DIGEST_DEMO.md).
 
 ## Ассистент поддержки
 
@@ -410,7 +434,9 @@ WEB_PORT=8090 ./gradlew runWeb
    `/help` и `/help <вопрос>` дают памятку либо документированный ответ о репозитории
    с проверенными источниками и текущей Git-веткой из MCP. Точные `/support` и
    `/support <ticketId> <вопрос>` добавляют request-local поддержку по тикету через
-   один MCP-вызов и RAG только по `docs/support/`. Стратегия «Слои памяти» подключает
+   один MCP-вызов и RAG только по `docs/support/`. `/digest` и `/digest <hours>`
+   собирают bounded Git activity одним MCP-вызовом и дают grounded AI-сводку с
+   проверяемыми `[C...]`/`[F...]` источниками. Стратегия «Слои памяти» подключает
    одновременно краткосрочную, рабочую и долговременную память, а отдельная
    машина состояния фиксирует цель и ход текущей задачи. Отдельные инварианты
    задают обязательные архитектурные, технические, стековые и бизнес-правила,
@@ -1007,7 +1033,8 @@ Playwright самостоятельно запускает `runWebFixture` на 
 follow-up query/task/WORKING/SHORT_TERM, sources/exact quotes/abstention, слои памяти,
 CRUD/диагностика/конфликт инвариантов,
 pause/reload/resume машины состояния задачи, два goal-level сценария файлового
-ассистента и отсутствие raw content/diff в MCP-диагностике, демо,
+ассистента, AI-сводку через настоящий временный Git/MCP и отсутствие raw
+content/diff в MCP-диагностике, демо,
 горячие клавиши, история, перезагрузка во время запроса,
 две вкладки, offline/reconnect, потерянный ответ POST, повтор после отмены,
 ошибки отдельных моделей, Markdown/код/формулы и узкое окно. Этот клиент

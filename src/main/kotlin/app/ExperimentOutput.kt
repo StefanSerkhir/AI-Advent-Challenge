@@ -23,6 +23,7 @@ data class ExperimentOutput(
     val assistantInvariantDiagnostics: AssistantInvariantDiagnostics? = null,
     val mcpCalls: List<McpCallDiagnostic> = emptyList(),
     val ragDiagnostics: RagDiagnostics? = null,
+    val projectDigestDiagnostics: ProjectDigestDiagnostics? = null,
 )
 
 data class ExperimentOutputDelta(

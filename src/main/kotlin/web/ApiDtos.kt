@@ -195,6 +195,25 @@ data class OutputDto(
     val assistantInvariantDiagnostics: AssistantInvariantDiagnosticsDto? = null,
     val mcpCalls: List<McpCallDiagnosticDto> = emptyList(),
     val ragDiagnostics: RagDiagnosticsDto? = null,
+    val projectDigestDiagnostics: ProjectDigestDiagnosticsDto? = null,
+)
+@Serializable
+data class ProjectDigestDiagnosticsDto(
+    val schemaVersion: Int,
+    val sinceHours: Int,
+    val generatedAt: String,
+    val since: String,
+    val branch: String?,
+    val detached: Boolean,
+    val head: String?,
+    val commitCount: Int,
+    val fileCount: Int,
+    val workingTreeDirty: Boolean,
+    val stagedCount: Int,
+    val unstagedCount: Int,
+    val untrackedCount: Int,
+    val truncated: Boolean,
+    val sourceIds: List<String>,
 )
 @Serializable
 data class RagSourceDiagnosticDto(
@@ -632,6 +651,24 @@ private fun RagDiagnostics.toDto() = RagDiagnosticsDto(
     ),
 )
 
+private fun ProjectDigestDiagnostics.toDto() = ProjectDigestDiagnosticsDto(
+    schemaVersion = schemaVersion,
+    sinceHours = sinceHours,
+    generatedAt = generatedAt,
+    since = since,
+    branch = branch,
+    detached = detached,
+    head = head,
+    commitCount = commitCount,
+    fileCount = fileCount,
+    workingTreeDirty = workingTreeDirty,
+    stagedCount = stagedCount,
+    unstagedCount = unstagedCount,
+    untrackedCount = untrackedCount,
+    truncated = truncated,
+    sourceIds = sourceIds,
+)
+
 private fun SchedulerSummary.toDto() = BackgroundTaskDto(
     id = id,
     title = title,
@@ -687,7 +724,10 @@ fun WorkbenchState.toDto(): StateDto = StateDto(
                     output.tokenMetrics?.toDto(), output.contextStrategy?.name, output.branchId, output.branchName,
                     output.assistantMemoryDiagnostics?.toDto(), output.taskStateDiagnostics?.toDto(),
                     output.assistantInvariantDiagnostics?.toDto(), output.mcpCalls.map(McpCallDiagnostic::toDto))
-                    .copy(ragDiagnostics = output.ragDiagnostics?.toDto())
+                    .copy(
+                        ragDiagnostics = output.ragDiagnostics?.toDto(),
+                        projectDigestDiagnostics = output.projectDigestDiagnostics?.toDto(),
+                    )
             }, report?.estimatedTotalCostUsd,
             if (report != null && report.evaluation == null) "Автооценка пропущена: нужны хотя бы два успешных ответа." else null,
             (exchange.outcome as? ExchangeOutcome.Failed)?.code,

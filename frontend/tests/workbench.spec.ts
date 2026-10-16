@@ -458,6 +458,61 @@ test("developer help shows repository evidence and current git branch through MC
   expect(state.assistantMemory.layers.find((layer) => layer.layer === "SHORT_TERM")?.count).toBe(0);
 });
 
+test("project digest separates deterministic git facts from grounded AI conclusions", async ({page}) => {
+  await setMode(page, "unrestricted");
+  await expect(page.getByTestId("project-digest-hint")).toContainText("/digest 24");
+
+  await send(page, "/digest help");
+  await done(page);
+  await expect(page.getByTestId("exchange").last()).toContainText("AI-сводка разработки");
+  await expect(page.getByTestId("exchange").last()).toContainText("/digest <hours>");
+
+  await send(page, "/digest 24");
+  const exchange = page.getByTestId("exchange").last();
+  const card = exchange.getByTestId("response-card");
+  const gitFacts = card.getByTestId("project-digest-diagnostics");
+  await expect(gitFacts).toBeVisible();
+  await expect(gitFacts).toContainText("Детерминированные Git-факты");
+  await expect(gitFacts).toContainText("Период: 24 ч");
+  await expect(gitFacts).toContainText("fixture-main");
+  await expect(gitFacts).toContainText("Коммиты: 2");
+  await expect(gitFacts).toContainText("Working tree: есть изменения");
+  await done(page);
+
+  await expect(card).toContainText("AI-СВОДКА РАЗРАБОТКИ");
+  await expect(card).toContainText("AI-сводка по проверенным фактам");
+  await expect(card).toContainText("Что изменилось");
+  await expect(card).toContainText("Риски и проверки");
+  await expect(card).toContainText("Источники");
+  await expect(card).toContainText("[C1]");
+  await expect(card).toContainText("[F1]");
+  const mcp = card.getByTestId("mcp-diagnostics");
+  await expect(mcp).toContainText("workspace / git_activity_report");
+  await expect(mcp).toContainText("успех");
+
+  const state = await (await page.request.get("/api/state")).json() as State;
+  const output = state.exchanges.at(-1)!.outputs[0];
+  expect(output.projectDigestDiagnostics).toMatchObject({
+    schemaVersion: 1,
+    sinceHours: 24,
+    branch: "fixture-main",
+    commitCount: 2,
+    workingTreeDirty: true,
+  });
+  expect(output.projectDigestDiagnostics?.sourceIds).toContain("C1");
+  expect(output.mcpCalls).toHaveLength(1);
+  expect(output.mcpCalls[0]).toMatchObject({
+    serverId: "workspace",
+    toolName: "git_activity_report",
+    status: "success",
+  });
+  expect(output.mcpCalls[0].result).not.toContain("Добавлен frontend-клиент");
+  expect(output.mcpCalls[0].result).not.toContain("fixtureProjectApi.ts");
+  expect(output.mcpCalls[0].result).not.toContain("file content must never enter");
+  expect(state.history.unrestricted).toBe(0);
+  expect(state.assistantMemory.layers.find((layer) => layer.layer === "SHORT_TERM")?.count).toBe(0);
+});
+
 test("support assistant grounds a ticket answer in MCP context and support documentation", async ({page}) => {
   await setMode(page, "unrestricted");
   await expect(page.getByTestId("support-assistant-hint")).toContainText(

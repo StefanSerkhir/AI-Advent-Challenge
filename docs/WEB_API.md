@@ -23,6 +23,15 @@ bounded tool result доступен только модели в request-local 
 и не заменяется diagnostic-строкой. Массив пуст для ответа без MCP. Поле входит в
 обычный `StateDto` и SSE snapshot, отдельного MCP endpoint нет.
 
+Output команды `/digest` дополнительно содержит nullable
+`projectDigestDiagnostics`:
+`{ sinceHours, generatedAt, since, branch, detached, head, commitCount,
+fileCount, workingTreeDirty, stagedCount, unstagedCount, untrackedCount,
+truncated, sourceIds[] }`. Это safe projection: в нём нет
+repository root, commit subjects, paths, file content, diff или raw MCP JSON.
+Во время streaming controller может опубликовать уже проверенные Git-факты до
+финального AI-текста; `StateDto`/SSE остаётся единственным источником истины.
+
 Для output RAG-ветки, assistant RAG-чата, `/help <вопрос>` или `/support <ticketId> <вопрос>` `ragDiagnostics` имеет явную форму
 `{ applied, pipeline, queryRewritten, retrievalQuery, candidateLimit,
 candidateCount, resultLimit, minSimilarity, discardedCount, filteredCount,
@@ -207,6 +216,23 @@ MCP-диагностикой, если документации достаточ
 `./gradlew buildLocalDocumentIndex`. Parser регистрозависим: `/helpful`, `/Help`
 и `/help` не в начале prompt обрабатываются обычным агентом.
 
+Точные `/digest`, `/digest <hours>` и `/digest help` используют тот же
+`POST /api/operations`; нового endpoint или response mode нет. Пустой аргумент
+означает 24 часа, `hours` должен быть целым от 1 до 168. Help и invalid usage
+локальны, поэтому не требуют ключа и не вызывают MCP/LLM. AI-выполнение доступно
+только при OpenAI в `unrestricted`; DeepSeek/Ollama получают локальное объяснение.
+
+`ProjectDigestRunner` находит `workspace/git_activity_report` в текущем
+`tools/list`, выполняет ровно один backend-controlled call, строго проверяет
+versioned JSON и вызывает OpenAI без tool definitions. Commit subjects, branch и
+paths передаются как недоверенные данные. Успешный output имеет заголовок
+`AI-СВОДКА РАЗРАБОТКИ`, один safe-projected `mcpCalls[]`, typed
+`projectDigestDiagnostics` и Markdown из пяти секций. Backend запрещает
+неизвестные source IDs, требует citations в «Что изменилось» и «Риски и проверки»
+и точное соответствие секции «Источники» Git report. Нарушение postflight,
+MCP/LLM error, cancellation и незавершённый stream не меняют history, memory
+layers, профиль, инварианты или FSM; success также остаётся request-local.
+
 Точные `/support` и `/support <ticketId> <вопрос>` используют тот же
 `POST /api/operations`, `StateDto` и SSE. Памятка локальна. Вопросная форма
 доступна только для OpenAI: controller не читает support JSON и вызывает ровно
@@ -227,6 +253,16 @@ MCP `workspace/git_current_branch` принимает строго `{}`. Усп�
 detached HEAD `branch=null`, для non-Git root `available=false`; неизвестные поля
 возвращают MCP tool error. Этот контракт виден только через уже существующую
 MCP-диагностику и не добавляет REST route.
+
+MCP `workspace/git_activity_report` принимает строгий объект с необязательными
+`sinceHours` (default 24, 1–168), `maxCommits` (default 20, 1–50) и `maxFiles`
+(default 50, 1–100). Repository path не принимается. Schema v1 возвращает
+`generatedAt`, `since`, branch/detached/HEAD, bounded `commits[]` с `C...`,
+`files[]` с `F...` и `scope=committed|working_tree`, working-tree counters и
+`truncated`. Git запускается отдельными аргументами из configured root. Raw patch,
+file content, remote/environment, `.env*`, `.llm-*`, secret/runtime paths и
+unbounded strings/collections не возвращаются. Пустой репозиторий, отсутствие
+недавних коммитов, detached HEAD и dirty tree имеют валидные результаты.
 
 Три repository file tools того же discovered owner `workspace` также не добавляют
 REST/DTO:

@@ -64,6 +64,7 @@ const thinkingOutput: Output = {
   assistantInvariantDiagnostics: null,
   mcpCalls: [],
   ragDiagnostics: null,
+  projectDigestDiagnostics: null,
 };
 
 function ResponseCard({ output }: { output: Output }) {
@@ -107,6 +108,29 @@ function ResponseCard({ output }: { output: Output }) {
         )}
       </div>
       {output.model && <div className="model-label">{output.model}</div>}
+      {output.projectDigestDiagnostics && <div className="project-digest-diagnostics" data-testid="project-digest-diagnostics">
+        <div className="project-digest-heading">
+          <strong>Детерминированные Git-факты</strong>
+          <Badge size="xs" variant="light" color="blue">schema v{output.projectDigestDiagnostics.schemaVersion}</Badge>
+        </div>
+        <p>
+          Период: <strong>{output.projectDigestDiagnostics.sinceHours} ч</strong> · с {output.projectDigestDiagnostics.since} · снимок {output.projectDigestDiagnostics.generatedAt}
+        </p>
+        <p>
+          Ветка: <code>{output.projectDigestDiagnostics.detached ? "detached HEAD" : output.projectDigestDiagnostics.branch ?? "не определена"}</code>
+          {output.projectDigestDiagnostics.head && <> · HEAD <code>{output.projectDigestDiagnostics.head}</code></>}
+        </p>
+        <p>
+          Коммиты: <strong>{output.projectDigestDiagnostics.commitCount}</strong> · изменённые файлы: <strong>{output.projectDigestDiagnostics.fileCount}</strong>
+        </p>
+        <p>
+          Working tree: <strong>{output.projectDigestDiagnostics.workingTreeDirty ? "есть изменения" : "чистый"}</strong> · staged {output.projectDigestDiagnostics.stagedCount} · unstaged {output.projectDigestDiagnostics.unstagedCount} · untracked {output.projectDigestDiagnostics.untrackedCount}
+        </p>
+        <p>
+          Source IDs: <code>{output.projectDigestDiagnostics.sourceIds.join(", ") || "нет"}</code>
+          {output.projectDigestDiagnostics.truncated && <Badge size="xs" variant="light" color="yellow">отчёт усечён лимитами</Badge>}
+        </p>
+      </div>}
       {output.mcpCalls.length > 0 && <div className="mcp-diagnostics" data-testid="mcp-diagnostics">
         <strong>MCP-инструменты</strong>
         {output.mcpCalls.map((call, index) => <div className="mcp-call" key={`${call.serverId}-${call.toolName}-${index}`}>
@@ -178,6 +202,7 @@ function ResponseCard({ output }: { output: Output }) {
         </Alert>
       ) : (
         <>
+          {output.projectDigestDiagnostics && <strong className="digest-section-title">AI-сводка по проверенным фактам</strong>}
           {output.ragDiagnostics && !output.streaming && <strong className="rag-section-title">Ответ</strong>}
           <div
             className={`response-body ${long && !expanded ? "collapsed" : ""} ${output.streaming ? "streaming" : ""}`}

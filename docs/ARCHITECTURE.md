@@ -43,7 +43,7 @@ flowchart LR
 | `src/main/kotlin/config` | Чтение и атомарное сохранение локального `.env` |
 | `src/main/kotlin/tokens` | Оценка токенов, профили окон/цен, подготовка контекста, overflow и агрегаты |
 | `src/main/kotlin/agent` | Обычный агент, старые контекстные стратегии, отдельный агент слоёв памяти и JSON stores |
-| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `/support`-ассистент поддержки, `WorkbenchController` и UI-neutral state |
+| `src/main/kotlin/app` | Настройки, orchestration режимов, runners, `/help`-ассистент разработчика, `/support`-ассистент поддержки, `/digest` AI-сводка, `WorkbenchController` и UI-neutral state |
 | `src/main/kotlin/web` | Явные DTO, валидация команд, REST/SSE, локальная защита и static resources |
 | `src/main/kotlin/mcp` | Локальный MCP stdio-сервер, lifecycle-aware шлюз `tools/list`/`tools/call`, repository file policy/операции и CLI-проверка |
 | `src/main/kotlin/indexing` | Независимый pipeline corpus → две стратегии chunking → embeddings → versioned indexes → comparison/evaluation |
@@ -150,7 +150,7 @@ Base64 credentials, prompt и ответ видимы сетевому набл�
 для краткого лабораторного использования в доверенной домашней сети. Runbook:
 [LAN_HTTP_CHAT.md](LAN_HTTP_CHAT.md).
 
-`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler, output-каталог и repository file tools в fixture также настоящие, но получают отдельные пути во временном каталоге теста. Fixture создаёт связанные Kotlin, TypeScript и Markdown файлы `FixtureProjectApi` для двух goal-level сценариев анализа и обновления документации.
+`runWebFixture` использует `src/test/kotlin/web/WebFixture.kt`. Его fake clients детерминированы и доступны только в test source set, поэтому не могут случайно попасть в production distribution. MCP scheduler, output-каталог и repository file tools в fixture также настоящие, но получают отдельные пути во временном каталоге теста. Fixture создаёт связанные Kotlin, TypeScript и Markdown файлы `FixtureProjectApi` для двух goal-level сценариев анализа и обновления документации. Там же создаётся настоящий временный Git-репозиторий с двумя коммитами фиксированных дат, unstaged и untracked изменениями; clock workspace MCP фиксирован, поэтому `/digest 24` воспроизводим.
 
 Отдельная задача `./gradlew runMcpDemo` использует тот же registry-backed
 `LocalMcpGateway`, что и web runtime. Явные регистрации имеют безопасные стабильные
@@ -159,7 +159,7 @@ ID и инъецируемые process factories. Для `operations`, `knowledg
 mutex и caches каталога. Каждый процесс объявляет только свой набор:
 `operations` — `ping`, `echo`, Tracker и scheduler; `knowledge` — `search` и
 `summarize`; `support` — `support_get_ticket_context`; `workspace` —
-`git_current_branch`, `save_to_file`, `project_search`, `project_read_files` и
+`git_current_branch`, `git_activity_report`, `save_to_file`, `project_search`, `project_read_files` и
 `project_write_file`. Только `operations` создаёт
 `SchedulerService`. Stdout каждого процесса зарезервирован для JSON-RPC.
 
@@ -181,7 +181,7 @@ CLI выполняет handshake, проверяет объединённый к
 root. Mock Tracker и pipeline tools не читают `.env`, не используют внешнюю сеть
 или LLM и не требуют ключей. Support server строго загружает два JSON-ресурса
 формата v1, валидирует все записи/связи до использования и отдаёт только
-allowlist-поля тикета и пользователя. Версия набора MCP demo servers — `2.3.0`.
+allowlist-поля тикета и пользователя. Версия набора MCP demo servers — `2.4.0`.
 
 `search` работает только с встроенным каталогом стабильных `id`, `title` и
 `content`. `summarize` детерминированно ограничивает число обработанных записей и
@@ -200,6 +200,17 @@ file и применяет atomic replace с fallback. Результат сод
 `shortCommit`: без absolute path, remote URL, environment, содержимого файлов и
 секретов. Detached HEAD и каталог вне Git возвращаются безопасно; неизвестные
 аргументы отвергаются до запуска процесса.
+
+`git_activity_report` принимает только `sinceHours=1..168`,
+`maxCommits=1..50` и `maxFiles=1..100` с server-side defaults 24/20/50. Он
+запускает Git через `ProcessBuilder` с отдельными аргументами и тем же заранее
+настроенным root, но не принимает path. Versioned JSON schema v1 содержит
+generated/since timestamps, branch/detached HEAD, bounded commits, committed и
+working-tree files со стабильными `C...`/`F...` IDs, агрегаты staged/unstaged/
+untracked и `truncated`. File content, raw patch, remote/environment и запрещённые
+`.env*`, `.llm-*`, secret/runtime paths не возвращаются; все строки, коллекции и
+process output ограничены. Инъецируемые command runner и UTC clock обеспечивают
+детерминированные тесты без изменения production-пути.
 
 `RepositoryFileWorkspace` — отдельная production-граница, чтобы file policy не
 разрасталась внутри `McpDemoServer.kt`. Единственный root приходит из уже
@@ -537,9 +548,22 @@ OpenAI-compatible transport добавляет Bearer header только при
 - монотонными номерами exchange/revision и streaming snapshots;
 - read-only monitor снимков фоновых задач из MCP scheduler.
 
-До обычной развилки `UNRESTRICTED` контроллер строго распознаёт только `/help` и
-`/help <вопрос>`. Пустая команда возвращает локальную памятку без provider client.
-Команда с вопросом передаётся в `DeveloperHelpRunner`: он использует тот же
+До обычной развилки `UNRESTRICTED` контроллер строго распознаёт `/help`,
+`/support` и `/digest`; это команды внутри существующего response mode, а не
+новые режимы. Для `/digest` parser принимает пустой аргумент как 24 часа, целое
+1–168 или `help`; help/usage локальны и не создают provider client. OpenAI-ветка
+запускает отдельный `ProjectDigestRunner`: находит `git_activity_report` только в
+discovered `tools/list`, делает ровно один backend-controlled `tools/call`, строго
+разбирает report и вызывает модель без tool definitions. Git metadata входит в
+prompt как недоверенные данные. Postflight требует пять секций, известные
+`C...`/`F...` citations и точное соответствие списка источников report. Output
+`AI-СВОДКА РАЗРАБОТКИ` содержит безопасный `ProjectDigestDiagnostics` и один
+`mcpCalls`; полный MCP JSON по REST/SSE не передаётся. Вся ветка request-local и
+не пишет history, слои памяти, профиль, инварианты или FSM при success/error/
+cancellation. DeepSeek/Ollama завершаются локально до MCP/LLM.
+
+Команда `/help <вопрос>` передаётся в `DeveloperHelpRunner`; `/help` возвращает
+локальную памятку без provider client. `DeveloperHelpRunner` использует тот же
 `DocumentRetriever`, relevance filter и citation validator, что RAG, но фильтрует
 corpus до `README.md` и `docs/**/*.md|pdf`. Затем через объединённый каталог
 `tools/list` он находит owner `git_current_branch` и делает один настоящий
@@ -883,11 +907,16 @@ counts/threshold, source IDs, verified quotes и evidence status. WORKING под
 как память текущей задачи и предоставляет явные типы ввода «Уточнение»,
 «Ограничение» и «Термин» поверх существующего memory CRUD.
 
-В composer режима `unrestricted` постоянно видны короткие подсказки о `/help` и
-`/support TCK-1001 Почему не работает авторизация?`.
+В composer режима `unrestricted` постоянно видны короткие подсказки о `/help`,
+`/digest 24` и `/support TCK-1001 Почему не работает авторизация?`.
 Ответ ассистента разработчика отображается обычной карточкой: RAG-блок подписан
 «Документация репозитория», а ниже используются существующие MCP/evidence/sources
 компоненты без отдельного клиентского состояния.
+
+Карточка AI-сводки сначала показывает отдельный типизированный блок
+«Детерминированные Git-факты»: период, since/generated timestamps, branch/HEAD,
+counts, working-tree состояние, source IDs и truncation. Ниже визуально отделены
+сформированные AI выводы и проверенная секция источников.
 
 Карточка output показывает `mcpCalls` отдельным блоком «MCP-инструменты»: порядковый
 номер, `serverId / toolName`, безопасные аргументы, `success`/`error` и безопасный результат. Данные приходят в
@@ -997,7 +1026,9 @@ offline/reconnect, идемпотентный retry, отмену, Markdown, у�
 реальные fixture retrieval/MCP, branch, источники и отсутствие записи в историю
 или `SHORT_TERM`. Сценарий `/support` дополнительно проверяет TCK-1001, provenance
 `support/support_get_ticket_context`, verified quotes, support-only sources и ту
-же изоляцию history/memory.
+же изоляцию history/memory. Сценарий `/digest 24` проходит UI → controller →
+настоящий stdio MCP → временный Git → fake streaming LLM → SSE → UI, проверяет
+Git-факты, grounded источники, provenance и отсутствие raw report/history/memory.
 Goal-level сценарии `FixtureProjectApi` дополнительно проверяют два настоящих
 stdio-вызова без записи и три вызова с atomic apply, три прочитанных файла, diff,
 реальное обновление Markdown и отсутствие raw content/write content/diff в

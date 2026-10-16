@@ -17,6 +17,7 @@ import kotlinx.io.asSource
 import kotlinx.io.buffered
 import kotlinx.serialization.json.*
 import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
 
@@ -70,12 +71,14 @@ class LocalMcpGateway(
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
     supportDataDirectory: Path? = null,
     private val schedulerServerId: String = OPERATIONS_SERVER_ID,
+    clockInstant: Instant? = null,
 ) : McpGateway {
     private val registrations = (registrations ?: defaultMcpServerRegistrations(
         schedulerStateFile,
         outputDirectory,
         repositoryRoot,
         supportDataDirectory,
+        clockInstant,
     ))
         .also { configured ->
             require(configured.isNotEmpty()) { "At least one MCP server registration is required." }
@@ -262,11 +265,19 @@ internal fun defaultMcpServerRegistrations(
     outputDirectory: Path,
     repositoryRoot: Path,
     supportDataDirectory: Path? = null,
+    clockInstant: Instant? = null,
 ): List<McpServerRegistration> = listOf(
-    localMcpServerRegistration(OPERATIONS_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
-    localMcpServerRegistration(KNOWLEDGE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
-    localMcpServerRegistration(SUPPORT_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot, supportDataDirectory = supportDataDirectory),
-    localMcpServerRegistration(WORKSPACE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot),
+    localMcpServerRegistration(OPERATIONS_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot, clockInstant = clockInstant),
+    localMcpServerRegistration(KNOWLEDGE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot, clockInstant = clockInstant),
+    localMcpServerRegistration(
+        SUPPORT_SERVER_ID,
+        schedulerStateFile,
+        outputDirectory,
+        repositoryRoot,
+        supportDataDirectory = supportDataDirectory,
+        clockInstant = clockInstant,
+    ),
+    localMcpServerRegistration(WORKSPACE_SERVER_ID, schedulerStateFile, outputDirectory, repositoryRoot, clockInstant = clockInstant),
 )
 
 internal fun localMcpServerRegistration(
@@ -289,8 +300,16 @@ internal fun localMcpServerRegistration(
     repositoryRoot: Path,
     onProcessStarted: (Process) -> Unit = {},
     supportDataDirectory: Path? = null,
+    clockInstant: Instant? = null,
 ): McpServerRegistration = McpServerRegistration(serverId) {
-    startServerProcess(serverId, schedulerStateFile, outputDirectory, repositoryRoot, supportDataDirectory).also(onProcessStarted)
+    startServerProcess(
+        serverId,
+        schedulerStateFile,
+        outputDirectory,
+        repositoryRoot,
+        supportDataDirectory,
+        clockInstant,
+    ).also(onProcessStarted)
 }
 
 private val MCP_TIMEOUT = 10.seconds
@@ -302,6 +321,7 @@ internal fun startServerProcess(
     outputDirectory: Path = Path.of(DEFAULT_MCP_OUTPUT_DIRECTORY),
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
     supportDataDirectory: Path? = null,
+    clockInstant: Instant? = null,
 ): Process {
     require(SAFE_SERVER_ID.matches(serverId)) { "Invalid MCP server id." }
     val executable = Path.of(
@@ -325,6 +345,11 @@ internal fun startServerProcess(
         }
         if (serverId == SUPPORT_SERVER_ID && supportDataDirectory != null) {
             builder.environment()["LLM_SUPPORT_DATA_DIR"] = supportDataDirectory.toAbsolutePath().normalize().toString()
+        }
+        if (clockInstant != null) {
+            builder.environment()["LLM_MCP_CLOCK_INSTANT"] = clockInstant.toString()
+        } else {
+            builder.environment().remove("LLM_MCP_CLOCK_INSTANT")
         }
     }.start()
 }

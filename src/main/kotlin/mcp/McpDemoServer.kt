@@ -17,10 +17,15 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 
 internal const val MCP_DEMO_SERVER_NAME = "llm-workbench-mcp-orchestrator"
-internal const val MCP_DEMO_VERSION = "2.3.0"
+internal const val MCP_DEMO_VERSION = "2.4.0"
 internal const val DEFAULT_MCP_OUTPUT_DIRECTORY = ".llm-mcp-output"
 internal const val TRACKER_GET_ISSUE_TOOL = "tracker_get_issue"
 internal const val SEARCH_TOOL = "search"
@@ -34,7 +39,7 @@ internal const val SCHEDULER_CANCEL_TOOL = "scheduler_cancel"
 internal const val SCHEDULER_SUMMARY_TOOL = "scheduler_get_summary"
 internal val MCP_DEMO_TOOL_NAMES = setOf(
     "ping", "echo", TRACKER_GET_ISSUE_TOOL,
-    SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL,
+    SEARCH_TOOL, SUMMARIZE_TOOL, SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL, GIT_ACTIVITY_REPORT_TOOL,
     PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL,
     SUPPORT_GET_TICKET_CONTEXT_TOOL,
     SCHEDULER_CREATE_TOOL, SCHEDULER_LIST_TOOL, SCHEDULER_CANCEL_TOOL, SCHEDULER_SUMMARY_TOOL,
@@ -47,7 +52,7 @@ internal val MCP_TOOL_NAMES_BY_SERVER = mapOf(
     KNOWLEDGE_SERVER_ID to setOf(SEARCH_TOOL, SUMMARIZE_TOOL),
     SUPPORT_SERVER_ID to setOf(SUPPORT_GET_TICKET_CONTEXT_TOOL),
     WORKSPACE_SERVER_ID to setOf(
-        SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL,
+        SAVE_TO_FILE_TOOL, GIT_CURRENT_BRANCH_TOOL, GIT_ACTIVITY_REPORT_TOOL,
         PROJECT_SEARCH_TOOL, PROJECT_READ_FILES_TOOL, PROJECT_WRITE_FILE_TOOL,
     ),
 )
@@ -69,6 +74,11 @@ public fun main(): Unit = runBlocking {
         ?.takeIf(String::isNotBlank)
         ?.let(Path::of)
         ?: Path.of("").toAbsolutePath().normalize()
+    val clock = System.getenv("LLM_MCP_CLOCK_INSTANT")
+        ?.takeIf(String::isNotBlank)
+        ?.let(Instant::parse)
+        ?.let { Clock.fixed(it, ZoneOffset.UTC) }
+        ?: Clock.systemUTC()
     val supportData = if (serverId == SUPPORT_SERVER_ID) {
         System.getenv("LLM_SUPPORT_DATA_DIR")
             ?.takeIf(String::isNotBlank)
@@ -86,7 +96,14 @@ public fun main(): Unit = runBlocking {
             LocalScheduledTaskExecutor(LocalDemoTrackerSource()),
         ).also { it.start() }
     } else null
-    val server = createDemoServer(serverId, scheduler, outputDirectory, repositoryRoot, supportData = supportData)
+    val server = createDemoServer(
+        serverId,
+        scheduler,
+        outputDirectory,
+        repositoryRoot,
+        supportData = supportData,
+        clock = clock,
+    )
     val transport = StdioServerTransport(
         input = System.`in`.asSource().buffered(),
         output = System.out.asSink().buffered(),
@@ -110,6 +127,7 @@ internal fun createDemoServer(
     repositoryRoot: Path = Path.of("").toAbsolutePath().normalize(),
     gitCommandRunner: GitCommandRunner = ProcessBuilderGitCommandRunner,
     supportData: SupportDataRepository? = null,
+    clock: Clock = Clock.systemUTC(),
 ): Server {
     val projectWorkspace = if (serverId == WORKSPACE_SERVER_ID) RepositoryFileWorkspace(repositoryRoot) else null
     return Server(
@@ -301,6 +319,51 @@ internal fun createDemoServer(
                 val args = request.arguments ?: buildJsonObject {}
                 requireOnlyKeys(args, emptySet())
                 structuredResult(gitCurrentBranch(repositoryRoot, gitCommandRunner))
+            }
+        }
+
+        addTool(
+            name = GIT_ACTIVITY_REPORT_TOOL,
+            description = "Returns a bounded, read-only activity report for the configured Git repository. " +
+                "Includes recent commit metadata, changed relative paths and working-tree counts, but never file content or patches.",
+            inputSchema = ToolSchema(
+                schema = JSON_SCHEMA_DIALECT,
+                properties = buildJsonObject {
+                    putJsonObject("sinceHours") {
+                        put("type", "integer")
+                        put("minimum", 1)
+                        put("maximum", MAX_GIT_ACTIVITY_SINCE_HOURS)
+                        put("default", DEFAULT_GIT_ACTIVITY_SINCE_HOURS)
+                    }
+                    putJsonObject("maxCommits") {
+                        put("type", "integer")
+                        put("minimum", 1)
+                        put("maximum", MAX_GIT_ACTIVITY_COMMITS)
+                        put("default", DEFAULT_GIT_ACTIVITY_MAX_COMMITS)
+                    }
+                    putJsonObject("maxFiles") {
+                        put("type", "integer")
+                        put("minimum", 1)
+                        put("maximum", MAX_GIT_ACTIVITY_FILES)
+                        put("default", DEFAULT_GIT_ACTIVITY_MAX_FILES)
+                    }
+                },
+            ),
+        ) { request ->
+            safeToolCall {
+                val args = request.arguments ?: buildJsonObject {}
+                requireOnlyKeys(args, setOf("sinceHours", "maxCommits", "maxFiles"))
+                val sinceHours = args.optionalInt("sinceHours") ?: DEFAULT_GIT_ACTIVITY_SINCE_HOURS
+                val maxCommits = args.optionalInt("maxCommits") ?: DEFAULT_GIT_ACTIVITY_MAX_COMMITS
+                val maxFiles = args.optionalInt("maxFiles") ?: DEFAULT_GIT_ACTIVITY_MAX_FILES
+                structuredResult(gitActivityReport(
+                    repositoryRoot = repositoryRoot,
+                    sinceHours = sinceHours,
+                    maxCommits = maxCommits,
+                    maxFiles = maxFiles,
+                    clock = clock,
+                    runner = gitCommandRunner,
+                ))
             }
         }
 
@@ -558,7 +621,11 @@ internal fun createDemoServer(
     }
 }
 
-internal data class GitCommandResult(val exitCode: Int, val output: String)
+internal data class GitCommandResult(
+    val exitCode: Int,
+    val output: String,
+    val truncated: Boolean = false,
+)
 
 internal fun interface GitCommandRunner {
     fun run(repositoryRoot: Path, arguments: List<String>): GitCommandResult
@@ -571,17 +638,48 @@ internal object ProcessBuilderGitCommandRunner : GitCommandRunner {
             .directory(repositoryRoot.toFile())
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
+        val captured = AtomicReference<BoundedGitOutput>()
+        val readFailure = AtomicReference<Throwable?>()
+        val reader = thread(name = "bounded-git-output", isDaemon = true) {
+            try {
+                process.inputStream.use { input ->
+                    val bytes = ByteArray(MAX_GIT_OUTPUT_LENGTH)
+                    val buffer = ByteArray(8_192)
+                    var count = 0
+                    var truncated = false
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        val remaining = bytes.size - count
+                        if (remaining > 0) {
+                            val copied = minOf(remaining, read)
+                            buffer.copyInto(bytes, count, 0, copied)
+                            count += copied
+                            if (copied < read) truncated = true
+                        } else {
+                            truncated = true
+                        }
+                    }
+                    captured.set(BoundedGitOutput(String(bytes, 0, count, StandardCharsets.UTF_8), truncated))
+                }
+            } catch (error: Throwable) {
+                readFailure.set(error)
+            }
+        }
         if (!process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             process.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             throw IllegalStateException("Git command timed out.")
         }
-        val output = process.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-            reader.readText().take(MAX_GIT_OUTPUT_LENGTH).trim()
-        }
-        return GitCommandResult(process.exitValue(), output)
+        reader.join(TimeUnit.SECONDS.toMillis(1))
+        if (reader.isAlive) throw IllegalStateException("Git output reader timed out.")
+        readFailure.get()?.let { throw IllegalStateException("Git output could not be read.", it) }
+        val output = captured.get() ?: BoundedGitOutput("", false)
+        return GitCommandResult(process.exitValue(), output.text, output.truncated)
     }
 }
+
+private data class BoundedGitOutput(val text: String, val truncated: Boolean)
 
 internal fun gitCurrentBranch(
     repositoryRoot: Path,
@@ -591,10 +689,10 @@ internal fun gitCurrentBranch(
     return try {
         val branchResult = runner.run(repositoryRoot, listOf("symbolic-ref", "--quiet", "--short", "HEAD"))
         if (branchResult.exitCode == 0) {
-            val branch = branchResult.output.takeIf(::isSafeBranchName) ?: return unavailableGitResult()
+            val branch = branchResult.output.trim().takeIf(::isSafeBranchName) ?: return unavailableGitResult()
             val commit = runner.run(repositoryRoot, listOf("rev-parse", "--short=12", "HEAD"))
-                .takeIf { it.exitCode == 0 && SHORT_COMMIT_REGEX.matches(it.output) }
-                ?.output
+                .takeIf { it.exitCode == 0 && SHORT_COMMIT_REGEX.matches(it.output.trim()) }
+                ?.output?.trim()
             buildJsonObject {
                 put("available", true)
                 put("branch", branch)
@@ -603,12 +701,13 @@ internal fun gitCurrentBranch(
             }
         } else {
             val commit = runner.run(repositoryRoot, listOf("rev-parse", "--short=12", "HEAD"))
-            if (commit.exitCode != 0 || !SHORT_COMMIT_REGEX.matches(commit.output)) return unavailableGitResult()
+            val shortCommit = commit.output.trim()
+            if (commit.exitCode != 0 || !SHORT_COMMIT_REGEX.matches(shortCommit)) return unavailableGitResult()
             buildJsonObject {
                 put("available", true)
                 put("branch", JsonNull)
                 put("detached", true)
-                put("shortCommit", commit.output)
+                put("shortCommit", shortCommit)
             }
         }
     } catch (_: Exception) {
@@ -925,7 +1024,7 @@ private const val MAX_MATCH_CONTENT_LENGTH = 2_000
 private const val MAX_OUTPUT_FILE_NAME_LENGTH = 128
 private const val MAX_SAVED_CONTENT_LENGTH = 20_000
 private const val MAX_BRANCH_NAME_LENGTH = 255
-private const val MAX_GIT_OUTPUT_LENGTH = 4_096
+private const val MAX_GIT_OUTPUT_LENGTH = 512 * 1024
 private const val GIT_TIMEOUT_SECONDS = 5L
 private val SHORT_COMMIT_REGEX = Regex("^[0-9a-fA-F]{7,64}$")
 private val SAFE_FILE_NAME_REGEX = Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

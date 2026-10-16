@@ -18,6 +18,7 @@
     "record:rag-memory-demo": "node scripts/record-rag-memory-demo.mjs",
     "record:developer-assistant-demo": "node scripts/record-developer-assistant-demo.mjs",
     "record:project-file-assistant-demo": "node scripts/record-project-file-assistant-demo.mjs",
+    "record:project-digest-demo": "node scripts/record-project-digest-demo.mjs",
     "record:support-assistant-demo": "node scripts/record-support-assistant-demo.mjs",
     "record:ai-code-review-demo": "node scripts/record-ai-code-review-demo.mjs",
     "verify:rag-memory-real": "node scripts/verify-rag-memory-real.mjs"

@@ -431,6 +431,34 @@ button {
   background: #f4fbf8;
   font-size: 11px;
 }
+.project-digest-diagnostics {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  padding: 10px 11px;
+  border: 1px solid #c9d8f0;
+  border-radius: 8px;
+  background: #f4f7fd;
+  font-size: 11px;
+}
+.project-digest-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.project-digest-diagnostics p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.project-digest-diagnostics code {
+  margin-right: 5px;
+}
+.digest-section-title {
+  display: block;
+  margin-top: 10px;
+  color: #3b5278;
+}
 .mcp-call,
 .mcp-call details {
   display: grid;

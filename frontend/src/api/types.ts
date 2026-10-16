@@ -151,6 +151,24 @@ export interface Output {
   assistantInvariantDiagnostics: AssistantInvariantDiagnostics | null;
   mcpCalls: McpCallDiagnostic[];
   ragDiagnostics: RagDiagnostics | null;
+  projectDigestDiagnostics: ProjectDigestDiagnostics | null;
+}
+export interface ProjectDigestDiagnostics {
+  schemaVersion: number;
+  sinceHours: number;
+  generatedAt: string;
+  since: string;
+  branch: string | null;
+  detached: boolean;
+  head: string | null;
+  commitCount: number;
+  fileCount: number;
+  workingTreeDirty: boolean;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  truncated: boolean;
+  sourceIds: string[];
 }
 export interface RagSourceDiagnostic {
   rank: number;

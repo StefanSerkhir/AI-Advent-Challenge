@@ -549,6 +549,11 @@ class WorkbenchController(
         }
         val baseSettings = _state.value.settings
         val settings = baseSettings.copy(responseMode = forcedMode ?: baseSettings.responseMode)
+        val projectDigestCommand = if (settings.responseMode == ResponseMode.UNRESTRICTED) {
+            parseProjectDigestCommand(normalizedPrompt)
+        } else {
+            null
+        }
         val developerHelpCommand = if (settings.responseMode == ResponseMode.UNRESTRICTED) {
             parseDeveloperHelpCommand(normalizedPrompt)
         } else {
@@ -576,10 +581,18 @@ class WorkbenchController(
         val apiKey = apiKeys[requestKind]
         val supportUsesClient = supportAssistantCommand is SupportAssistantCommand.Question &&
             requestKind == LlmKind.OPENAI
+        val digestUsesClient = projectDigestCommand is ProjectDigestCommand.Generate &&
+            requestKind == LlmKind.OPENAI
+        val requestNeedsClient = when {
+            settings.responseMode == ResponseMode.TOKENS_CONTEXT -> false
+            projectDigestCommand != null -> digestUsesClient
+            supportAssistantCommand != null -> supportUsesClient
+            developerHelpCommand is DeveloperHelpCommand.Overview -> false
+            else -> true
+        }
+        val initializeRequestClient = requestNeedsClient && settings.responseMode != ResponseMode.MODEL_COMPARISON
         if (requestKind.requiresApiKey && apiKey == null &&
-            settings.responseMode != ResponseMode.TOKENS_CONTEXT &&
-            (supportAssistantCommand?.let { supportUsesClient }
-                ?: (developerHelpCommand !is DeveloperHelpCommand.Overview))) {
+            requestNeedsClient) {
             publish {
                 it.copy(
                     notice = UiNotice(
@@ -596,6 +609,8 @@ class WorkbenchController(
             ResponseMode.COMPARE -> 2
             ResponseMode.CONTROLLED -> 1
             ResponseMode.UNRESTRICTED -> when {
+                projectDigestCommand is ProjectDigestCommand.Generate && requestKind == LlmKind.OPENAI -> 2
+                projectDigestCommand != null -> 1
                 supportAssistantCommand is SupportAssistantCommand.Question && requestKind == LlmKind.OPENAI -> 3
                 supportAssistantCommand != null -> 1
                 developerHelpCommand is DeveloperHelpCommand.Question -> 3
@@ -640,14 +655,83 @@ class WorkbenchController(
         currentJob = workerScope.launch(start = CoroutineStart.ATOMIC) {
             try {
                 ensureActive()
-                if (settings.responseMode !in setOf(ResponseMode.MODEL_COMPARISON, ResponseMode.TOKENS_CONTEXT) &&
-                    developerHelpCommand !is DeveloperHelpCommand.Overview &&
-                    !(supportAssistantCommand != null && !supportUsesClient)) {
+                if (initializeRequestClient) {
                     requestClient.set(clientFactory(requestKind, apiKey, settings.model))
                 }
                 val result = when (settings.responseMode) {
                     ResponseMode.COMPARE, ResponseMode.CONTROLLED, ResponseMode.UNRESTRICTED ->
-                        if (settings.responseMode == ResponseMode.UNRESTRICTED && supportAssistantCommand != null) {
+                        if (settings.responseMode == ResponseMode.UNRESTRICTED && projectDigestCommand != null) {
+                            var preparedMetrics: TurnTokenMetrics? = null
+                            var preparedDiagnostics: ProjectDigestDiagnostics? = null
+                            var preparedMcpCalls: List<McpCallDiagnostic> = emptyList()
+                            val digest = ProjectDigestRunner(
+                                clientProvider = {
+                                    requestClient.get() ?: error("Клиент запроса не инициализирован")
+                                },
+                                mcpGateway = mcpGateway,
+                                containsSensitiveText = { text ->
+                                    apiKeys.values.any { key -> key.isNotEmpty() && key in text }
+                                },
+                                errorMessage = { userFacingError(it, apiKeys.values) },
+                                onProgress = ::reportProgress,
+                                onReport = { diagnostics, calls ->
+                                    preparedDiagnostics = diagnostics
+                                    preparedMcpCalls = calls
+                                    publishStreamingOutput(ExperimentOutput(
+                                        id = "project-digest",
+                                        title = "AI-СВОДКА РАЗРАБОТКИ",
+                                        completion = CompletionResult("", null, usage = null, model = settings.model),
+                                        streaming = true,
+                                        tokenMetrics = preparedMetrics,
+                                        mcpCalls = calls,
+                                        projectDigestDiagnostics = diagnostics,
+                                    ))
+                                },
+                                onDelta = { content, metrics ->
+                                    preparedMetrics = metrics
+                                    publishStreamingOutput(ExperimentOutput(
+                                        id = "project-digest",
+                                        title = "AI-СВОДКА РАЗРАБОТКИ",
+                                        completion = CompletionResult(content, null, usage = null, model = settings.model),
+                                        streaming = true,
+                                        tokenMetrics = preparedMetrics,
+                                        mcpCalls = preparedMcpCalls,
+                                        projectDigestDiagnostics = preparedDiagnostics,
+                                    ))
+                                },
+                            ).run(
+                                command = projectDigestCommand,
+                                originalPrompt = normalizedPrompt,
+                                model = settings.model,
+                                maxTokens = settings.maxTokens,
+                                overflowPolicy = settings.contextOverflowPolicy,
+                                providerSupported = requestKind == LlmKind.OPENAI,
+                            )
+                            addOutput(ExperimentOutput(
+                                id = "project-digest",
+                                title = "AI-СВОДКА РАЗРАБОТКИ",
+                                completion = digest.completion,
+                                error = digest.error,
+                                elapsedMillis = digest.elapsedMillis,
+                                estimatedCostUsd = digest.tokenMetrics?.turnCostUsd?.toDouble(),
+                                tokenMetrics = digest.tokenMetrics,
+                                mcpCalls = digest.mcpCalls,
+                                projectDigestDiagnostics = digest.diagnostics,
+                            ))
+                            val summary = digest.completion ?: CompletionResult(
+                                digest.error ?: "AI-сводка разработки не сформирована.",
+                                "error",
+                                usage = null,
+                                model = settings.model,
+                            )
+                            RequestResult.Responses(listOf(LabeledResponse(
+                                variant = ResponseVariant.UNRESTRICTED,
+                                completion = summary,
+                                heading = "AI-СВОДКА РАЗРАБОТКИ",
+                                tokenMetrics = digest.tokenMetrics,
+                                mcpCalls = digest.mcpCalls,
+                            )))
+                        } else if (settings.responseMode == ResponseMode.UNRESTRICTED && supportAssistantCommand != null) {
                             var preparedMetrics: TurnTokenMetrics? = null
                             val support = SupportAssistantRunner(
                                 clientProvider = {
